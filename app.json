@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "myApp",
+    "slug": "myapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true
+    },
+    "web": {
+      "output": "single",
+      "bundler": "metro"
+    },
+    "android": {
+      "package": "com.myapp",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "READ_CALL_LOG",
+        "READ_PHONE_STATE",
+        "READ_CONTACTS",
+        "ANSWER_PHONE_CALLS",
+        "CALL_PHONE"
+      ]
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-image-picker",
+      "expo-av",
+      "expo-video",
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.24"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "06124477-e896-46fd-b1f5-40ea1b4278e9"
+      },
+      "firebase": {
+        "apiKey": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
+        "authDomain": "login-form-39e3e.firebaseapp.com",
+        "projectId": "login-form-39e3e",
+        "storageBucket": "login-form-39e3e.firebasestorage.app",
+        "messagingSenderId": "168810107337",
+        "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+      }
+    }
+  }
+}
