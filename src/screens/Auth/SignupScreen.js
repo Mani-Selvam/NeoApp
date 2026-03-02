@@ -5,31 +5,31 @@ import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Dimensions,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from "react-native";
 import Animated, {
-  Easing,
-  FadeInDown,
-  FadeInUp,
-  interpolate,
-  interpolateColor,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withSpring,
-  withTiming,
+    Easing,
+    FadeInDown,
+    FadeInUp,
+    interpolate,
+    interpolateColor,
+    useAnimatedStyle,
+    useSharedValue,
+    withRepeat,
+    withSpring,
+    withTiming,
 } from "react-native-reanimated";
+import InlineAlert from "../../components/InlineAlert";
 import { useAuth } from "../../contexts/AuthContext";
 import { API_URL } from "../../services/apiConfig";
 
@@ -212,6 +212,15 @@ const SignupScreen = ({ navigation }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [alertMsg, setAlertMsg] = useState("");
+  const [alertType, setAlertType] = useState("error");
+
+  const showInline = (m, type = "error") => {
+    const msg = (m || "").toString().replace(/\s+/g, " ").trim();
+    setAlertType(type);
+    setAlertMsg(msg);
+    if (msg) setTimeout(() => setAlertMsg(""), 4000);
+  };
 
   // OTP State
   const [otp, setOtp] = useState("");
@@ -245,12 +254,11 @@ const SignupScreen = ({ navigation }) => {
       const loginResponse = await axios.post(`${API_URL}/auth/login-phone`, {
         idToken,
       });
-      console.log("Firebase Login/Signup Success:", loginResponse.data);
       await login(loginResponse.data.token, loginResponse.data.user);
-      Alert.alert("Success", "Verified automatically & Logged in!");
+      showInline("Verified automatically & logged in!", "info");
     } catch (error) {
       console.error("Firebase Backend Login Error:", error);
-      Alert.alert("Error", "Failed to login with verified phone.");
+      showInline("Failed to login with verified phone.", "error");
     } finally {
       setLoading(false);
     }
@@ -282,12 +290,12 @@ const SignupScreen = ({ navigation }) => {
   // Step 1: Validate & Send OTP (Via Backend & Firebase)
   const handleSendOTP = async () => {
     if (!fullName || !email || !mobile || !password || !confirmPassword) {
-      Alert.alert("Error", "Please fill in all fields");
+      showInline("Please fill in all fields", "error");
       return;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert("Error", "Passwords do not match");
+      showInline("Passwords do not match", "error");
       return;
     }
 
@@ -301,17 +309,14 @@ const SignupScreen = ({ navigation }) => {
       if (!currentChecks.lower) missing.push("a lowercase letter");
       if (!currentChecks.number) missing.push("a number");
       if (!currentChecks.special) missing.push("a special character");
-      Alert.alert(
-        "Weak password",
-        `Password must contain ${missing.join(", ")}.`,
-      );
+      showInline(`Password must contain ${missing.join(", ")}.`, "error");
       return;
     }
 
     // Basic Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      Alert.alert("Error", "Invalid email address");
+      showInline("Invalid email address", "error");
       return;
     }
 
@@ -325,13 +330,14 @@ const SignupScreen = ({ navigation }) => {
       const backendResponse = await axios.post(`${API_URL}/auth/send-otp`, {
         email,
         mobile: formattedMobile,
+        type: "signup",
       });
 
       if (!backendResponse.data.success) {
         setLoading(false);
-        Alert.alert(
-          "Error",
+        showInline(
           backendResponse.data.message || "User check failed.",
+          "error",
         );
         return;
       }
@@ -342,10 +348,7 @@ const SignupScreen = ({ navigation }) => {
         // Web Logic (Email Only)
         setLoading(false);
         setStep(2);
-        Alert.alert(
-          "OTP Sent",
-          "Sent email OTP (Web mode). Mobile SMS skipped.",
-        );
+        showInline("Sent email OTP. Mobile SMS skipped.", "info");
         setConfirm({
           verificationId: "web-mock-id",
           confirm: async () => true,
@@ -355,19 +358,16 @@ const SignupScreen = ({ navigation }) => {
         // Backend already sent OTP above (email + optional SMS). We'll rely on
         // backend verification flow instead of Firebase Recaptcha for native.
         setConfirm({ type: "backend-verify" });
-        Alert.alert(
-          "OTP Sent",
-          "We have sent a verification code via Email/SMS. Please check your messages.",
-        );
+        showInline("We have sent a verification code via Email/SMS.", "info");
         setLoading(false);
         setStep(2);
       }
     } catch (error) {
       setLoading(false);
       console.error("Setup Error:", error);
-      Alert.alert(
-        "Error",
+      showInline(
         error.response?.data?.message || "Failed to initialize signup.",
+        "error",
       );
     }
   };
@@ -375,12 +375,12 @@ const SignupScreen = ({ navigation }) => {
   // Step 2: Verify & Signup (Via Backend)
   const handleVerifyAndSignup = async () => {
     if (!otp) {
-      Alert.alert("Error", "Please enter the OTP");
+      showInline("Please enter the OTP", "error");
       return;
     }
 
     if (!confirm) {
-      Alert.alert("Error", "Session expired. Please resend OTP.");
+      showInline("Session expired. Please resend OTP.", "error");
       return;
     }
 
@@ -411,9 +411,8 @@ const SignupScreen = ({ navigation }) => {
         mobile, // Passed for record
       });
 
-      console.log("Signup successful:", signupResponse.data);
       await login(signupResponse.data.token, signupResponse.data.user);
-      Alert.alert("Success", "Account verified and created successfully!");
+      showInline("Account verified and created successfully!", "info");
       // Auto navigation managed by AuthContext
     } catch (error) {
       console.error(error);
@@ -421,7 +420,7 @@ const SignupScreen = ({ navigation }) => {
         error.response?.data?.message ||
         error.message ||
         "Signup failed or Invalid OTP";
-      Alert.alert("Error", msg);
+      showInline(msg, "error");
     } finally {
       setLoading(false);
     }
@@ -433,7 +432,7 @@ const SignupScreen = ({ navigation }) => {
       const formattedMobile = mobile.startsWith("+") ? mobile : `+91${mobile}`;
 
       if (Platform.OS === "web") {
-        Alert.alert("OTP Resent", "Resent email OTP (Web mode).");
+        showInline("Resent email OTP.", "info");
         await axios.post(`${API_URL}/auth/send-otp`, {
           email,
           mobile: formattedMobile,
@@ -450,11 +449,11 @@ const SignupScreen = ({ navigation }) => {
           );
         }
         setConfirm({ type: "backend-verify" });
-        Alert.alert("OTP Resent", "Verification code resent via Email/SMS.");
+        showInline("Verification code resent via Email/SMS.", "info");
       }
     } catch (error) {
       console.error(error);
-      Alert.alert("Error", "Failed to resend OTP. Please try again.");
+      showInline("Failed to resend OTP. Please try again.", "error");
     } finally {
       setLoading(false);
     }
@@ -499,6 +498,11 @@ const SignupScreen = ({ navigation }) => {
           >
             <BlurView intensity={20} tint="light" style={styles.blurContainer}>
               <View style={styles.formContent}>
+                <InlineAlert
+                  message={alertMsg}
+                  type={alertType}
+                  onClose={() => setAlertMsg("")}
+                />
                 {step === 1 && (
                   <Animated.View entering={FadeInDown}>
                     <CustomInput

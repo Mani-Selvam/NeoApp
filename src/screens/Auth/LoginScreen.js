@@ -5,7 +5,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
     Dimensions,
     Image,
     KeyboardAvoidingView,
@@ -29,6 +28,7 @@ import Animated, {
     withSpring,
     withTiming,
 } from "react-native-reanimated";
+import InlineAlert from "../../components/InlineAlert";
 import { useAuth } from "../../contexts/AuthContext";
 import { API_URL } from "../../services/apiConfig";
 
@@ -193,10 +193,19 @@ const LoginScreen = ({ navigation }) => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [alertMsg, setAlertMsg] = useState("");
+  const [alertType, setAlertType] = useState("error");
+
+  const showInline = (m, type = "error") => {
+    const msg = (m || "").toString().replace(/\s+/g, " ").trim();
+    setAlertType(type);
+    setAlertMsg(msg);
+    if (msg) setTimeout(() => setAlertMsg(""), 4000);
+  };
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert("Error", "Please fill in all fields");
+      showInline("Please fill in all fields", "error");
       return;
     }
 
@@ -212,7 +221,7 @@ const LoginScreen = ({ navigation }) => {
         };
         try {
           await login("demo-token-123", demoUser);
-          Alert.alert("Success", "Demo login successful!");
+          showInline("Demo login successful!", "info");
         } catch (e) {}
         setLoading(false);
       }, 1000);
@@ -228,10 +237,10 @@ const LoginScreen = ({ navigation }) => {
 
       await login(response.data.token, response.data.user);
     } catch (error) {
-      console.error("Login error:", error.response?.data || error.message);
-      Alert.alert(
-        "Login Failed",
+      // minimal console output
+      showInline(
         error.response?.data?.message || "Invalid email or password",
+        "error",
       );
     } finally {
       setLoading(false);
@@ -279,6 +288,11 @@ const LoginScreen = ({ navigation }) => {
           >
             <BlurView intensity={20} tint="light" style={styles.blurContainer}>
               <View style={styles.formContent}>
+                <InlineAlert
+                  message={alertMsg}
+                  type={alertType}
+                  onClose={() => setAlertMsg("")}
+                />
                 <CustomInput
                   label="Email Address"
                   icon="mail-outline"

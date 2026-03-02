@@ -13,36 +13,38 @@ const app = express();
 app.use(compression()); // Compress all responses
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*", // Adjust for security in production
-    methods: ["GET", "POST"],
-  },
+    cors: {
+        origin: "*", // Adjust for security in production
+        methods: ["GET", "POST"],
+    },
 });
 
 app.set("io", io);
 
 app.use(
-  cors({
-    origin: [
-      "http://127.0.0.1:5173",
-      "http://localhost:8081",
-      "http://127.0.0.1:8081",
-      "http://192.168.1.207:5000",
-      "exp://192.168.1.207:5000",
-      "http://localhost:19006",
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  }),
+    cors({
+        origin: [
+            "http://127.0.0.1:5173",
+            "http://localhost:8081",
+            "http://127.0.0.1:8081",
+            "http://192.168.1.207:5000",
+            "http://192.168.63.77:8081",
+            "exp://192.168.63.77:5000",
+            "exp://192.168.1.16:5000",
+            "http://localhost:19006",
+        ],
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+        credentials: true,
+    }),
 );
 
 // Sockets Connection
 io.on("connection", (socket) => {
-  console.log("Client connected to socket:", socket.id);
-  socket.on("disconnect", () => {
-    console.log("Client disconnected");
-  });
+    console.log("Client connected to socket:", socket.id);
+    socket.on("disconnect", () => {
+        console.log("Client disconnected");
+    });
 });
 
 // Increase JSON body size limit for base64 images
@@ -68,30 +70,30 @@ app.use("/api/users", require("./routes/userRoutes"));
 
 // Basic Route
 app.get("/", (req, res) => {
-  // Explicitly set Content-Type to 'text/html' without charset
-  // to keep health-check responders that compare exact headers happy.
-  res.setHeader("Content-Type", "text/html");
-  res.send("CRM API with Socket.io is running...");
+    // Explicitly set Content-Type to 'text/html' without charset
+    // to keep health-check responders that compare exact headers happy.
+    res.setHeader("Content-Type", "text/html");
+    res.send("CRM API with Socket.io is running...");
 });
 
 const startServer = async () => {
-  const PORT = process.env.API_PORT || 5000;
-  try {
-    await connectDB();
+    const PORT = process.env.API_PORT || 5000;
+    try {
+        await connectDB();
 
-    // ⚡ Pre-warm MongoDB connection — first query on Atlas M0 is always slow
-    // This "heats up" the connection so actual API requests are faster
-    const mongoose = require("mongoose");
-    const warmStart = Date.now();
-    await mongoose.connection.db.admin().ping();
-    console.log(`⚡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
-  } catch (e) {
-    console.error("DB Connection failed:", e.message);
-  }
+        // ⚡ Pre-warm MongoDB connection — first query on Atlas M0 is always slow
+        // This "heats up" the connection so actual API requests are faster
+        const mongoose = require("mongoose");
+        const warmStart = Date.now();
+        await mongoose.connection.db.admin().ping();
+        console.log(`⚡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
+    } catch (e) {
+        console.error("DB Connection failed:", e.message);
+    }
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server + Real-time engine started on port ${PORT}`);
-  });
+    server.listen(PORT, "0.0.0.0", () => {
+        console.log(`🚀 Server + Real-time engine started on port ${PORT}`);
+    });
 };
 
 startServer();

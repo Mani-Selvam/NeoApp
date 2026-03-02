@@ -18,6 +18,7 @@ import IntroScreen from "../screens/IntroScreen";
 import LeadSourceScreen from "../screens/LeadSourceScreen";
 import OnboardingScreen from "../screens/OnboardingScreen";
 import ProductScreen from "../screens/ProductScreen";
+import PricingScreen from "../screens/PricingScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import ReportScreen from "../screens/ReportScreen";
 import StaffScreen from "../screens/StaffScreen";
@@ -188,6 +189,7 @@ export default function AppNavigator() {
             component={AutoCallScreen as any}
           />
           <Stack.Screen name="ProfileScreen" component={ProfileScreen as any} />
+          <Stack.Screen name="PricingScreen" component={PricingScreen as any} />
         </Stack.Navigator>
       )}
     </NavigationContainer>

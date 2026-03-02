@@ -33,16 +33,11 @@
       [
         "expo-build-properties",
         {
-          "android": {
-            "kotlinVersion": "1.9.24"
-          }
+          "android": {}
         }
       ]
     ],
     "extra": {
-      "eas": {
-        "projectId": "06124477-e896-46fd-b1f5-40ea1b4278e9"
-      },
       "firebase": {
         "apiKey": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
         "authDomain": "login-form-39e3e.firebaseapp.com",
@@ -50,6 +45,9 @@
         "storageBucket": "login-form-39e3e.firebasestorage.app",
         "messagingSenderId": "168810107337",
         "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+      },
+      "eas": {
+        "projectId": "3c1942ab-b375-45f1-a165-e6c8feb6d78e"
       }
     }
   }

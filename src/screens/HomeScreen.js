@@ -779,6 +779,14 @@ const SideMenu = ({ visible, onClose, navigation, user, onLogout }) => (
             }}
           />
           <MenuItem
+            icon="card-outline"
+            label="Pricing"
+            onPress={() => {
+              onClose();
+              navigation.navigate("PricingScreen");
+            }}
+          />
+          <MenuItem
             icon="chatbubble-ellipses-outline"
             label="Message Templates"
             onPress={() => {
@@ -1402,6 +1410,12 @@ export default function HomeScreen({ navigation }) {
               label="Reports"
               color={COLORS.warning}
               onPress={() => navigation.navigate("Report")}
+            />
+            <QuickAction
+              icon="card"
+              label="Pricing"
+              color="#1565D8"
+              onPress={() => navigation.navigate("PricingScreen")}
             />
             <QuickAction
               icon="chatbubble-working"

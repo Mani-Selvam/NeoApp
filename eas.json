@@ -11,8 +11,8 @@
         "buildType": "apk"
       },
       "env": {
-        // "EXPO_PUBLIC_API_URL": "http://192.168.1.207:5000/api"
-        "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api"
+        "EXPO_PUBLIC_API_URL": "http://192.168.1.16:5000/api"
+        // "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api"
       }
     },
     "preview": {
@@ -21,8 +21,8 @@
         "buildType": "apk"
       },
       "env": {
-        // "EXPO_PUBLIC_API_URL": "http://192.168.1.207:5000/api"
-        "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api"
+        "EXPO_PUBLIC_API_URL": "http://192.168.1.16:5000/api"
+        // "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api"
       }
     },
     "production": {
@@ -31,8 +31,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        // "EXPO_PUBLIC_API_URL": "http://192.168.1.207:5000/api"
-        "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api"
+        "EXPO_PUBLIC_API_URL": "http://192.168.1.16:5000/api"
+        // "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api"
       }
     }
   },
