@@ -25,18 +25,20 @@ router.get("/stats", verifyToken, async (req, res) => {
 
         const enqStats = {
             newEnqs: 0,
-            inProgress: 0,
+            contacted: 0,
+            interested: 0,
+            notInterested: 0,
             converted: 0,
             closed: 0,
-            dropped: 0
         };
 
         enqCounts.forEach(c => {
             if (c._id === "New") enqStats.newEnqs = c.count;
-            if (c._id === "In Progress") enqStats.inProgress = c.count;
+            if (c._id === "Contacted" || c._id === "In Progress") enqStats.contacted = c.count;
+            if (c._id === "Interested") enqStats.interested = c.count;
+            if (c._id === "Not Interested" || c._id === "Dropped") enqStats.notInterested = c.count;
             if (c._id === "Converted") enqStats.converted = c.count;
             if (c._id === "Closed") enqStats.closed = c.count;
-            if (c._id === "Dropped") enqStats.dropped = c.count;
         });
 
         // Followup stats
@@ -88,9 +90,13 @@ router.get("/list", verifyToken, async (req, res) => {
         if (type === "enquiry") {
             let query = { ...baseQuery };
             if (filter === "new") query.status = "New";
-            else if (filter === "inprogress") query.status = "In Progress";
+            else if (filter === "inprogress") query.status = "Contacted";
+            else if (filter === "contacted") query.status = "Contacted";
+            else if (filter === "interested") query.status = "Interested";
+            else if (filter === "notinterested") query.status = "Not Interested";
             else if (filter === "converted") query.status = "Converted";
             else if (filter === "closed") query.status = "Closed";
+            else if (filter === "dropped") query.status = "Not Interested";
 
             data = await Enquiry.find(query).sort({ createdAt: -1 }).lean();
         } else if (type === "followup") {

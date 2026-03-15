@@ -33,7 +33,9 @@
       [
         "expo-build-properties",
         {
-          "android": {}
+          "android": {
+            "ndkVersion": "26.1.10909125"
+          }
         }
       ]
     ],
@@ -47,7 +49,7 @@
         "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
       },
       "eas": {
-        "projectId": "3c1942ab-b375-45f1-a165-e6c8feb6d78e"
+        "projectId": "d5d7a47f-ce94-4733-9513-f2126f70ed0d"
       }
     }
   }

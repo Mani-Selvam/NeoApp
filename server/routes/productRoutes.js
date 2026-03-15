@@ -85,7 +85,7 @@ router.put("/:id", verifyToken, async (req, res) => {
       {
         $set: { name, items, updatedAt: new Date() },
       },
-      { new: true, runValidators: true },
+      { returnDocument: "after", runValidators: true },
     );
 
     if (!product) {

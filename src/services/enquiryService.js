@@ -50,6 +50,21 @@ export const getEnquiryById = async (id) => {
     }
 };
 
+// GET ENQUIRY DETAIL (enquiry + timeline + reminders)
+export const getEnquiryDetail = async (id) => {
+    try {
+        const client = await getApiClient();
+        const response = await client.get(`/enquiries/${id}/detail`);
+        return response.data;
+    } catch (error) {
+        console.error(
+            "Get enquiry detail error:",
+            error.response?.data || error.message,
+        );
+        throw error;
+    }
+};
+
 // UPDATE ENQUIRY
 export const updateEnquiry = async (id, enquiryData) => {
     try {
@@ -57,8 +72,69 @@ export const updateEnquiry = async (id, enquiryData) => {
         const response = await client.put(`/enquiries/${id}`, enquiryData);
         return response.data;
     } catch (error) {
+        // Backward-compatible retry for older backend enum sets.
+        const errMessage =
+            error?.response?.data?.message || error?.message || "";
+        const statusValue = enquiryData?.status;
+        const isEnumError =
+            typeof errMessage === "string" &&
+            errMessage.toLowerCase().includes("not a valid enum value") &&
+            String(errMessage).toLowerCase().includes("status");
+
+        if (isEnumError && statusValue) {
+            let legacyStatus = null;
+            if (statusValue === "Contacted") legacyStatus = "In Progress";
+            if (statusValue === "Not Interested") legacyStatus = "Dropped";
+
+            if (legacyStatus) {
+                try {
+                    const client = await getApiClient();
+                    const retryResponse = await client.put(`/enquiries/${id}`, {
+                        ...enquiryData,
+                        status: legacyStatus,
+                    });
+                    return retryResponse.data;
+                } catch (retryError) {
+                    console.error(
+                        "Update enquiry retry error:",
+                        retryError.response?.data || retryError.message,
+                    );
+                }
+            }
+        }
+
         console.error(
             "Update enquiry error:",
+            error.response?.data || error.message,
+        );
+        throw error;
+    }
+};
+
+// QUICK STATUS UPDATE
+export const updateEnquiryStatus = async (id, status) => {
+    try {
+        const client = await getApiClient();
+        const response = await client.patch(`/enquiries/${id}/status`, { status });
+        return response.data;
+    } catch (error) {
+        console.error(
+            "Update enquiry status error:",
+            error.response?.data || error.message,
+        );
+        throw error;
+    }
+};
+
+// FOLLOW-UP REMINDERS (today + overdue handled in UI when needed)
+export const getFollowUpReminders = async () => {
+    try {
+        const client = await getApiClient();
+        const response = await client.get("/enquiries/meta/reminders");
+        return response.data;
+    } catch (error) {
+        console.error(
+            "Get follow-up reminders error:",
             error.response?.data || error.message,
         );
         throw error;

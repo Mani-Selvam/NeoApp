@@ -21,6 +21,7 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../services/apiConfig";
 import * as userService from "../services/userService";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 
@@ -38,6 +39,7 @@ const COLORS = {
 };
 
 const ProfileScreen = ({ navigation }) => {
+    const insets = useSafeAreaInsets();
     const { user, updateUser } = useAuth();
     const [loading, setLoading] = useState(false);
     const [profile, setProfile] = useState({
@@ -249,7 +251,7 @@ const ProfileScreen = ({ navigation }) => {
     );
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
                     <Ionicons name="arrow-back" size={24} color={COLORS.text} />
@@ -333,7 +335,7 @@ const ProfileScreen = ({ navigation }) => {
 };
 
 const SafeAreaView = ({ children, style }) => (
-    <View style={[{ flex: 1, backgroundColor: COLORS.bg, paddingTop: Platform.OS === 'android' ? 40 : 0 }, style]}>
+    <View style={[{ flex: 1, backgroundColor: COLORS.bg }, style]}>
         {children}
     </View>
 );

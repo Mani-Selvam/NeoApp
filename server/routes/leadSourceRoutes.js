@@ -86,7 +86,7 @@ router.put("/:id", verifyToken, async (req, res) => {
                     updatedAt: new Date(),
                 },
             },
-            { new: true, runValidators: true },
+            { returnDocument: "after", runValidators: true },
         );
 
         if (!leadSource) {

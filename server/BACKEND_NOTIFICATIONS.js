@@ -19,14 +19,14 @@ exports.registerPushToken = async (req, res) => {
         }
 
         // Update user with push token
-        await User.findByIdAndUpdate(
-            userId,
-            {
-                pushToken,
-                lastTokenUpdate: new Date(),
-            },
-            { new: true },
-        );
+	        await User.findByIdAndUpdate(
+	            userId,
+	            {
+	                pushToken,
+	                lastTokenUpdate: new Date(),
+	            },
+	            { returnDocument: "after" },
+	        );
 
         res.json({
             success: true,

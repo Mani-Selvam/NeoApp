@@ -9,36 +9,71 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
 import getApiClient from "../services/apiClient";
 
 const COLORS = {
     bg: "#F8FAFC",
     surface: "#FFFFFF",
-    primary: "#4F46E5",
-    secondary: "#10B981",
+    primary: "#0F766E",
+    secondary: "#059669",
+    accent: "#2563EB",
     text: "#0F172A",
     textDim: "#475569",
     textMuted: "#94A3B8",
     border: "#E2E8F0",
-    gradients: {
-        primary: ["#4F46E5", "#6366F1"],
-        success: ["#059669", "#10B981"],
-    }
+    soft: "#ECFDF5",
+    warning: "#F59E0B",
 };
 
+const PROVIDERS = {
+    WATI: "WATI",
+    META: "META",
+    NEO: "NEO",
+    TWILIO: "TWILIO",
+};
+
+const emptyForm = {
+    provider: PROVIDERS.WATI,
+    defaultCountry: "91",
+    watiBaseUrl: "",
+    watiApiToken: "",
+    metaWhatsappToken: "",
+    metaPhoneNumberId: "",
+    neoAccountName: "",
+    neoApiKey: "",
+    neoPhoneNumber: "",
+    neoBearerToken: "",
+    twilioAccountSid: "",
+    twilioAuthToken: "",
+    twilioWhatsappNumber: "",
+};
+
+const mergeConfigToForm = (config = {}) => ({
+    ...emptyForm,
+    provider: config.provider || PROVIDERS.WATI,
+    defaultCountry: config.defaultCountry || "91",
+    watiBaseUrl: config.watiBaseUrl || config.apiUrl || "",
+    metaPhoneNumberId: config.metaPhoneNumberId || "",
+    neoAccountName: config.neoAccountName || "",
+    neoPhoneNumber: config.neoPhoneNumber || "",
+    neoBearerToken: "",
+    twilioAccountSid: config.twilioAccountSid || "",
+    twilioWhatsappNumber: config.twilioWhatsappNumber || "",
+});
+
 export default function WhatsAppSettingsScreen({ navigation }) {
+    const insets = useSafeAreaInsets();
     const { user } = useAuth();
     const [loading, setLoading] = useState(true);
     const [waConfig, setWaConfig] = useState(null);
-    const [editStep, setEditStep] = useState(1); // 1: Overview/Select Method, 2: OTP, 3: New Token
+    const [form, setForm] = useState(emptyForm);
+    const [editStep, setEditStep] = useState(1);
     const [otpMethod, setOtpMethod] = useState("");
     const [otpCode, setOtpCode] = useState("");
-    const [newUrl, setNewUrl] = useState("");
-    const [newToken, setNewToken] = useState("");
     const [sendingOtp, setSendingOtp] = useState(false);
     const [verifyingOtp, setVerifyingOtp] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -52,15 +87,18 @@ export default function WhatsAppSettingsScreen({ navigation }) {
             setLoading(true);
             const client = await getApiClient();
             const resp = await client.get("/whatsapp/config");
-            if (resp.data?.config) {
-                setWaConfig(resp.data.config);
-                setNewUrl(resp.data.config.apiUrl || "https://app-server.wati.io");
-            }
+            const config = resp.data?.config || {};
+            setWaConfig(config);
+            setForm(mergeConfigToForm(config));
         } catch (e) {
             console.warn("Load config error:", e);
         } finally {
             setLoading(false);
         }
+    };
+
+    const updateField = (key, value) => {
+        setForm((prev) => ({ ...prev, [key]: value }));
     };
 
     const handleRequestOtp = async (method) => {
@@ -72,10 +110,10 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                 email: user?.email,
                 mobile: user?.mobile,
                 type: "edit_whatsapp_token",
-                method: method.toLowerCase()
+                method: method.toLowerCase(),
             });
             setEditStep(2);
-        } catch (e) {
+        } catch (_e) {
             Alert.alert("Error", "Failed to send OTP");
         } finally {
             setSendingOtp(false);
@@ -89,7 +127,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
             const resp = await client.post("/auth/verify-otp", {
                 email: user?.email,
                 mobile: user?.mobile,
-                otp: otpCode
+                otp: otpCode,
             });
             if (resp.data.success) {
                 setEditStep(3);
@@ -97,31 +135,70 @@ export default function WhatsAppSettingsScreen({ navigation }) {
             } else {
                 Alert.alert("Invalid", "Incorrect OTP code");
             }
-        } catch (e) {
+        } catch (_e) {
             Alert.alert("Error", "Verification failed");
         } finally {
             setVerifyingOtp(false);
         }
     };
 
+    const validateForm = () => {
+        if (form.provider === PROVIDERS.WATI) {
+            return form.watiBaseUrl.trim() && form.watiApiToken.trim();
+        }
+        if (form.provider === PROVIDERS.META) {
+            return form.metaWhatsappToken.trim() && form.metaPhoneNumberId.trim();
+        }
+        if (form.provider === PROVIDERS.NEO) {
+            return (
+                form.neoAccountName.trim() &&
+                form.neoPhoneNumber.trim() &&
+                (form.neoApiKey.trim() || form.neoBearerToken.trim())
+            );
+        }
+        if (form.provider === PROVIDERS.TWILIO) {
+            return (
+                form.twilioAccountSid.trim() &&
+                form.twilioAuthToken.trim() &&
+                form.twilioWhatsappNumber.trim()
+            );
+        }
+        return false;
+    };
+
     const handleSave = async () => {
-        if (!newToken) return Alert.alert("Error", "Please enter new token");
+        if (!validateForm()) {
+            Alert.alert("Error", "Please fill all required fields for the selected provider");
+            return;
+        }
         try {
             setSaving(true);
             const client = await getApiClient();
             const payload = {
-                apiUrl: newUrl.trim(),
-                apiToken: newToken.trim(),
-                provider: "WATI",
+                provider: form.provider,
+                defaultCountry: form.defaultCountry.trim() || "91",
+                watiBaseUrl: form.watiBaseUrl.trim(),
+                watiApiToken: form.watiApiToken.trim(),
+                metaWhatsappToken: form.metaWhatsappToken.trim(),
+                metaPhoneNumberId: form.metaPhoneNumberId.trim(),
+                neoAccountName: form.neoAccountName.trim(),
+                neoApiKey: form.neoApiKey.trim(),
+                neoPhoneNumber: form.neoPhoneNumber.trim(),
+                neoBearerToken: form.neoBearerToken.trim(),
+                twilioAccountSid: form.twilioAccountSid.trim(),
+                twilioAuthToken: form.twilioAuthToken.trim(),
+                twilioWhatsappNumber: form.twilioWhatsappNumber.trim(),
             };
             const resp = await client.put("/whatsapp/config", payload);
             if (resp.data?.ok) {
-                Alert.alert("Success", "WhatsApp Configuration Updated");
+                setWaConfig(resp.data.config || {});
+                setForm((prev) => mergeConfigToForm({ ...resp.data.config, ...prev }));
+                Alert.alert("Success", "WhatsApp configuration updated");
                 navigation.goBack();
             } else {
                 Alert.alert("Error", resp.data?.message || "Save failed");
             }
-        } catch (e) {
+        } catch (_e) {
             Alert.alert("Error", "An error occurred while saving");
         } finally {
             setSaving(false);
@@ -137,8 +214,8 @@ export default function WhatsAppSettingsScreen({ navigation }) {
     }
 
     return (
-        <SafeAreaView style={styles.container}>
-            {/* Header */}
+        <SafeAreaView
+            style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
                     <Ionicons name="arrow-back" size={24} color={COLORS.text} />
@@ -158,29 +235,41 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                     </View>
 
                     <Text style={styles.title}>
-                        {editStep === 1 ? "Business API Status" : editStep === 2 ? "Verification" : "Update Configuration"}
+                        {editStep === 1 ? "Business API Status" : editStep === 2 ? "Verification" : "Provider Configuration"}
                     </Text>
                     <Text style={styles.subtitle}>
-                        {editStep === 1 ? "Manage your official WhatsApp Business API integration and token settings." :
-                            editStep === 2 ? `Enter the 6-digit code sent to your registered ${otpMethod}.` :
-                                "Enter the new API credentials for your WATI or WhatsApp provider."}
+                        {editStep === 1
+                            ? "Choose how this account should send WhatsApp messages."
+                            : editStep === 2
+                              ? `Enter the 6-digit code sent to your registered ${otpMethod}.`
+                              : "Save provider credentials from the form. No account tokens are hardcoded on the server."}
                     </Text>
 
                     {editStep === 1 && (
                         <View style={styles.overview}>
                             <View style={styles.statusRow}>
                                 <Text style={styles.label}>Integration Status</Text>
-                                <View style={[styles.badge, { backgroundColor: waConfig ? "#E8F5E9" : "#FFF8E1" }]}>
-                                    <Text style={[styles.badgeText, { color: waConfig ? "#2E7D32" : "#F57F17" }]}>
-                                        {waConfig ? "Active" : "Not Configured"}
+                                <View
+                                    style={[
+                                        styles.badge,
+                                        { backgroundColor: waConfig?.provider ? "#E8F5E9" : "#FFF8E1" },
+                                    ]}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.badgeText,
+                                            { color: waConfig?.provider ? "#2E7D32" : "#B45309" },
+                                        ]}
+                                    >
+                                        {waConfig?.provider ? `${waConfig.provider} Active` : "Not Configured"}
                                     </Text>
                                 </View>
                             </View>
 
                             <View style={styles.tokenBox}>
-                                <Text style={styles.label}>API Token</Text>
+                                <Text style={styles.label}>Saved Provider</Text>
                                 <Text style={styles.maskedToken}>
-                                    {waConfig?.apiToken ? "••••••••••••" + waConfig.apiToken.slice(-6) : "No token saved"}
+                                    {waConfig?.provider || "No provider saved"}
                                 </Text>
                             </View>
 
@@ -189,14 +278,14 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                                 <OtpMethod
                                     icon="mail"
                                     label="Email"
-                                    color="#4F46E5"
+                                    color={COLORS.accent}
                                     onPress={() => handleRequestOtp("Email")}
                                     loading={sendingOtp && otpMethod === "Email"}
                                 />
                                 <OtpMethod
                                     icon="chatbubble-ellipses"
                                     label="SMS"
-                                    color="#00D9A3"
+                                    color={COLORS.secondary}
                                     onPress={() => handleRequestOtp("SMS")}
                                     loading={sendingOtp && otpMethod === "SMS"}
                                 />
@@ -227,8 +316,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                                 disabled={verifyingOtp || otpCode.length < 6}
                                 style={[styles.primaryBtn, (verifyingOtp || otpCode.length < 6) && { opacity: 0.6 }]}
                             >
-                                {verifyingOtp ? <ActivityIndicator color="#fff" /> :
-                                    <Text style={styles.btnText}>Verify & Continue</Text>}
+                                {verifyingOtp ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Verify & Continue</Text>}
                             </TouchableOpacity>
                             <TouchableOpacity onPress={() => setEditStep(1)} style={{ marginTop: 20 }}>
                                 <Text style={styles.retryText}>Try another method</Text>
@@ -238,32 +326,161 @@ export default function WhatsAppSettingsScreen({ navigation }) {
 
                     {editStep === 3 && (
                         <View style={{ width: "100%" }}>
-                            <Text style={styles.inputLabel}>API URL</Text>
+                            <Text style={styles.inputLabel}>Provider</Text>
+                            <View style={styles.providerRow}>
+                                {Object.values(PROVIDERS).map((provider) => (
+                                    <TouchableOpacity
+                                        key={provider}
+                                        onPress={() => updateField("provider", provider)}
+                                        style={[
+                                            styles.providerChip,
+                                            form.provider === provider && styles.providerChipActive,
+                                        ]}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.providerChipText,
+                                                form.provider === provider && styles.providerChipTextActive,
+                                            ]}
+                                        >
+                                            {provider}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <Text style={styles.inputLabel}>Default Country Code</Text>
                             <TextInput
                                 style={styles.input}
-                                placeholder="https://app-server.wati.io"
-                                value={newUrl}
-                                onChangeText={setNewUrl}
-                                autoCapitalize="none"
+                                placeholder="91"
+                                value={form.defaultCountry}
+                                onChangeText={(value) => updateField("defaultCountry", value)}
+                                keyboardType="numeric"
                             />
 
-                            <Text style={styles.inputLabel}>New API Token</Text>
-                            <TextInput
-                                style={[styles.input, { minHeight: 120, textAlignVertical: "top" }]}
-                                placeholder="Bearer eyJhbGciOiJIUzI1Ni..."
-                                multiline
-                                value={newToken}
-                                onChangeText={setNewToken}
-                                autoCapitalize="none"
-                            />
+                            {form.provider === PROVIDERS.WATI && (
+                                <>
+                                    <Text style={styles.inputLabel}>WATI Base URL</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="https://live-server.wati.io"
+                                        value={form.watiBaseUrl}
+                                        onChangeText={(value) => updateField("watiBaseUrl", value)}
+                                        autoCapitalize="none"
+                                    />
 
-                            <TouchableOpacity
-                                onPress={handleSave}
-                                disabled={saving}
-                                style={styles.saveBtn}
-                            >
-                                {saving ? <ActivityIndicator color="#fff" /> :
-                                    <Text style={styles.btnText}>Save Configuration</Text>}
+                                    <Text style={styles.inputLabel}>WATI API Token</Text>
+                                    <TextInput
+                                        style={[styles.input, styles.textArea]}
+                                        placeholder="Enter WATI API token"
+                                        multiline
+                                        value={form.watiApiToken}
+                                        onChangeText={(value) => updateField("watiApiToken", value)}
+                                        autoCapitalize="none"
+                                    />
+                                </>
+                            )}
+
+                            {form.provider === PROVIDERS.META && (
+                                <>
+                                    <Text style={styles.inputLabel}>Meta WhatsApp Token</Text>
+                                    <TextInput
+                                        style={[styles.input, styles.textArea]}
+                                        placeholder="Enter Meta permanent token"
+                                        multiline
+                                        value={form.metaWhatsappToken}
+                                        onChangeText={(value) => updateField("metaWhatsappToken", value)}
+                                        autoCapitalize="none"
+                                    />
+
+                                    <Text style={styles.inputLabel}>Phone Number ID</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Enter phone number ID"
+                                        value={form.metaPhoneNumberId}
+                                        onChangeText={(value) => updateField("metaPhoneNumberId", value)}
+                                        autoCapitalize="none"
+                                    />
+                                </>
+                            )}
+
+                            {form.provider === PROVIDERS.TWILIO && (
+                                <>
+                                    <Text style={styles.inputLabel}>Twilio Account SID</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Enter Twilio Account SID"
+                                        value={form.twilioAccountSid}
+                                        onChangeText={(value) => updateField("twilioAccountSid", value)}
+                                        autoCapitalize="none"
+                                    />
+
+                                    <Text style={styles.inputLabel}>Twilio Auth Token</Text>
+                                    <TextInput
+                                        style={[styles.input, styles.textArea]}
+                                        placeholder="Enter Twilio Auth Token"
+                                        multiline
+                                        value={form.twilioAuthToken}
+                                        onChangeText={(value) => updateField("twilioAuthToken", value)}
+                                        autoCapitalize="none"
+                                    />
+
+                                    <Text style={styles.inputLabel}>Twilio WhatsApp Number</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="+14155238886"
+                                        value={form.twilioWhatsappNumber}
+                                        onChangeText={(value) => updateField("twilioWhatsappNumber", value)}
+                                        autoCapitalize="none"
+                                    />
+                                </>
+                            )}
+
+                            {form.provider === PROVIDERS.NEO && (
+                                <>
+                                    <Text style={styles.inputLabel}>Neo Name</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Enter Neo account name"
+                                        value={form.neoAccountName}
+                                        onChangeText={(value) => updateField("neoAccountName", value)}
+                                        autoCapitalize="none"
+                                    />
+
+                                    <Text style={styles.inputLabel}>Neo API Key</Text>
+                                    <TextInput
+                                        style={[styles.input, styles.textArea]}
+                                        placeholder="Enter Neo API key"
+                                        multiline
+                                        value={form.neoApiKey}
+                                        onChangeText={(value) => updateField("neoApiKey", value)}
+                                        autoCapitalize="none"
+                                    />
+
+                                    <Text style={styles.inputLabel}>Neo Phone Number</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Enter Neo WhatsApp number"
+                                        value={form.neoPhoneNumber}
+                                        onChangeText={(value) => updateField("neoPhoneNumber", value)}
+                                        autoCapitalize="none"
+                                        keyboardType="phone-pad"
+                                    />
+
+                                    <Text style={styles.inputLabel}>Neo Bearer Token</Text>
+                                    <TextInput
+                                        style={[styles.input, styles.textArea]}
+                                        placeholder="Enter Neo bearer token"
+                                        multiline
+                                        value={form.neoBearerToken}
+                                        onChangeText={(value) => updateField("neoBearerToken", value)}
+                                        autoCapitalize="none"
+                                    />
+                                </>
+                            )}
+
+                            <TouchableOpacity onPress={handleSave} disabled={saving} style={styles.saveBtn}>
+                                {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Save Configuration</Text>}
                             </TouchableOpacity>
                         </View>
                     )}
@@ -272,7 +489,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                 <View style={styles.infoCard}>
                     <Ionicons name="information-circle" size={24} color={COLORS.primary} />
                     <Text style={styles.infoText}>
-                        Tokens are encrypted and stored securely. Updating the token will immediately affect auto-replies and message campaigns.
+                        Credentials are stored in the database for the logged-in account and used at send time based on the selected provider.
                     </Text>
                 </View>
             </ScrollView>
@@ -281,11 +498,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
 }
 
 const OtpMethod = ({ icon, label, color, onPress, loading }) => (
-    <TouchableOpacity
-        style={styles.methodBtn}
-        onPress={onPress}
-        disabled={loading}
-    >
+    <TouchableOpacity style={styles.methodBtn} onPress={onPress} disabled={loading}>
         <View style={[styles.methodIcon, { backgroundColor: color + "15" }]}>
             <Ionicons name={icon} size={24} color={color} />
         </View>
@@ -338,7 +551,7 @@ const styles = StyleSheet.create({
     badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
     badgeText: { fontSize: 12, fontWeight: "800" },
     tokenBox: { backgroundColor: COLORS.bg, padding: 16, borderRadius: 16, marginBottom: 24 },
-    maskedToken: { fontSize: 16, fontWeight: "700", color: COLORS.text, marginTop: 8, letterSpacing: 2 },
+    maskedToken: { fontSize: 16, fontWeight: "700", color: COLORS.text, marginTop: 8 },
     otpHeader: { fontSize: 14, fontWeight: "800", color: COLORS.text, marginBottom: 16 },
     methodGrid: { flexDirection: "row", gap: 12 },
     methodBtn: { flex: 1, alignItems: "center", backgroundColor: COLORS.bg, padding: 12, borderRadius: 16, borderWidth: 1, borderColor: COLORS.border },
@@ -355,13 +568,29 @@ const styles = StyleSheet.create({
         width: "100%",
         borderWidth: 2,
         borderColor: COLORS.primary + "30",
-        marginBottom: 20
+        marginBottom: 20,
     },
     primaryBtn: { backgroundColor: COLORS.primary, width: "100%", padding: 18, borderRadius: 20, alignItems: "center" },
     btnText: { color: "#fff", fontSize: 16, fontWeight: "800" },
     retryText: { color: COLORS.primary, fontWeight: "700" },
-    inputLabel: { fontSize: 13, fontWeight: "700", color: COLORS.textDim, marginBottom: 8, marginLeft: 4 },
+    inputLabel: { fontSize: 13, fontWeight: "700", color: COLORS.textDim, marginBottom: 8, marginLeft: 4, marginTop: 6 },
     input: { backgroundColor: COLORS.bg, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border, fontSize: 15 },
+    textArea: { minHeight: 110, textAlignVertical: "top" },
+    providerRow: { flexDirection: "row", gap: 10, marginBottom: 16, flexWrap: "wrap" },
+    providerChip: {
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        backgroundColor: COLORS.bg,
+    },
+    providerChipActive: {
+        backgroundColor: COLORS.soft,
+        borderColor: COLORS.secondary,
+    },
+    providerChipText: { color: COLORS.textDim, fontWeight: "700" },
+    providerChipTextActive: { color: COLORS.secondary },
     saveBtn: { backgroundColor: COLORS.secondary, width: "100%", padding: 18, borderRadius: 20, alignItems: "center", marginTop: 10 },
     infoCard: { flexDirection: "row", backgroundColor: COLORS.primary + "10", padding: 16, borderRadius: 20, marginTop: 20, alignItems: "center", gap: 12 },
     infoText: { flex: 1, fontSize: 12, color: COLORS.primary, fontWeight: "600", lineHeight: 18 },

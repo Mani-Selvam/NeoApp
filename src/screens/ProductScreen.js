@@ -20,10 +20,11 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as productService from "../services/productService";
 
 export default function ProductScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -169,7 +170,7 @@ export default function ProductScreen({ navigation }) {
   );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc", paddingTop: insets.top + 10 }}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
       <View style={styles.topHeader}>

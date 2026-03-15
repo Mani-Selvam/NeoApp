@@ -1,35 +1,30 @@
-import axios from "axios";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_URL } from "./apiConfig";
+import getApiClient from "./apiClient";
 
-// Create axios instance with auth token
-const createApiClient = async () => {
-    const token = await AsyncStorage.getItem("token");
-    const headers = {
-        "Content-Type": "application/json",
-    };
-
-    if (token) {
-        headers.Authorization = `Bearer ${token}`;
-    }
-
-    return axios.create({
-        baseURL: API_URL,
-        headers,
-    });
+const shouldSuppressAuthLog = (error) => {
+    const status = error?.response?.status;
+    const code = error?.response?.data?.code;
+    return (
+        error?.isAuthError === true ||
+        status === 401 ||
+        status === 403 ||
+        code === "COMPANY_NOT_ACTIVE" ||
+        code === "COMPANY_NOT_FOUND"
+    );
 };
 
 // GET ALL STAFF
 export const getAllStaff = async () => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get("/staff");
         return response.data;
     } catch (error) {
-        console.error(
-            "Get staff error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get staff error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -37,14 +32,16 @@ export const getAllStaff = async () => {
 // GET STAFF BY COMPANY
 export const getStaffByCompany = async (companyId) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get(`/staff/company/${companyId}`);
         return response.data;
     } catch (error) {
-        console.error(
-            "Get staff by company error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get staff by company error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -52,14 +49,16 @@ export const getStaffByCompany = async (companyId) => {
 // GET SINGLE STAFF
 export const getStaffById = async (id) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get(`/staff/${id}`);
         return response.data;
     } catch (error) {
-        console.error(
-            "Get staff error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get staff error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -67,14 +66,16 @@ export const getStaffById = async (id) => {
 // CREATE STAFF
 export const createStaff = async (staffData) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.post("/staff", staffData);
         return response.data;
     } catch (error) {
-        console.error(
-            "Create staff error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Create staff error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -82,14 +83,16 @@ export const createStaff = async (staffData) => {
 // UPDATE STAFF
 export const updateStaff = async (id, staffData) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.put(`/staff/${id}`, staffData);
         return response.data;
     } catch (error) {
-        console.error(
-            "Update staff error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Update staff error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -97,14 +100,16 @@ export const updateStaff = async (id, staffData) => {
 // UPDATE STAFF STATUS
 export const updateStaffStatus = async (id, status) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.patch(`/staff/${id}/status`, { status });
         return response.data;
     } catch (error) {
-        console.error(
-            "Update staff status error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Update staff status error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -112,14 +117,16 @@ export const updateStaffStatus = async (id, status) => {
 // DELETE STAFF
 export const deleteStaff = async (id) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.delete(`/staff/${id}`);
         return response.data;
     } catch (error) {
-        console.error(
-            "Delete staff error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Delete staff error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };

@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const Enquiry = require("../models/Enquiry");
+const User = require("../models/User");
 const mongoose = require("mongoose");
 const FollowUp = require("../models/FollowUp");
 const ChatMessage = require("../models/ChatMessage");
@@ -10,6 +11,50 @@ const path = require("path");
 const fs = require("fs");
 const { verifyToken } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
+const {
+  extractProviderMessageMeta,
+  loadWhatsappConfig,
+  normalizePhoneNumber,
+  sendWhatsAppMessage,
+} = require("../utils/whatsappConfigService");
+
+const ENQUIRY_STATUS_MAP = {
+  "new": "New",
+  "contacted": "Contacted",
+  "interested": "Interested",
+  "not interested": "Not Interested",
+  "not_interested": "Not Interested",
+  "not-interested": "Not Interested",
+  "converted": "Converted",
+  "closed": "Closed",
+  // Legacy aliases
+  "in progress": "Contacted",
+  "in_progress": "Contacted",
+  "dropped": "Not Interested",
+  "drop": "Not Interested",
+};
+
+const ENQUIRY_STATUS_QUERY_MAP = {
+  New: ["New"],
+  Contacted: ["Contacted", "In Progress"],
+  Interested: ["Interested"],
+  "Not Interested": ["Not Interested", "Dropped"],
+  Converted: ["Converted"],
+  Closed: ["Closed"],
+};
+
+const normalizeEnquiryStatus = (raw) => {
+  if (!raw) return "New";
+  const key = String(raw).trim().toLowerCase();
+  return ENQUIRY_STATUS_MAP[key] || raw;
+};
+
+const toIsoDate = (value) => {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().split("T")[0];
+};
 
 // Configure multer for image uploads
 const storage = multer.diskStorage({
@@ -81,18 +126,17 @@ const generateEnquiryNumber = async () => {
 router.get("/", verifyToken, async (req, res) => {
   const _start = Date.now();
   try {
-    const { search, status, date, page = 1, limit = 20 } = req.query;
-    const cacheKey = cache.key("enquiries", {
-      userId: req.userId,
-      role: req.user.role,
+    const {
       search,
       status,
       date,
-      page,
-      limit,
-    });
-
-    const { data: response, source } = await cache.wrap(cacheKey, async () => {
+      dateFrom,
+      dateTo,
+      assignedTo,
+      page = 1,
+      limit = 20,
+    } = req.query;
+    const response = await (async () => {
       let query = {};
 
       if (req.user.role === "Staff" && req.user.parentUserId) {
@@ -115,7 +159,17 @@ router.get("/", verifyToken, async (req, res) => {
           };
       }
 
-      if (date) query.date = date;
+      if (date) {
+        query.date = date;
+      } else if (dateFrom || dateTo) {
+        query.date = {};
+        if (dateFrom) query.date.$gte = dateFrom;
+        if (dateTo) query.date.$lte = dateTo;
+      }
+
+      if (assignedTo && assignedTo !== "all") {
+        query.assignedTo = assignedTo;
+      }
 
       if (search) {
         query.$or = [
@@ -126,7 +180,12 @@ router.get("/", verifyToken, async (req, res) => {
         ];
       }
 
-      if (status && status !== "All") query.status = status;
+      if (status && status !== "All") {
+        const normalizedStatus = normalizeEnquiryStatus(status);
+        const acceptedStatuses =
+          ENQUIRY_STATUS_QUERY_MAP[normalizedStatus] || [normalizedStatus];
+        query.status = { $in: acceptedStatuses };
+      }
 
       const pageNum = parseInt(page);
       const limitNum = parseInt(limit);
@@ -134,12 +193,44 @@ router.get("/", verifyToken, async (req, res) => {
 
       const enquiries = await Enquiry.find(query)
         .select(
-          "name mobile email image product enqNo status enqType date createdAt cost address source lastContactedAt",
+          "name mobile email image product enqNo status enqType date enquiryDateTime createdAt cost address source lastContactedAt assignedTo",
         )
+        .populate("assignedTo", "name email mobile role")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum + 1)
         .lean();
+
+      const scopedEnquiries = enquiries.slice(0, limitNum);
+      const enquiryIds = scopedEnquiries.map((item) => item._id).filter(Boolean);
+
+      if (enquiryIds.length > 0) {
+        const followUpScope = {
+          userId: query.userId,
+          enqId: { $in: enquiryIds },
+        };
+        if (query.assignedTo) followUpScope.assignedTo = query.assignedTo;
+
+        const latestFollowUps = await FollowUp.find(followUpScope)
+          .select("enqId nextFollowUpDate followUpDate date activityTime createdAt")
+          .sort({ activityTime: -1, createdAt: -1 })
+          .lean();
+
+        const latestByEnquiryId = new Map();
+        latestFollowUps.forEach((item) => {
+          const key = String(item.enqId || "");
+          if (!key || latestByEnquiryId.has(key)) return;
+          latestByEnquiryId.set(key, item);
+        });
+
+        enquiries.forEach((item) => {
+          const latest = latestByEnquiryId.get(String(item._id));
+          if (!latest) return;
+          item.latestFollowUpDate =
+            latest.nextFollowUpDate || latest.followUpDate || latest.date || null;
+          item.latestFollowUpAt = latest.activityTime || latest.createdAt || null;
+        });
+      }
 
       const hasMore = enquiries.length > limitNum;
       if (hasMore) enquiries.pop();
@@ -153,11 +244,11 @@ router.get("/", verifyToken, async (req, res) => {
           pages: hasMore ? pageNum + 1 : pageNum,
         },
       };
-    });
+    })();
 
     res.json(response);
     console.log(
-      `⚡ GET /enquiries — ${Date.now() - _start}ms ${source} (${response.data?.length || 0} items, page ${page})`,
+      `⚡ GET /enquiries — ${Date.now() - _start}ms DB (${response.data?.length || 0} items, status=${status || "all"}, page ${page})`,
     );
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -168,6 +259,7 @@ router.get("/", verifyToken, async (req, res) => {
 const createInitialFollowUp = async (enquiry, ownerId, assignedToId) => {
   try {
     const todayStr = new Date().toISOString().split("T")[0];
+    const now = new Date();
     const initialFollowUp = new FollowUp({
       enqId: enquiry._id,
       userId: ownerId,
@@ -178,20 +270,50 @@ const createInitialFollowUp = async (enquiry, ownerId, assignedToId) => {
       image: enquiry.image,
       product: enquiry.product,
       date: todayStr,
+      followUpDate: todayStr,
+      nextFollowUpDate: todayStr,
       time: new Date().toLocaleTimeString("en-US", {
         hour12: false,
         hour: "2-digit",
         minute: "2-digit",
       }),
-      type: "WhatsApp",
-      remarks: "Initial Enquiry Created",
+      type: "System",
+      activityType: "System",
+      note: "Enquiry created",
+      remarks: "Enquiry created",
       nextAction: "Followup",
       status: "Scheduled",
+      activityTime: now,
     });
     await initialFollowUp.save();
   } catch (err) {
     console.error("❌ Failed to create initial follow-up:", err.message);
   }
+};
+
+const resolveAssignee = async ({ requestedAssignedTo, ownerId, actorId, actor }) => {
+  if (requestedAssignedTo) return requestedAssignedTo;
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "staff") return actorId;
+
+  const scopeUserId = actor?.parentUserId || ownerId;
+  const actorDoc = await User.findById(scopeUserId).select("company_id").lean();
+
+  if (actorDoc?.company_id) {
+    const staffCandidate = await User.findOne({
+      company_id: actorDoc.company_id,
+      status: "Active",
+      role: { $in: ["staff", "Staff"] },
+    })
+      .sort({ createdAt: 1 })
+      .select("_id")
+      .lean();
+
+    if (staffCandidate?._id) return staffCandidate._id;
+  }
+
+  return actorId || ownerId;
 };
 
 // ADD NEW ENQUIRY (with optional image upload)
@@ -217,7 +339,15 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
         ? req.user.parentUserId
         : req.userId;
 
-    const assignedTo = req.body.assignedTo || req.userId;
+    const assignedTo = await resolveAssignee({
+      requestedAssignedTo: req.body.assignedTo,
+      ownerId,
+      actorId: req.userId,
+      actor: req.user,
+    });
+
+    const enquiryDateTime = new Date();
+    const normalizedStatus = normalizeEnquiryStatus(req.body.status || "New");
 
     const newEnquiry = new Enquiry({
       enqNo,
@@ -226,8 +356,9 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
       assignedTo: assignedTo,
       enqBy: req.user.name,
       image: imageData,
-      date: new Date().toISOString().split("T")[0],
-      status: "New",
+      date: toIsoDate(req.body.date) || enquiryDateTime.toISOString().split("T")[0],
+      enquiryDateTime,
+      status: normalizedStatus,
     });
 
     const savedEnquiry = await newEnquiry.save();
@@ -237,19 +368,14 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
 
     // --- AUTO-SEND INTRO TEMPLATE (if available) ---
     try {
-      // Normalize helper (keep local copy)
-      const normalizeTo91 = (raw) => {
-        if (!raw) return "";
-        const clean = String(raw).replace(/\D/g, "");
-        if (!clean) return "";
-        if (clean.length === 10) return `91${clean}`;
-        return clean;
-      };
-
       const cleanMobile = (savedEnquiry.mobile || "").replace(/\D/g, "");
       const short10 =
         cleanMobile.length > 10 ? cleanMobile.slice(-10) : cleanMobile;
-      const normalizedPhone = normalizeTo91(cleanMobile);
+      const cfg = await loadWhatsappConfig({ ownerUserId: ownerId });
+      const normalizedPhone = normalizePhoneNumber(
+        cleanMobile,
+        cfg?.defaultCountry || "91",
+      );
 
       // Look for an 'intro' template for this user (keyword or name contains 'intro')
       const introTemplate = await MessageTemplate.findOne({
@@ -262,26 +388,17 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
         ],
       }).lean();
 
-      if (
-        introTemplate &&
-        process.env.WHATSAPP_API_URL &&
-        process.env.WHATSAPP_API_TOKEN
-      ) {
+      if (introTemplate && cfg) {
         try {
-          const url = `${process.env.WHATSAPP_API_URL}/api/v1/sendSessionMessage/${normalizedPhone}?messageText=${encodeURIComponent(introTemplate.content)}`;
-          const headers = {
-            Authorization: process.env.WHATSAPP_API_TOKEN,
-          };
-          const resp = await require("axios").post(
-            url,
-            {},
-            { headers, timeout: 20000 },
+          const sendResult = await sendWhatsAppMessage({
+            ownerUserId: ownerId,
+            phoneNumber: normalizedPhone,
+            content: introTemplate.content,
+          });
+          const providerMeta = extractProviderMessageMeta(
+            cfg.provider,
+            sendResult.response,
           );
-
-          const providerOk =
-            resp &&
-            resp.data &&
-            (resp.data.ok || resp.data.result === "success");
 
           const savedMsg = new ChatMessage({
             userId: ownerId,
@@ -290,10 +407,12 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
             type: "text",
             content: introTemplate.content,
             phoneNumber: normalizedPhone,
-            status: providerOk ? "sent" : "failed",
-            externalId: resp?.data?.message?.whatsappMessageId || null,
-            providerTicketId: resp?.data?.message?.ticketId || null,
-            providerResponse: resp ? JSON.stringify(resp.data) : null,
+            status: providerMeta.providerOk ? "sent" : "failed",
+            externalId: providerMeta.externalId,
+            providerTicketId: providerMeta.providerTicketId,
+            providerResponse: sendResult.response
+              ? JSON.stringify(sendResult.response.data)
+              : null,
             timestamp: new Date(),
           });
 
@@ -337,11 +456,20 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
             req.user.role === "Staff" && req.user.parentUserId
               ? req.user.parentUserId
               : req.userId,
-          assignedTo: req.body.assignedTo || req.userId,
+          assignedTo: await resolveAssignee({
+            requestedAssignedTo: req.body.assignedTo,
+            ownerId:
+              req.user.role === "Staff" && req.user.parentUserId
+                ? req.user.parentUserId
+                : req.userId,
+            actorId: req.userId,
+            actor: req.user,
+          }),
           enqBy: req.user.name,
           image: imageData,
-          date: new Date().toISOString().split("T")[0],
-          status: "New",
+          date: toIsoDate(req.body.date) || new Date().toISOString().split("T")[0],
+          enquiryDateTime: new Date(),
+          status: normalizeEnquiryStatus(req.body.status || "New"),
         });
         const savedEnquiry = await retryEnquiry.save();
 
@@ -404,6 +532,164 @@ router.get("/:id", verifyToken, async (req, res) => {
   }
 });
 
+// GET ENQUIRY DETAIL WITH TIMELINE + UPCOMING REMINDERS
+router.get("/:id/detail", verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    let filterUserId = req.userId;
+    let scopingFilter = {};
+    if (req.user.role === "Staff" && req.user.parentUserId) {
+      filterUserId = req.user.parentUserId;
+      scopingFilter = { assignedTo: req.userId };
+    }
+
+    const baseFilter = { userId: filterUserId, ...scopingFilter };
+    const query = mongoose.Types.ObjectId.isValid(id)
+      ? { _id: id, ...baseFilter }
+      : { enqNo: id, ...baseFilter };
+
+    const enquiry = await Enquiry.findOne(query)
+      .populate("assignedTo", "name email mobile role")
+      .lean();
+
+    if (!enquiry) {
+      return res.status(404).json({ message: "Enquiry not found or unauthorized" });
+    }
+
+    const timeline = await FollowUp.find({ enqId: enquiry._id, userId: filterUserId, ...scopingFilter })
+      .sort({ activityTime: 1, createdAt: 1 })
+      .select(
+        "activityType type note remarks followUpDate nextFollowUpDate date staffName assignedTo status nextAction createdAt activityTime",
+      )
+      .populate("assignedTo", "name")
+      .lean();
+
+    const today = new Date().toISOString().split("T")[0];
+    const upcomingReminders = timeline.filter((item) => {
+      const nextDate = item.nextFollowUpDate || item.followUpDate || item.date;
+      const isClosed = ["Completed", "Drop", "Dropped"].includes(item.status);
+      return nextDate && nextDate >= today && !isClosed;
+    });
+
+    res.json({
+      enquiry,
+      currentStatus: enquiry.status,
+      timeline,
+      upcomingReminders,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// QUICK STATUS UPDATE
+router.patch("/:id/status", verifyToken, async (req, res) => {
+  try {
+    const nextStatus = normalizeEnquiryStatus(req.body.status);
+    if (!nextStatus) return res.status(400).json({ message: "status is required" });
+
+    let filterUserId = req.userId;
+    let scopingFilter = {};
+    if (req.user.role === "Staff" && req.user.parentUserId) {
+      filterUserId = req.user.parentUserId;
+      scopingFilter = { assignedTo: req.userId };
+    }
+
+    const query = mongoose.Types.ObjectId.isValid(req.params.id)
+      ? { _id: req.params.id, userId: filterUserId, ...scopingFilter }
+      : { enqNo: req.params.id, userId: filterUserId, ...scopingFilter };
+
+    const update = { status: nextStatus };
+    if (nextStatus === "Converted") update.conversionDate = new Date();
+
+    const enquiry = await Enquiry.findOneAndUpdate(
+      query,
+      { $set: update },
+      { returnDocument: "after" },
+    );
+    if (!enquiry) return res.status(404).json({ message: "Enquiry not found or unauthorized" });
+
+    cache.invalidate("enquiries");
+    cache.invalidate("dashboard");
+    cache.invalidate("reports");
+    res.json(enquiry);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// UPCOMING FOLLOW-UP REMINDERS LIST
+router.get("/meta/reminders", verifyToken, async (req, res) => {
+  try {
+    let filterUserId = req.userId;
+    let scopingFilter = {};
+    if (req.user.role === "Staff" && req.user.parentUserId) {
+      filterUserId = req.user.parentUserId;
+      scopingFilter = { assignedTo: req.userId };
+    }
+
+    const today = new Date().toISOString().split("T")[0];
+    const reminders = await FollowUp.find({
+      userId: filterUserId,
+      ...scopingFilter,
+      status: { $nin: ["Completed", "Drop", "Dropped"] },
+      $or: [
+        { nextFollowUpDate: { $gte: today } },
+        { date: { $gte: today } },
+      ],
+    })
+      .sort({ nextFollowUpDate: 1, date: 1, createdAt: 1 })
+      .limit(200)
+      .select("enqId enqNo name mobile followUpDate nextFollowUpDate date activityType status assignedTo")
+      .populate("assignedTo", "name")
+      .lean();
+
+    res.json({ data: reminders });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// REPORT SUMMARY (total, converted, pending/missed followups)
+router.get("/meta/report-summary", verifyToken, async (req, res) => {
+  try {
+    let filterUserId = req.userId;
+    let scopingFilter = {};
+    if (req.user.role === "Staff" && req.user.parentUserId) {
+      filterUserId = req.user.parentUserId;
+      scopingFilter = { assignedTo: req.userId };
+    }
+
+    const today = new Date().toISOString().split("T")[0];
+    const enquiryFilter = { userId: filterUserId, ...scopingFilter };
+    const followFilter = { userId: filterUserId, ...scopingFilter };
+
+    const [totalEnquiries, convertedEnquiries, pendingFollowUps, missedFollowUps] = await Promise.all([
+      Enquiry.countDocuments(enquiryFilter),
+      Enquiry.countDocuments({ ...enquiryFilter, status: "Converted" }),
+      FollowUp.countDocuments({
+        ...followFilter,
+        status: { $nin: ["Completed", "Drop", "Dropped"] },
+        $or: [{ nextFollowUpDate: { $gte: today } }, { date: { $gte: today } }],
+      }),
+      FollowUp.countDocuments({
+        ...followFilter,
+        status: { $nin: ["Completed", "Drop", "Dropped"] },
+        $or: [{ nextFollowUpDate: { $lt: today } }, { date: { $lt: today } }],
+      }),
+    ]);
+
+    res.json({
+      totalEnquiries,
+      convertedEnquiries,
+      pendingFollowUps,
+      missedFollowUps,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // UPDATE ENQUIRY (with optional image upload)
 router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
   try {
@@ -425,6 +711,12 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
       delete updateData.cost; // Or set to 0? Model says required: true.
     else if (updateData.cost !== undefined)
       updateData.cost = Number(updateData.cost);
+    if (updateData.status) updateData.status = normalizeEnquiryStatus(updateData.status);
+    if (updateData.date) updateData.date = toIsoDate(updateData.date) || updateData.date;
+    if (updateData.enquiryDateTime) {
+      const d = new Date(updateData.enquiryDateTime);
+      if (!Number.isNaN(d.getTime())) updateData.enquiryDateTime = d;
+    }
 
     if (req.file) {
       // File was uploaded via multipart/form-data
@@ -440,13 +732,13 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
       enquiry = await Enquiry.findOneAndUpdate(
         { _id: req.params.id, ...filter },
         updateData,
-        { new: true, runValidators: true },
+        { returnDocument: "after", runValidators: true },
       );
     } else {
       enquiry = await Enquiry.findOneAndUpdate(
         { enqNo: req.params.id, ...filter },
         updateData,
-        { new: true, runValidators: true },
+        { returnDocument: "after", runValidators: true },
       );
     }
 
@@ -504,7 +796,15 @@ router.delete("/:id", verifyToken, async (req, res) => {
         .status(404)
         .json({ message: "Enquiry not found or unauthorized" });
     }
+
+    // Remove related follow-ups so deleted enquiries do not appear in Follow-up screens.
+    await FollowUp.deleteMany({
+      userId: filterUserId,
+      $or: [{ enqId: enquiry._id }, { enqNo: enquiry.enqNo }],
+    });
+
     cache.invalidate("enquiries");
+    cache.invalidate("followups");
     cache.invalidate("dashboard");
     res.json({ message: "Enquiry deleted successfully", data: enquiry });
   } catch (err) {

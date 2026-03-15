@@ -2,7 +2,9 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
 const Company = require("../models/Company");
+const CompanySubscription = require("../models/CompanySubscription");
 const bcrypt = require("bcryptjs");
+const { resolveEffectivePlan } = require("../services/planResolver");
 
 // Auth + tenant middlewares
 const { verifyToken } = require("../middleware/auth");
@@ -19,7 +21,7 @@ router.get(
     try {
       const staff = await User.find({
         company_id: req.companyId,
-        role: "Staff",
+        role: { $in: ["Staff", "staff"] },
       })
         .select("-password")
         .lean();
@@ -43,7 +45,7 @@ router.get("/company/:companyId", verifyToken, async (req, res) => {
       return res.status(403).json({ error: "Forbidden" });
     }
     const staff = await User.find({
-      role: "Staff",
+      role: { $in: ["Staff", "staff"] },
       company_id: req.params.companyId,
     })
       .select("-password")
@@ -87,19 +89,43 @@ router.post(
 
       const companyId = req.companyId;
 
-      // Load company to check plan/staffLimit
       const company = await Company.findById(companyId).lean();
       if (!company) return res.status(400).json({ error: "Company not found" });
 
       const staffCount = await User.countDocuments({
         company_id: companyId,
-        role: "Staff",
+        role: { $in: ["Staff", "staff"] },
       });
-      const staffLimit = (company.plan && company.plan.staffLimit) || 0;
-      if (staffLimit > 0 && staffCount >= staffLimit) {
-        return res
-          .status(400)
-          .json({ error: "Staff limit reached for your plan" });
+
+      let maxStaff = 0;
+      try {
+        const anySubscription = await CompanySubscription.findOne({ companyId })
+          .select("_id")
+          .sort({ createdAt: -1 })
+          .lean();
+
+        const resolved = await resolveEffectivePlan(companyId);
+        if (resolved?.hasPlan) maxStaff = Number(resolved?.plan?.maxStaff || 0);
+        else if (!anySubscription) maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
+        else maxStaff = 0;
+      } catch (e) {
+        maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
+      }
+
+      if (maxStaff > 0 && staffCount >= maxStaff) {
+        return res.status(403).json({
+          error: "Staff limit reached for your plan",
+          code: "STAFF_LIMIT_REACHED",
+          limit: maxStaff,
+          current: staffCount,
+        });
+      }
+
+      if (maxStaff === 0) {
+        return res.status(403).json({
+          error: "No active plan. Please choose a plan to add staff.",
+          code: "NO_ACTIVE_PLAN",
+        });
       }
 
       // Check email uniqueness within company
@@ -175,11 +201,11 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
       });
     }
 
-    const staff = await User.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true, runValidators: true },
-    ).select("-password");
+	    const staff = await User.findByIdAndUpdate(
+	      req.params.id,
+	      { status },
+	      { returnDocument: "after", runValidators: true },
+	    ).select("-password");
 
     if (!staff) return res.status(404).json({ error: "Staff not found" });
     if (staff.company_id && staff.company_id.toString() !== req.companyId)

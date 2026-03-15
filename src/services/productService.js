@@ -1,74 +1,87 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
-import { API_URL } from "./apiConfig";
+import getApiClient from "./apiClient";
 
-const createApiClient = async () => {
-  const token = await AsyncStorage.getItem("token");
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return axios.create({ baseURL: API_URL, headers });
+const shouldSuppressAuthLog = (error) => {
+  const status = error?.response?.status;
+  const code = error?.response?.data?.code;
+  return (
+    error?.isAuthError === true ||
+    status === 401 ||
+    status === 403 ||
+    code === "COMPANY_NOT_ACTIVE" ||
+    code === "COMPANY_NOT_FOUND"
+  );
 };
 
 export const getAllProducts = async () => {
   try {
-    const client = await createApiClient();
+    const client = await getApiClient();
     const res = await client.get("/products");
     return res.data;
   } catch (error) {
-    console.error("Get products error:", error.response?.data || error.message);
+    if (!shouldSuppressAuthLog(error)) {
+      console.error("Get products error:", error.response?.data || error.message);
+    }
     throw error;
   }
 };
 
 export const getProductById = async (id) => {
   try {
-    const client = await createApiClient();
+    const client = await getApiClient();
     const res = await client.get(`/products/${id}`);
     return res.data;
   } catch (error) {
-    console.error("Get product error:", error.response?.data || error.message);
+    if (!shouldSuppressAuthLog(error)) {
+      console.error("Get product error:", error.response?.data || error.message);
+    }
     throw error;
   }
 };
 
 export const createProduct = async (data) => {
   try {
-    const client = await createApiClient();
+    const client = await getApiClient();
     const res = await client.post("/products", data);
     return res.data;
   } catch (error) {
-    console.error(
-      "Create product error:",
-      error.response?.data || error.message,
-    );
+    if (!shouldSuppressAuthLog(error)) {
+      console.error(
+        "Create product error:",
+        error.response?.data || error.message,
+      );
+    }
     throw error;
   }
 };
 
 export const updateProduct = async (id, data) => {
   try {
-    const client = await createApiClient();
+    const client = await getApiClient();
     const res = await client.put(`/products/${id}`, data);
     return res.data;
   } catch (error) {
-    console.error(
-      "Update product error:",
-      error.response?.data || error.message,
-    );
+    if (!shouldSuppressAuthLog(error)) {
+      console.error(
+        "Update product error:",
+        error.response?.data || error.message,
+      );
+    }
     throw error;
   }
 };
 
 export const deleteProduct = async (id) => {
   try {
-    const client = await createApiClient();
+    const client = await getApiClient();
     const res = await client.delete(`/products/${id}`);
     return res.data;
   } catch (error) {
-    console.error(
-      "Delete product error:",
-      error.response?.data || error.message,
-    );
+    if (!shouldSuppressAuthLog(error)) {
+      console.error(
+        "Delete product error:",
+        error.response?.data || error.message,
+      );
+    }
     throw error;
   }
 };

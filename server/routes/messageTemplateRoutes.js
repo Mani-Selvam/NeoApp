@@ -48,7 +48,7 @@ router.put("/:id", verifyToken, async (req, res) => {
         const updated = await MessageTemplate.findOneAndUpdate(
             { _id: req.params.id, userId: req.userId },
             req.body,
-            { new: true }
+            { returnDocument: "after" }
         );
         if (!updated) return res.status(404).json({ message: "Template not found" });
 

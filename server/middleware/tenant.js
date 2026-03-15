@@ -16,7 +16,9 @@ module.exports = {
     const allowed = Array.isArray(expected) ? expected : [expected];
     return (req, res, next) => {
       if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-      if (!allowed.includes(req.user.role))
+      const userRole = String(req.user.role || "").toLowerCase();
+      const allowedRoles = allowed.map((r) => String(r || "").toLowerCase());
+      if (!allowedRoles.includes(userRole))
         return res.status(403).json({ error: "Forbidden" });
       next();
     };

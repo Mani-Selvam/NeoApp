@@ -1,36 +1,30 @@
-import axios from "axios";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_URL } from "./apiConfig";
+import getApiClient from "./apiClient";
 
-// Create axios instance with auth token
-const createApiClient = async () => {
-    const token = await AsyncStorage.getItem("token");
-    const headers = {
-        "Content-Type": "application/json",
-    };
-
-    // Only add Authorization header if token exists
-    if (token) {
-        headers.Authorization = `Bearer ${token}`;
-    }
-
-    return axios.create({
-        baseURL: API_URL,
-        headers,
-    });
+const shouldSuppressAuthLog = (error) => {
+    const status = error?.response?.status;
+    const code = error?.response?.data?.code;
+    return (
+        error?.isAuthError === true ||
+        status === 401 ||
+        status === 403 ||
+        code === "COMPANY_NOT_ACTIVE" ||
+        code === "COMPANY_NOT_FOUND"
+    );
 };
 
 // GET REPORT STATS
 export const getReportStats = async () => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get("/reports/stats");
         return response.data;
     } catch (error) {
-        console.error(
-            "Get report stats error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get report stats error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -38,16 +32,18 @@ export const getReportStats = async () => {
 // GET REPORT LIST
 export const getReportList = async (type, filter) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get("/reports/list", {
             params: { type, filter },
         });
         return response.data;
     } catch (error) {
-        console.error(
-            "Get report list error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get report list error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };

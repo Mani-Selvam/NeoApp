@@ -27,6 +27,7 @@ import { io } from "socket.io-client";
 import { API_URL, getImageUrl } from "../services/apiConfig";
 import * as templateService from "../services/messageTemplateService";
 import * as whatsappService from "../services/whatsappService";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 
@@ -43,7 +44,21 @@ const COLORS = {
   glass: "rgba(255, 255, 255, 0.9)",
 };
 
+const sanitizePhoneNumber = (raw) => {
+  const clean = String(raw || "").replace(/\D/g, "");
+  if (!clean) return "";
+  const last10 = clean.slice(-10);
+  if (!last10) return clean;
+  const duplicateLocal = `${last10}${last10}`;
+  const duplicateWithCountry = `91${last10}${last10}`;
+  if (clean === duplicateLocal || clean === duplicateWithCountry) {
+    return `91${last10}`;
+  }
+  return clean;
+};
+
 export default function ChatScreen({ route, navigation }) {
+  const insets = useSafeAreaInsets();
   // Defensive: `route.params` may be undefined if navigated to incorrectly.
   // Support two shapes: { enquiry: {...} } or passing enquiry directly as params.
   const routeParams = route?.params;
@@ -261,7 +276,7 @@ export default function ChatScreen({ route, navigation }) {
 
     try {
       const response = await whatsappService.sendMessage({
-        phoneNumber: enquiry.mobile,
+        phoneNumber: sanitizePhoneNumber(enquiry.mobile),
         content: text,
         type: mediaType,
         enquiryId: enquiry._id,
@@ -562,7 +577,7 @@ export default function ChatScreen({ route, navigation }) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { paddingTop: insets.top + 10 }]}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
     >

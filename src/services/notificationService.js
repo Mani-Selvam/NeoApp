@@ -3,6 +3,10 @@ import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
+const HOURLY_FOLLOWUP_ACK_DATE_KEY = "hourlyFollowupAckDate";
+const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule"; // JSON: { dateKey, ids: [] }
+const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule"; // JSON: { dateKey, ids: [] }
+
 // Helper to check if notifications are supported
 const isNotificationSupported = () => {
     if (Platform.OS === "web") {
@@ -625,6 +629,443 @@ export const checkAndNotifyTodayFollowUps = async (followUps) => {
     }
 };
 
+const getTodayKey = () => new Date().toDateString();
+
+const isActiveFollowUp = (item) => {
+    const status = String(item?.status || "").toLowerCase();
+    const nextAction = String(item?.nextAction || "").toLowerCase();
+    if (!status) return true;
+    if (status === "completed") return false;
+    if (status === "drop" || status === "dropped") return false;
+    if (nextAction === "drop" || nextAction === "dropped") return false;
+    return true;
+};
+
+const isDueToday = (item) => {
+    const raw = item?.date || item?.followUpDate || item?.nextFollowUpDate;
+    if (!raw) return false;
+
+    let d;
+    if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        const [yy, mm, dd] = raw.split("-").map((n) => Number(n));
+        d = new Date(yy, (mm || 1) - 1, dd || 1);
+    } else {
+        d = new Date(raw);
+    }
+
+    if (Number.isNaN(d.getTime())) return false;
+    return d.toDateString() === getTodayKey();
+};
+
+const getPrettyFollowUpLine = (activityType, name) => {
+    const who = (name || "your client").trim();
+    const type = String(activityType || "").trim().toLowerCase();
+
+    if (type === "whatsapp") return `WhatsApp ${who}: quick update + next step.`;
+    if (type === "email") return `Email ${who}: short recap + ask for confirmation.`;
+    if (type === "meeting") return `Meeting ${who}: confirm time + share agenda.`;
+    if (type === "phone call") return `Call ${who}: 2 minutes to move this forward.`;
+    return `Follow up with ${who} now.`;
+};
+
+const buildHourlyFollowUpContent = (todayFollowUps, tipIndex = 0) => {
+    const list = Array.isArray(todayFollowUps) ? todayFollowUps : [];
+    const count = list.length;
+
+    const safe = (v) => String(v || "").trim();
+    const first = list[tipIndex % Math.max(1, list.length)] || list[0] || null;
+    const firstName = safe(first?.name);
+    const firstType = safe(first?.activityType || first?.type);
+    const firstTime = safe(first?.time);
+    const timeNote = firstTime ? ` at ${firstTime}` : "";
+
+    const title = "Hourly follow-up reminder";
+    const line = `${getPrettyFollowUpLine(firstType, firstName)}${timeNote}`;
+    const body =
+        count === 1
+            ? `1 follow-up due today. ${line}`
+            : `${count} follow-ups due today. ${line}`;
+
+    return {
+        title,
+        body,
+        data: {
+            type: "hourly-followup-reminder",
+            followUpCount: count,
+            followUpList: JSON.stringify(list.slice(0, 25)),
+            timestamp: new Date().toISOString(),
+        },
+    };
+};
+
+export const cancelHourlyFollowUpReminders = async () => {
+    try {
+        if (Platform.OS === "web") return;
+
+        const raw = await AsyncStorage.getItem(HOURLY_FOLLOWUP_SCHEDULE_KEY);
+        const schedule = raw ? JSON.parse(raw) : null;
+        const ids = Array.isArray(schedule?.ids) ? schedule.ids : [];
+
+        for (const id of ids) {
+            try {
+                await Notifications.cancelScheduledNotificationAsync(id);
+            } catch (e) {
+                // ignore per-id cancellation failures
+            }
+        }
+
+        await AsyncStorage.removeItem(HOURLY_FOLLOWUP_SCHEDULE_KEY);
+        console.log(`Cancelled ${ids.length} hourly follow-up reminders`);
+    } catch (error) {
+        console.error("Failed to cancel hourly follow-up reminders:", error);
+    }
+};
+
+export const cancelTimeFollowUpReminders = async () => {
+    try {
+        if (Platform.OS === "web") return;
+
+        const raw = await AsyncStorage.getItem(TIME_FOLLOWUP_SCHEDULE_KEY);
+        const schedule = raw ? JSON.parse(raw) : null;
+        const ids = Array.isArray(schedule?.ids) ? schedule.ids : [];
+
+        for (const id of ids) {
+            try {
+                await Notifications.cancelScheduledNotificationAsync(id);
+            } catch (e) {
+                // ignore per-id cancellation failures
+            }
+        }
+
+        await AsyncStorage.removeItem(TIME_FOLLOWUP_SCHEDULE_KEY);
+        console.log(`Cancelled ${ids.length} time-based follow-up reminders`);
+    } catch (error) {
+        console.error("Failed to cancel time-based follow-up reminders:", error);
+    }
+};
+
+export const cancelTodayFollowUpReminders = async () => {
+    await Promise.allSettled([
+        cancelHourlyFollowUpReminders(),
+        cancelTimeFollowUpReminders(),
+    ]);
+};
+
+export const acknowledgeHourlyFollowUpReminders = async () => {
+    try {
+        const todayKey = getTodayKey();
+        await AsyncStorage.setItem(HOURLY_FOLLOWUP_ACK_DATE_KEY, todayKey);
+        await cancelTodayFollowUpReminders();
+    } catch (error) {
+        console.error("Failed to acknowledge hourly follow-up reminders:", error);
+    }
+};
+
+const formatHHmm = (date) => {
+    const h = String(date.getHours()).padStart(2, "0");
+    const m = String(date.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+};
+
+const parseLocalDateTime = (dateStr, timeStr) => {
+    if (!dateStr) return null;
+
+    let d;
+    if (typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const [yy, mm, dd] = dateStr.split("-").map((n) => Number(n));
+        d = new Date(yy, (mm || 1) - 1, dd || 1, 9, 0, 0, 0);
+    } else {
+        d = new Date(dateStr);
+    }
+    if (Number.isNaN(d.getTime())) return null;
+
+    if (timeStr && typeof timeStr === "string") {
+        const t = timeStr.trim();
+        const m24 = t.match(/^(\d{1,2}):(\d{2})$/);
+        if (m24) {
+            const hh = Math.min(23, Math.max(0, Number(m24[1])));
+            const mm = Math.min(59, Math.max(0, Number(m24[2])));
+            d.setHours(hh, mm, 0, 0);
+        }
+    }
+
+    return d;
+};
+
+const buildDueAtContent = (item, when) => {
+    const name = String(item?.name || "Client").trim();
+    const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
+    const timeLabel = when ? formatHHmm(when) : "";
+
+    const title =
+        activityType.toLowerCase() === "meeting"
+            ? "Meeting reminder"
+            : activityType.toLowerCase() === "email"
+              ? "Email follow-up"
+              : activityType.toLowerCase() === "whatsapp"
+                ? "WhatsApp follow-up"
+                : activityType.toLowerCase() === "phone call"
+                  ? "Call reminder"
+                  : "Follow-up reminder";
+
+    const line = getPrettyFollowUpLine(activityType, name);
+    const body = timeLabel ? `${name} • ${timeLabel}. ${line}` : `${name}. ${line}`;
+
+    return {
+        title,
+        body,
+        data: {
+            type: "followup-due",
+            followUpId: String(item?._id || ""),
+            enqId: String(item?.enqId || item?._id || ""),
+            enqNo: String(item?.enqNo || ""),
+            activityType,
+            when: when ? when.toISOString() : null,
+            timestamp: new Date().toISOString(),
+        },
+    };
+};
+
+const buildMissedContent = (item, when) => {
+    const name = String(item?.name || "Client").trim();
+    const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
+    const timeLabel = when ? formatHHmm(when) : "";
+
+    const title = "You might have missed this";
+    const t = activityType.toLowerCase();
+    const actionText =
+        t === "phone call"
+            ? "Please make the call now."
+            : t === "whatsapp"
+              ? "Please send WhatsApp now."
+              : t === "email"
+                ? "Please send the email now."
+                : t === "meeting"
+                  ? "Please confirm and connect now."
+                  : "Please follow up now.";
+
+    const body = timeLabel
+        ? `${name} • ${activityType} at ${timeLabel}. ${actionText}`
+        : `${name} • ${activityType}. ${actionText}`;
+
+    return {
+        title,
+        body,
+        data: {
+            type: "followup-missed",
+            followUpId: String(item?._id || ""),
+            enqId: String(item?.enqId || item?._id || ""),
+            enqNo: String(item?.enqNo || ""),
+            activityType,
+            when: when ? when.toISOString() : null,
+            timestamp: new Date().toISOString(),
+        },
+    };
+};
+
+export const scheduleHourlyFollowUpRemindersForToday = async (
+    followUps,
+    { endHour = 21, channelId = "followups" } = {},
+) => {
+    try {
+        if (Platform.OS === "web") return { scheduled: 0, skipped: true };
+
+        const todayKey = getTodayKey();
+        const ackDate = await AsyncStorage.getItem(HOURLY_FOLLOWUP_ACK_DATE_KEY);
+        if (ackDate === todayKey) {
+            return { scheduled: 0, skipped: true, reason: "acknowledged" };
+        }
+
+        const list = Array.isArray(followUps) ? followUps : [];
+        const todayFollowUps = list.filter(isActiveFollowUp).filter(isDueToday);
+
+        if (todayFollowUps.length === 0) {
+            await cancelHourlyFollowUpReminders();
+            return { scheduled: 0, skipped: true, reason: "none-due" };
+        }
+
+        // Replace previous schedule for today to avoid duplicates.
+        await cancelHourlyFollowUpReminders();
+
+        const now = new Date();
+        const endAt = new Date();
+        endAt.setHours(endHour, 0, 0, 0);
+        if (now >= endAt) {
+            return { scheduled: 0, skipped: true, reason: "after-hours" };
+        }
+
+        const first = new Date(now);
+        first.setMinutes(0, 0, 0);
+        first.setHours(first.getHours() + 1);
+
+        const ids = [];
+        let cursor = new Date(first);
+        let tipIndex = 0;
+
+        while (cursor <= endAt) {
+            const { title, body, data } = buildHourlyFollowUpContent(
+                todayFollowUps,
+                tipIndex,
+            );
+
+            const id = await Notifications.scheduleNotificationAsync({
+                content: {
+                    title,
+                    body,
+                    subtitle: "Tap to open Follow-ups",
+                    data,
+                    sound: "default",
+                    vibrate: [0, 250, 250, 250],
+                    ios: { sound: true },
+                    android: {
+                        channelId,
+                        smallIcon: "icon",
+                        color: "#0EA5E9",
+                        priority: "high",
+                        sticky: false,
+                    },
+                },
+                trigger: cursor,
+            });
+
+            ids.push(id);
+            tipIndex += 1;
+            cursor = new Date(cursor.getTime() + 60 * 60 * 1000);
+        }
+
+        await AsyncStorage.setItem(
+            HOURLY_FOLLOWUP_SCHEDULE_KEY,
+            JSON.stringify({ dateKey: todayKey, ids }),
+        );
+
+        console.log(
+            `Scheduled ${ids.length} hourly follow-up reminders (today=${todayKey}, followUps=${todayFollowUps.length})`,
+        );
+
+        return { scheduled: ids.length, skipped: false };
+    } catch (error) {
+        console.error("Failed to schedule hourly follow-up reminders:", error);
+        return { scheduled: 0, skipped: false, error: true };
+    }
+};
+
+export const scheduleTimeFollowUpRemindersForToday = async (
+    followUps,
+    { channelId = "followups", missedAfterMinutes = 20 } = {},
+) => {
+    try {
+        if (Platform.OS === "web") return { scheduled: 0, skipped: true };
+
+        const todayKey = getTodayKey();
+        const ackDate = await AsyncStorage.getItem(HOURLY_FOLLOWUP_ACK_DATE_KEY);
+        if (ackDate === todayKey) {
+            return { scheduled: 0, skipped: true, reason: "acknowledged" };
+        }
+
+        const list = Array.isArray(followUps) ? followUps : [];
+        const todayFollowUps = list.filter(isActiveFollowUp).filter(isDueToday);
+
+        await cancelTimeFollowUpReminders();
+        if (todayFollowUps.length === 0) {
+            return { scheduled: 0, skipped: true, reason: "none-due" };
+        }
+
+        const now = new Date();
+        const ids = [];
+
+        for (const item of todayFollowUps) {
+            const dateStr = item?.nextFollowUpDate || item?.followUpDate || item?.date;
+            const timeStr = item?.time;
+            if (!timeStr) continue; // optional time => skip time-based scheduling
+
+            const when = parseLocalDateTime(dateStr, timeStr);
+            if (!when) continue;
+
+            // If time already passed today, schedule a "missed" nudge soon.
+            if (when.getTime() <= now.getTime()) {
+                const missed = buildMissedContent(item, when);
+                const id = await Notifications.scheduleNotificationAsync({
+                    content: {
+                        title: missed.title,
+                        body: missed.body,
+                        subtitle: "Tap to open Follow-ups",
+                        data: missed.data,
+                        sound: "default",
+                        vibrate: [0, 250, 250, 250],
+                        ios: { sound: true },
+                        android: {
+                            channelId,
+                            smallIcon: "icon",
+                            color: "#FF3B5C",
+                            priority: "high",
+                            sticky: false,
+                        },
+                    },
+                    trigger: new Date(now.getTime() + 60 * 1000),
+                });
+                ids.push(id);
+                continue;
+            }
+
+            const due = buildDueAtContent(item, when);
+            const dueId = await Notifications.scheduleNotificationAsync({
+                content: {
+                    title: due.title,
+                    body: due.body,
+                    subtitle: "Tap to open Follow-ups",
+                    data: due.data,
+                    sound: "default",
+                    vibrate: [0, 250, 250, 250],
+                    ios: { sound: true },
+                    android: {
+                        channelId,
+                        smallIcon: "icon",
+                        color: "#0EA5E9",
+                        priority: "high",
+                        sticky: false,
+                    },
+                },
+                trigger: when,
+            });
+            ids.push(dueId);
+
+            // Extra nudge for missed meeting/call/etc.
+            const missedWhen = new Date(when.getTime() + missedAfterMinutes * 60 * 1000);
+            const missed = buildMissedContent(item, when);
+            const missedId = await Notifications.scheduleNotificationAsync({
+                content: {
+                    title: missed.title,
+                    body: missed.body,
+                    subtitle: "Tap to open Follow-ups",
+                    data: missed.data,
+                    sound: "default",
+                    vibrate: [0, 250, 250, 250],
+                    ios: { sound: true },
+                    android: {
+                        channelId,
+                        smallIcon: "icon",
+                        color: "#FF9500",
+                        priority: "high",
+                        sticky: false,
+                    },
+                },
+                trigger: missedWhen,
+            });
+            ids.push(missedId);
+        }
+
+        await AsyncStorage.setItem(
+            TIME_FOLLOWUP_SCHEDULE_KEY,
+            JSON.stringify({ dateKey: todayKey, ids }),
+        );
+
+        return { scheduled: ids.length, skipped: false };
+    } catch (error) {
+        console.error("Failed to schedule time follow-up reminders:", error);
+        return { scheduled: 0, skipped: false, error: true };
+    }
+};
+
 // Global notification handler for navigation
 export const setupGlobalNotificationListener = (navigationRef) => {
     return Notifications.addNotificationResponseReceivedListener(response => {
@@ -633,7 +1074,16 @@ export const setupGlobalNotificationListener = (navigationRef) => {
 
         if (navigationRef.isReady()) {
             // Handle different notification types
-            if (data.followUpCount || data.overdueCount || data.type === 'daily-reminder') {
+            if (
+                data.followUpCount ||
+                data.overdueCount ||
+                data.type === "daily-reminder" ||
+                data.type === "hourly-followup-reminder" ||
+                data.type === "followup-due" ||
+                data.type === "followup-missed"
+            ) {
+                // User has acknowledged the reminder by tapping it.
+                acknowledgeHourlyFollowUpReminders().catch(() => {});
                 // Navigate to FollowUp screen
                 // We need to navigate to the nested tab
                 navigationRef.navigate('Main', {
@@ -689,5 +1139,11 @@ export default {
     setupForegroundNotificationListener,
     checkAndNotifyTodayFollowUps,
     cancelFollowUpNotifications,
+    scheduleHourlyFollowUpRemindersForToday,
+    cancelHourlyFollowUpReminders,
+    scheduleTimeFollowUpRemindersForToday,
+    cancelTimeFollowUpReminders,
+    cancelTodayFollowUpReminders,
+    acknowledgeHourlyFollowUpReminders,
     setupGlobalNotificationListener,
 };

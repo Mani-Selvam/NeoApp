@@ -23,13 +23,14 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../services/apiConfig";
 import * as staffService from "../services/staffService";
 
 export default function StaffScreen({ navigation }) {
-    const { user } = useAuth();
+    const insets = useSafeAreaInsets();
+    const { user, billingPlan } = useAuth();
     const [staff, setStaff] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -39,6 +40,12 @@ export default function StaffScreen({ navigation }) {
     const [editFormData, setEditFormData] = useState(null);
     const [editLoading, setEditLoading] = useState(false);
     const [passwordVisible, setPasswordVisible] = useState(false);
+    const [upgradeModal, setUpgradeModal] = useState({
+        visible: false,
+        title: "",
+        message: "",
+        primaryText: "Upgrade",
+    });
 
     // Use a single form state with proper initialization
     const [formData, setFormData] = useState({
@@ -92,6 +99,22 @@ export default function StaffScreen({ navigation }) {
         });
     }, []);
 
+    const showUpgradeModal = useCallback(
+        ({ title, message, primaryText = "Upgrade" }) => {
+            setUpgradeModal({
+                visible: true,
+                title: title || "Upgrade required",
+                message: message || "Please upgrade to continue.",
+                primaryText,
+            });
+        },
+        [],
+    );
+
+    const closeUpgradeModal = useCallback(() => {
+        setUpgradeModal((prev) => ({ ...prev, visible: false }));
+    }, []);
+
     // Handle input changes with proper state management
     const handleInputChange = useCallback((field, value) => {
         setFormData((prev) => ({
@@ -127,15 +150,51 @@ export default function StaffScreen({ navigation }) {
             setShowAddModal(false);
             fetchStaff();
         } catch (error) {
+            const payload = error?.response?.data;
+            const code = payload?.code;
+            const serverMessage =
+                payload?.error ||
+                payload?.message ||
+                error?.message ||
+                "Failed to create staff";
+
+            const isStaffLimit =
+                code === "STAFF_LIMIT_REACHED" ||
+                /staff limit/i.test(String(serverMessage || ""));
+
+            if (isStaffLimit) {
+                const limit = Number(payload?.limit || 0);
+                const current = Number(payload?.current || 0);
+                setShowAddModal(false);
+                showUpgradeModal({
+                    title: "Upgrade required",
+                    message:
+                        limit > 0 && current > 0
+                            ? `Your current plan allows ${limit} staff. You already have ${current}. Please upgrade to add more staff.`
+                            : "Your current plan limit is reached. Please upgrade to add more staff.",
+                    primaryText: "Upgrade",
+                });
+                return;
+            }
+            if (code === "NO_ACTIVE_PLAN" || code === "FEATURE_DISABLED") {
+                setShowAddModal(false);
+                showUpgradeModal({
+                    title: "Choose a plan",
+                    message:
+                        "Your plan is inactive/expired. Please select a plan to continue.",
+                    primaryText: "View Pricing",
+                });
+                return;
+            }
             Alert.alert(
                 "Error",
-                error.response?.data?.error || "Failed to create staff",
+                serverMessage,
             );
             console.error(error);
         } finally {
             setFormLoading(false);
         }
-    }, [formData, resetForm]);
+    }, [formData, resetForm, showUpgradeModal]);
 
     // Handle status toggle
     const handleToggleStatus = useCallback((staffMember) => {
@@ -199,13 +258,37 @@ export default function StaffScreen({ navigation }) {
 
     // Open modal with focus
     const openModal = useCallback(() => {
+        const maxStaff = Number(billingPlan?.maxStaff ?? 0);
+
+        if (!billingPlan) {
+            showUpgradeModal({
+                title: "Choose a plan",
+                message:
+                    "Your plan is inactive/expired. Please select a plan to add staff.",
+                primaryText: "View Pricing",
+            });
+            return;
+        }
+
+        if (!Number.isFinite(maxStaff) || maxStaff <= 0 || staff.length >= maxStaff) {
+            showUpgradeModal({
+                title: "Upgrade required",
+                message:
+                    Number.isFinite(maxStaff) && maxStaff > 0
+                        ? `Your current plan allows ${maxStaff} staff. Please upgrade to add more staff.`
+                        : "Your current plan does not allow adding staff. Please upgrade.",
+                primaryText: "Upgrade",
+            });
+            return;
+        }
+
         setShowAddModal(true);
         resetForm();
         // Focus first input after modal opens
         setTimeout(() => {
             inputRefs.name.current?.focus();
         }, 100);
-    }, [resetForm]);
+    }, [billingPlan, resetForm, showUpgradeModal, staff.length]);
 
     // Close modal
     const closeModal = useCallback(() => {
@@ -564,7 +647,7 @@ export default function StaffScreen({ navigation }) {
     };
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
             {/* Header */}
@@ -800,6 +883,49 @@ export default function StaffScreen({ navigation }) {
                 </View>
             </Modal>
 
+            {/* Upgrade / Pricing Modal */}
+            <Modal
+                visible={upgradeModal.visible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={closeUpgradeModal}>
+                <View style={styles.upgradeOverlay}>
+                    <View style={styles.upgradeCard}>
+                        <Text style={styles.upgradeTitle}>
+                            {upgradeModal.title}
+                        </Text>
+                        <Text style={styles.upgradeMessage}>
+                            {upgradeModal.message}
+                        </Text>
+                        <View style={styles.upgradeActions}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.upgradeBtn,
+                                    styles.upgradeBtnPrimary,
+                                ]}
+                                onPress={() => {
+                                    closeUpgradeModal();
+                                    navigation.navigate("PricingScreen");
+                                }}>
+                                <Text style={styles.upgradeBtnTextPrimary}>
+                                    {upgradeModal.primaryText}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[
+                                    styles.upgradeBtn,
+                                    styles.upgradeBtnSecondary,
+                                ]}
+                                onPress={closeUpgradeModal}>
+                                <Text style={styles.upgradeBtnTextSecondary}>
+                                    Close
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
             {/* Content */}
             {loading && staff.length === 0 ? (
                 <View style={styles.loadingContainer}>
@@ -883,10 +1009,39 @@ const styles = StyleSheet.create({
         fontWeight: "bold",
         color: "#1e293b",
     },
-    content: {
-        flex: 1,
-        padding: 20,
-    },
+	    content: {
+	        flex: 1,
+	        padding: 20,
+	    },
+        upgradeOverlay: {
+            flex: 1,
+            backgroundColor: "rgba(15, 23, 42, 0.55)",
+            justifyContent: "center",
+            alignItems: "center",
+            padding: 20,
+        },
+        upgradeCard: {
+            width: "100%",
+            maxWidth: 420,
+            backgroundColor: "#fff",
+            borderRadius: 16,
+            padding: 18,
+            borderWidth: 1,
+            borderColor: "#E2E8F0",
+        },
+        upgradeTitle: { fontSize: 18, fontWeight: "900", color: "#0F172A" },
+        upgradeMessage: { marginTop: 8, fontSize: 14, color: "#334155" },
+        upgradeActions: { marginTop: 14, gap: 10 },
+        upgradeBtn: {
+            borderRadius: 12,
+            paddingVertical: 12,
+            paddingHorizontal: 14,
+            alignItems: "center",
+        },
+        upgradeBtnPrimary: { backgroundColor: "#2563EB" },
+        upgradeBtnSecondary: { backgroundColor: "#F1F5F9" },
+        upgradeBtnTextPrimary: { color: "#fff", fontWeight: "900" },
+        upgradeBtnTextSecondary: { color: "#0F172A", fontWeight: "800" },
     loadingContainer: {
         flex: 1,
         justifyContent: "center",

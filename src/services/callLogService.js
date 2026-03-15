@@ -31,3 +31,24 @@ export const syncCallLogs = async (logs) => {
     const response = await client.post(`/calllogs/sync-batch`, { logs });
     return response.data;
 };
+
+export const createCallSession = async (sessionData) => {
+    const client = await getApiClient();
+    const response = await client.post(`/calllogs/session`, sessionData);
+    return response.data;
+};
+
+export const updateCallSessionControl = async (sessionId, controlData) => {
+    const client = await getApiClient();
+    const response = await client.patch(
+        `/calllogs/session/${sessionId}/control`,
+        controlData,
+    );
+    return response.data;
+};
+
+export const endCallSession = async (sessionId, payload = {}) => {
+    const client = await getApiClient();
+    const response = await client.post(`/calllogs/session/${sessionId}/end`, payload);
+    return response.data;
+};

@@ -23,7 +23,15 @@ let callDetector = null;
 let callStartTime = null;
 let dialStartTime = null; // Track when we start dialing
 let currentNumber = null;
-let currentCallType = "Outgoing";
+let currentCallType = "Unknown";
+let hasWarnedUnavailableCallLog = false;
+let lastIncomingLookup = { num: null, ts: 0 };
+let deviceSyncIntervalId = null;
+let lastDeviceSyncTs = 0;
+
+const isExpoGo = () =>
+    Constants.executionEnvironment === "storeClient" ||
+    Constants.appOwnership === "expo";
 
 const requestPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -46,6 +54,38 @@ const requestPermissions = async () => {
     return true;
 };
 
+const syncDeviceLogsIfPossible = async ({ force = false } = {}) => {
+    if (Platform.OS !== "android") return;
+    if (isExpoGo()) return;
+
+    const now = Date.now();
+    if (!force && now - lastDeviceSyncTs < 45000) return;
+    lastDeviceSyncTs = now;
+
+    try {
+        const mod = require("react-native-call-log");
+        const CallLog = mod?.default || mod;
+        if (!CallLog?.load) return;
+
+        const logs = await CallLog.load(80, {
+            minTimestamp: Date.now() - 6 * 60 * 60 * 1000,
+        });
+        if (!Array.isArray(logs) || logs.length === 0) return;
+
+        const result = await callLogService.syncCallLogs(logs);
+        const synced = Number(result?.synced || 0);
+        if (synced > 0) {
+            DeviceEventEmitter.emit("CALL_LOG_CREATED", { type: "BATCH_SYNC", synced });
+        }
+    } catch (_e) {
+        // ignore sync errors (permissions / OEM restrictions)
+    }
+    if (deviceSyncIntervalId) {
+        clearInterval(deviceSyncIntervalId);
+        deviceSyncIntervalId = null;
+    }
+};
+
 // Check if RNImmediatePhoneCall is actually available in the build
 export const isImmediateCallAvailable = () => {
     try {
@@ -59,11 +99,6 @@ export const isImmediateCallAvailable = () => {
 export const startCallMonitoring = async (userData = null) => {
     if (Platform.OS === 'web') {
         process.env.NODE_ENV !== 'production' && console.log('Call Monitoring: Not supported on Web');
-        return;
-    }
-
-    if (!isCallDetectorAvailable) {
-        console.log('Call Monitoring: Native module not available (Using Expo Go?)');
         return;
     }
 
@@ -90,39 +125,71 @@ export const startCallMonitoring = async (userData = null) => {
 
     // Silenced monitor active toast
 
-    callDetector = new CallDetectorManager(
+    if (!isCallDetectorAvailable) {
+        console.log('Call Monitoring: CallDetector native module not available; using device log sync only');
+    } else {
+        callDetector = new CallDetectorManager(
         (event, phoneNumber) => {
+            const ev = String(event || "").trim().toLowerCase();
             // Normalize incoming number (remove + and spaces)
             const cleanNum = phoneNumber ? phoneNumber.replace(/\D/g, "") : null;
             if (cleanNum) currentNumber = cleanNum;
 
             console.log(`[CallMonitor] EVENT: ${event} | NUM: ${cleanNum || 'Unknown'}`);
 
-            switch (event) {
-                case 'Incoming':
+            const lookupEnquiryIfNeeded = async () => {
+                if (!cleanNum) return;
+                const now = Date.now();
+                if (lastIncomingLookup.num === cleanNum && now - lastIncomingLookup.ts < 10000) return;
+                lastIncomingLookup = { num: cleanNum, ts: now };
+                try {
+                    const res = await callLogService.identifyCaller(cleanNum);
+                    if (res?.found && res?.details) {
+                        DeviceEventEmitter.emit("INCOMING_CRM_MATCH", {
+                            phoneNumber: cleanNum,
+                            details: res.details,
+                            at: new Date().toISOString(),
+                        });
+                    }
+                } catch (_e) {
+                    // ignore lookup errors
+                }
+            };
+
+            switch (ev) {
+                case 'incoming':
+                case 'ringing':
                     currentCallType = "Incoming";
                     callStartTime = null; // Reset
                     dialStartTime = null;
-                    if (cleanNum) {
-                        currentNumber = cleanNum;
-                        callLogService.identifyCaller(cleanNum).catch(() => { });
-                    }
+                    lookupEnquiryIfNeeded();
                     break;
-                case 'Dialing':
+                case 'dialing':
                     currentCallType = "Outgoing";
                     callStartTime = null;
                     dialStartTime = Date.now();
                     if (cleanNum) currentNumber = cleanNum;
                     break;
-                case 'Connected':
+                case 'connected':
+                    // Some Android builds do not emit "Incoming" but do emit "Connected" for answered incoming calls.
+                    if (!dialStartTime && currentCallType !== "Incoming") {
+                        currentCallType = "Incoming";
+                        lookupEnquiryIfNeeded();
+                    }
                     if (!callStartTime) {
                         callStartTime = Date.now();
                         console.log(`[CallMonitor] Conversation Started: ${new Date(callStartTime).toLocaleTimeString()}`);
                     }
                     break;
-                case 'Offhook':
+                case 'offhook':
                     // Offhook happens when user picks up (Incoming) or when dialer opens (Outgoing)
                     if (!callStartTime) {
+                        // Heuristic: if we never saw "Dialing", treat Offhook as incoming answer.
+                        if (!dialStartTime) {
+                            currentCallType = "Incoming";
+                            lookupEnquiryIfNeeded();
+                        }
+
                         if (currentCallType === "Incoming") {
                             callStartTime = Date.now();
                             console.log(`[CallMonitor] Incoming Call Answered: ${new Date(callStartTime).toLocaleTimeString()}`);
@@ -131,11 +198,11 @@ export const startCallMonitoring = async (userData = null) => {
                         }
                     }
                     break;
-                case 'Missed':
+                case 'missed':
                     currentCallType = "Incoming";
                     handleCallEnd(cleanNum || currentNumber);
                     break;
-                case 'Disconnected':
+                case 'disconnected':
                     handleCallEnd(cleanNum || currentNumber);
                     break;
             }
@@ -147,14 +214,64 @@ export const startCallMonitoring = async (userData = null) => {
             message: 'This app needs access to your phone state to log calls automatically.',
         }
     );
+    }
+
+    if (deviceSyncIntervalId) {
+        clearInterval(deviceSyncIntervalId);
+        deviceSyncIntervalId = null;
+    }
+
+    // Fallback sync: pull device call logs periodically (covers missed incoming events).
+    // Server dedupes by device log `id` and ignores numbers not in Enquiry DB.
+    syncDeviceLogsIfPossible({ force: true }).catch(() => { });
+    deviceSyncIntervalId = setInterval(() => {
+        syncDeviceLogsIfPossible().catch(() => { });
+    }, 60000);
 };
 
 let isProcessing = false;
 
+const getFallbackNumberFromDeviceLog = async () => {
+    if (Platform.OS !== 'android') return null;
+    if (isExpoGo()) return null;
+    try {
+        const mod = require('react-native-call-log');
+        const CallLog = mod?.default || mod;
+        if (!CallLog?.load) return null;
+
+        const recent = await CallLog.load(8, {
+            minTimestamp: Date.now() - 5 * 60 * 1000,
+        });
+        if (!Array.isArray(recent) || recent.length === 0) return null;
+
+        for (const entry of recent) {
+            const raw =
+                entry?.phoneNumber ||
+                entry?.number ||
+                entry?.formattedNumber ||
+                "";
+            const digits = String(raw).replace(/\D/g, "");
+            if (digits) return digits;
+        }
+        return null;
+    } catch (error) {
+        if (!hasWarnedUnavailableCallLog) {
+            console.log(
+                "[CallMonitor] react-native-call-log unavailable; skipping fallback number lookup",
+            );
+            hasWarnedUnavailableCallLog = true;
+        }
+        return null;
+    }
+};
+
 const handleCallEnd = async (phoneNumber) => {
     if (isProcessing) return;
 
-    const finalNumber = phoneNumber || currentNumber;
+    let finalNumber = phoneNumber || currentNumber;
+    if (!finalNumber) {
+        finalNumber = await getFallbackNumberFromDeviceLog();
+    }
     if (!finalNumber) {
         console.log('⚠️ [CallMonitor] Skipped: No phone number captured');
         return;
@@ -232,8 +349,12 @@ const handleCallEnd = async (phoneNumber) => {
             };
             try {
                 const savedLog = await callLogService.createCallLog(callData);
-                console.log('✅ [CallMonitor] Auto-Log Saved:', savedLog._id);
-                DeviceEventEmitter.emit('CALL_LOG_CREATED', savedLog);
+                if (savedLog?.ignored || !savedLog?._id) {
+                    console.log('[CallMonitor] Ignored non-enquiry call log');
+                } else {
+                    console.log('[CallMonitor] Auto-Log Saved:', savedLog._id);
+                    DeviceEventEmitter.emit('CALL_LOG_CREATED', savedLog);
+                }
             } catch (error) {
                 console.error('❌ [CallMonitor] Auto-Log Failed:', error.message);
             }
@@ -243,7 +364,8 @@ const handleCallEnd = async (phoneNumber) => {
         callStartTime = null;
         dialStartTime = null;
         currentNumber = null;
-        currentCallType = "Outgoing";
+        currentCallType = "Unknown";
+        lastIncomingLookup = { num: null, ts: 0 };
         // Delay resetting isProcessing to allow device states to settle
         setTimeout(() => { isProcessing = false; }, 2000);
     }, 100);
@@ -253,6 +375,11 @@ export const stopCallMonitoring = () => {
     if (callDetector) {
         callDetector.dispose();
         callDetector = null;
+        if (deviceSyncIntervalId) {
+            clearInterval(deviceSyncIntervalId);
+            deviceSyncIntervalId = null;
+        }
         console.log('🛑 Call Monitoring Service Stopped');
     }
 };
+

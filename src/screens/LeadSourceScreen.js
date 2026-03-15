@@ -22,12 +22,13 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../services/apiConfig";
 import * as leadSourceService from "../services/leadSourceService";
 
 export default function LeadSourceScreen({ navigation }) {
+    const insets = useSafeAreaInsets();
     const { user } = useAuth();
     const [leadSources, setLeadSources] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -426,7 +427,7 @@ export default function LeadSourceScreen({ navigation }) {
     );
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
             {/* Header */}

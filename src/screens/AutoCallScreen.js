@@ -24,7 +24,7 @@ import {
     View,
 } from "react-native";
 import RNImmediatePhoneCall from 'react-native-immediate-phone-call';
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { PostCallModal } from "../components/PostCallModal";
 import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../services/apiConfig";
@@ -100,6 +100,7 @@ const getDateColor = (dateStr) => {
 };
 
 export default function AutoCallScreen({ navigation }) {
+    const insets = useSafeAreaInsets();
     const { user } = useAuth();
     // --- State ---
     const [followUps, setFollowUps] = useState([]);
@@ -240,6 +241,10 @@ export default function AutoCallScreen({ navigation }) {
     const handleSaveCallLog = async (callData) => {
         try {
             const savedLog = await callLogService.createCallLog(callData);
+            if (!savedLog?._id) {
+                console.log("Call log was not created:", savedLog);
+                return;
+            }
             setCallModalVisible(false);
             setCallEnquiry(null);
             setAutoCallData(null);
@@ -409,7 +414,7 @@ export default function AutoCallScreen({ navigation }) {
     const filterOptions = ["Missed", "Upcoming", "All"];
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <StatusBar barStyle="dark-content" backgroundColor={THEME.colors.bg} translucent />
 
             {/* Floating Header */}

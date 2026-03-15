@@ -9,7 +9,8 @@ import {
     Text,
     TouchableOpacity,
     useWindowDimensions,
-    View
+    View,
+    Platform,
 } from "react-native";
 import Animated, {
     Easing,
@@ -22,9 +23,10 @@ import Animated, {
     useSharedValue,
     withSequence,
     withSpring,
-    withTiming
+    withTiming,
 } from "react-native-reanimated";
 import { useAuth } from "../contexts/AuthContext";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get("window");
 
@@ -32,7 +34,8 @@ const DATA = [
     {
         id: "1",
         title: "Unify Your Sales Pipeline",
-        subtitle: "Bring all your enquiries into one powerful dashboard. No more messy spreadsheets.",
+        subtitle:
+            "Bring all your enquiries into one powerful dashboard. No more messy spreadsheets.",
         media: require("../assets/introimage/intro1.gif"),
         type: "image",
         accentColor: "#6C5DD3", // Matching HomeScreen primary
@@ -40,7 +43,8 @@ const DATA = [
     {
         id: "2",
         title: "Never Miss a Follow-up",
-        subtitle: "Schedule calls, track status, and close deals with timely reminders and actions.",
+        subtitle:
+            "Schedule calls, track status, and close deals with timely reminders and actions.",
         media: require("../assets/introimage/intro2.gif"),
         type: "image",
         accentColor: "#FF6B9D", // Matching HomeScreen pink/accent
@@ -48,7 +52,8 @@ const DATA = [
     {
         id: "3",
         title: "Visualize Your Growth",
-        subtitle: "Track monthly revenue, conversion rates, and pipeline health at a glance.",
+        subtitle:
+            "Track monthly revenue, conversion rates, and pipeline health at a glance.",
         media: require("../assets/introimage/intro3.gif"),
         type: "image",
         accentColor: "#00D9A3", // Matching HomeScreen success
@@ -58,6 +63,7 @@ const DATA = [
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList);
 
 export default function OnboardingScreen({ navigation }) {
+    const insets = useSafeAreaInsets();
     // ... (rest of the component logic remains mostly the same until renderItem)
     const { completeOnboarding, isLoggedIn } = useAuth();
     const { width, height } = useWindowDimensions();
@@ -68,7 +74,11 @@ export default function OnboardingScreen({ navigation }) {
     const buttonOpacity = useSharedValue(1);
 
     const onViewableItemsChanged = useCallback(({ viewableItems }) => {
-        if (viewableItems && viewableItems.length > 0 && viewableItems[0].index !== null) {
+        if (
+            viewableItems &&
+            viewableItems.length > 0 &&
+            viewableItems[0].index !== null
+        ) {
             setCurrentIndex(viewableItems[0].index);
         }
     }, []);
@@ -84,12 +94,12 @@ export default function OnboardingScreen({ navigation }) {
         buttonScale.value = withSequence(
             withSpring(0.95, { damping: 15, stiffness: 300 }),
             withSpring(1.05, { damping: 10, stiffness: 400 }),
-            withSpring(1, { damping: 15, stiffness: 300 })
+            withSpring(1, { damping: 15, stiffness: 300 }),
         );
 
         buttonOpacity.value = withSequence(
             withTiming(0.7, { duration: 100 }),
-            withTiming(1, { duration: 200 })
+            withTiming(1, { duration: 200 }),
         );
 
         if (currentIndex < DATA.length - 1) {
@@ -110,15 +120,28 @@ export default function OnboardingScreen({ navigation }) {
         navigation.replace(isLoggedIn ? "Main" : "Login");
     };
 
-    const renderItem = useCallback(({ item, index }) => {
-        return <OnboardItem item={item} index={index} scrollX={scrollX} width={width} />;
-    }, [scrollX, width]);
+    const renderItem = useCallback(
+        ({ item, index }) => {
+            return (
+                <OnboardItem
+                    item={item}
+                    index={index}
+                    scrollX={scrollX}
+                    width={width}
+                />
+            );
+        },
+        [scrollX, width],
+    );
 
-    const getItemLayout = useCallback((_, index) => ({
-        length: width,
-        offset: width * index,
-        index,
-    }), [width]);
+    const getItemLayout = useCallback(
+        (_, index) => ({
+            length: width,
+            offset: width * index,
+            index,
+        }),
+        [width],
+    );
 
     const nextButtonAnimatedStyle = useAnimatedStyle(() => {
         return {
@@ -133,26 +156,31 @@ export default function OnboardingScreen({ navigation }) {
             <View style={styles.paginationContainer}>
                 {DATA.map((_, i) => {
                     const animatedDotStyle = useAnimatedStyle(() => {
-                        const inputRange = [(i - 1) * width, i * width, (i + 1) * width];
+                        const inputRange = [
+                            (i - 1) * width,
+                            i * width,
+                            (i + 1) * width,
+                        ];
 
                         const widthAnim = interpolate(
                             scrollX.value,
                             inputRange,
                             [6, 32, 6],
-                            Extrapolation.CLAMP
+                            Extrapolation.CLAMP,
                         );
 
                         const opacity = interpolate(
                             scrollX.value,
                             inputRange,
                             [0.4, 1, 0.4],
-                            Extrapolation.CLAMP
+                            Extrapolation.CLAMP,
                         );
 
                         return {
                             width: widthAnim,
                             height: 6,
-                            backgroundColor: i === currentIndex ? "#1F2937" : "#D1D5DB",
+                            backgroundColor:
+                                i === currentIndex ? "#1F2937" : "#D1D5DB",
                             opacity,
                             borderRadius: 3,
                         };
@@ -170,8 +198,12 @@ export default function OnboardingScreen({ navigation }) {
     };
 
     return (
-        <View style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#fff" translucent />
+        <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
+            <StatusBar
+                barStyle="dark-content"
+                backgroundColor="#fff"
+                translucent
+            />
 
             {/* Subtle Background Pattern */}
             <View style={styles.backgroundPattern}>
@@ -184,7 +216,7 @@ export default function OnboardingScreen({ navigation }) {
                                 left: Math.random() * width,
                                 top: Math.random() * height,
                                 opacity: Math.random() * 0.1 + 0.05,
-                            }
+                            },
                         ]}
                     />
                 ))}
@@ -214,21 +246,29 @@ export default function OnboardingScreen({ navigation }) {
 
             {/* Bottom Footer */}
             <View style={styles.bottomFooter}>
-                <TouchableOpacity onPress={handleSkip} style={styles.skipButton}>
+                <TouchableOpacity
+                    onPress={handleSkip}
+                    style={styles.skipButton}>
                     <Text style={styles.skipText}>Skip</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                     onPress={handleNext}
                     activeOpacity={0.8}
-                    style={styles.nextButtonWrapper}
-                >
-                    <Animated.View style={[styles.nextButton, nextButtonAnimatedStyle]}>
+                    style={styles.nextButtonWrapper}>
+                    <Animated.View
+                        style={[styles.nextButton, nextButtonAnimatedStyle]}>
                         <Text style={styles.nextText}>
-                            {currentIndex === DATA.length - 1 ? "Get Started" : "Next"}
+                            {currentIndex === DATA.length - 1
+                                ? "Get Started"
+                                : "Next"}
                         </Text>
                         <Ionicons
-                            name={currentIndex === DATA.length - 1 ? "arrow-forward" : "chevron-forward"}
+                            name={
+                                currentIndex === DATA.length - 1
+                                    ? "arrow-forward"
+                                    : "chevron-forward"
+                            }
                             size={18}
                             color="#fff"
                             style={styles.nextIcon}
@@ -248,39 +288,46 @@ const OnboardItem = ({ item, index, scrollX, width }) => {
 
     useEffect(() => {
         iconScale.value = withSpring(1, { damping: 15, stiffness: 200 });
-        cardOpacity.value = withTiming(1, { duration: 800, easing: Easing.out(Easing.quad) });
+        cardOpacity.value = withTiming(1, {
+            duration: 800,
+            easing: Easing.out(Easing.quad),
+        });
         translateY.value = withSpring(0, { damping: 20, stiffness: 300 });
     }, []);
 
     const animatedStyle = useAnimatedStyle(() => {
-        const inputRange = [(index - 1) * width, index * width, (index + 1) * width];
+        const inputRange = [
+            (index - 1) * width,
+            index * width,
+            (index + 1) * width,
+        ];
 
         const translateX = interpolate(
             scrollX.value,
             inputRange,
             [width * 0.7, 0, -width * 0.7],
-            Extrapolation.CLAMP
+            Extrapolation.CLAMP,
         );
 
         const scale = interpolate(
             scrollX.value,
             inputRange,
             [0.85, 1, 0.85],
-            Extrapolation.CLAMP
+            Extrapolation.CLAMP,
         );
 
         return {
             transform: [
                 { translateX },
                 { scale },
-                { translateY: translateY.value }
+                { translateY: translateY.value },
             ],
             opacity: cardOpacity.value,
         };
     });
 
     const mediaAnimatedStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: iconScale.value }]
+        transform: [{ scale: iconScale.value }],
     }));
 
     return (
@@ -289,7 +336,8 @@ const OnboardItem = ({ item, index, scrollX, width }) => {
             <View style={styles.contentCard}>
                 {/* Media Container (Image or Video) */}
                 <View style={styles.illustrationContainer}>
-                    <Animated.View style={[styles.mediaWrapper, mediaAnimatedStyle]}>
+                    <Animated.View
+                        style={[styles.mediaWrapper, mediaAnimatedStyle]}>
                         <Image
                             source={item.media}
                             style={styles.media}
@@ -298,23 +346,39 @@ const OnboardItem = ({ item, index, scrollX, width }) => {
                     </Animated.View>
 
                     {/* Decorative Elements */}
-                    <View style={[styles.decoration, styles.decoration1, { backgroundColor: item.accentColor + '20' }]} />
-                    <View style={[styles.decoration, styles.decoration2, { backgroundColor: item.accentColor + '15' }]} />
-                    <View style={[styles.decoration, styles.decoration3, { backgroundColor: item.accentColor + '10' }]} />
+                    <View
+                        style={[
+                            styles.decoration,
+                            styles.decoration1,
+                            { backgroundColor: item.accentColor + "20" },
+                        ]}
+                    />
+                    <View
+                        style={[
+                            styles.decoration,
+                            styles.decoration2,
+                            { backgroundColor: item.accentColor + "15" },
+                        ]}
+                    />
+                    <View
+                        style={[
+                            styles.decoration,
+                            styles.decoration3,
+                            { backgroundColor: item.accentColor + "10" },
+                        ]}
+                    />
                 </View>
 
                 {/* Text Content */}
                 <View style={styles.textContainer}>
                     <Animated.Text
                         entering={FadeIn.duration(600).delay(200)}
-                        style={styles.title}
-                    >
+                        style={styles.title}>
                         {item.title}
                     </Animated.Text>
                     <Animated.Text
                         entering={FadeIn.duration(600).delay(400)}
-                        style={styles.subtitle}
-                    >
+                        style={styles.subtitle}>
                         {item.subtitle}
                     </Animated.Text>
                 </View>
@@ -323,11 +387,18 @@ const OnboardItem = ({ item, index, scrollX, width }) => {
                 <View style={styles.floatingElements}>
                     <Animated.View
                         entering={FadeIn.duration(800).delay(600)}
-                        style={[styles.floatingDot, { backgroundColor: item.accentColor }]}
+                        style={[
+                            styles.floatingDot,
+                            { backgroundColor: item.accentColor },
+                        ]}
                     />
                     <Animated.View
                         entering={FadeIn.duration(800).delay(800)}
-                        style={[styles.floatingDot, styles.dot2, { backgroundColor: item.accentColor + '60' }]}
+                        style={[
+                            styles.floatingDot,
+                            styles.dot2,
+                            { backgroundColor: item.accentColor + "60" },
+                        ]}
                     />
                 </View>
             </View>
@@ -339,7 +410,7 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: "#FFFFFF",
-
+        paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
     },
     backgroundPattern: {
         position: "absolute",

@@ -4,122 +4,18 @@ const ChatMessage = require("../models/ChatMessage");
 const Enquiry = require("../models/Enquiry");
 const MessageTemplate = require("../models/MessageTemplate");
 const { verifyToken } = require("../middleware/auth");
-const axios = require("axios");
 const aiService = require("../utils/aiService");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const WhatsAppConfig = require("../models/WhatsAppConfig");
-const { encrypt, decrypt } = require("../utils/crypto");
-
-// Small in-memory cache for config to avoid DB roundtrips on every message
-// cache keyed by lookupKey (company:<id> | owner:<id> | global)
-const _whConfigCache = new Map();
-const _whConfigCacheAt = new Map();
-const cacheTTL = 30 * 1000; // 30s
-
-const makeLookupKey = (opts = {}) => {
-  if (opts.companyId) return `company:${String(opts.companyId)}`;
-  if (opts.ownerUserId) return `owner:${String(opts.ownerUserId)}`;
-  return `global`;
-};
-
-const loadWhatsappConfig = async (opts = {}) => {
-  const key = makeLookupKey(opts);
-  try {
-    const cached = _whConfigCache.get(key);
-    const at = _whConfigCacheAt.get(key) || 0;
-    if (cached && Date.now() - at < cacheTTL) return cached;
-
-    // Try lookup order: companyId -> ownerUserId -> global
-    let cfg = null;
-    if (opts.companyId) {
-      cfg = await WhatsAppConfig.findOne({
-        companyId: opts.companyId,
-      }).lean();
-    }
-    if (!cfg && opts.ownerUserId) {
-      cfg = await WhatsAppConfig.findOne({
-        ownerUserId: opts.ownerUserId,
-      }).lean();
-    }
-    if (!cfg) {
-      // Only fall back to a global config when no specific lookup was requested.
-      // This prevents silently using a global token when a per-user/company
-      // config was expected.
-      if (!opts.companyId && !opts.ownerUserId) {
-        cfg = await WhatsAppConfig.findOne({}).lean(); // global fallback
-      } else {
-        cfg = null;
-      }
-    }
-
-    if (cfg && cfg.apiTokenEncrypted)
-      cfg.apiToken = decrypt(cfg.apiTokenEncrypted);
-    _whConfigCache.set(key, cfg || null);
-    _whConfigCacheAt.set(key, Date.now());
-    return cfg || null;
-  } catch (e) {
-    console.warn("Could not load WhatsAppConfig from DB:", e.message);
-    return null;
-  }
-};
-
-// Normalize numbers: if 10 digits -> prefix default country code, otherwise preserve existing country code
-const normalizeTo91 = (raw) => {
-  if (!raw) return "";
-  const clean = String(raw).replace(/\D/g, "");
-  if (!clean) return "";
-  const defaultCountry = process.env.WHATSAPP_DEFAULT_COUNTRY || "91";
-  if (clean.length === 10) return `${defaultCountry}${clean}`; // assume local 10-digit number
-  return clean; // already has country code, return as-is
-};
-
-// Send request to WATI with header fallbacks and detailed logging
-// options may include: headers, body, cfg (preloaded), lookup: { companyId, ownerUserId }
-const sendToWati = async (url, options = {}) => {
-  // Resolve token from options.cfg, options.lookup, then DB config, then env fallback
-  let cfg = options.cfg || null;
-  if (!cfg) {
-    try {
-      cfg = await loadWhatsappConfig(options.lookup || {});
-    } catch (e) {
-      cfg = null;
-    }
-  }
-
-  const rawTokenFromCfg =
-    (cfg && cfg.apiToken) || process.env.WHATSAPP_API_TOKEN || "";
-
-  const tryList = [
-    { Authorization: rawTokenFromCfg },
-    {
-      Authorization: `Bearer ${String(rawTokenFromCfg).replace(/^Bearer\s+/i, "")}`,
-    },
-    { Authorization: String(rawTokenFromCfg).replace(/^Bearer\s+/i, "") },
-  ];
-
-  for (const hdr of tryList) {
-    try {
-      const mergedHeaders = { ...(options.headers || {}), ...hdr };
-      const resp = await axios.post(url, options.body || {}, {
-        headers: mergedHeaders,
-        timeout: 20000,
-      });
-      console.log("[WATI] sendToWati success with headers:", Object.keys(hdr));
-      console.log("[WATI] response.status=", resp.status, "data=", resp.data);
-      return resp;
-    } catch (err) {
-      console.warn(
-        "[WATI] sendToWati attempt failed for headers:",
-        Object.keys(hdr),
-        err.response?.data || err.message,
-      );
-      // continue to next attempt
-    }
-  }
-  throw new Error("All WATI send attempts failed");
-};
+const {
+  extractProviderMessageMeta,
+  getConfigSummary,
+  loadWhatsappConfig,
+  normalizePhoneNumber,
+  saveWhatsappConfig,
+  sendWhatsAppMessage,
+} = require("../utils/whatsappConfigService");
 
 // Configure Multer for Media Uploads
 const storage = multer.diskStorage({
@@ -216,7 +112,7 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
     let finalContent = content;
     let fileName = "";
     let mimeType = "";
-    let watiResp = null;
+    let providerResp = null;
 
     // If file is uploaded, use its path
     if (req.file) {
@@ -224,87 +120,42 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       fileName = req.file.originalname;
       mimeType = req.file.mimetype;
     }
-
-    // --- WATI/API INTEGRATION (resolve URL/token from DB first, then env) ---
     try {
       const cfg = await loadWhatsappConfig({ ownerUserId: ownerId });
-
-      // Enforce per-user/company WhatsApp API configuration.
-      // Do NOT fall back to a single global token — require each user to
-      // configure their own `WhatsAppConfig` (apiUrl + apiToken).
-      if (!cfg || !cfg.apiUrl || !cfg.apiTokenEncrypted) {
-        console.warn(
-          `Missing WhatsAppConfig for owner ${ownerId} — refusing to use global token fallback`,
-        );
+      if (!cfg) {
+        console.warn(`Missing WhatsAppConfig for owner ${ownerId}`);
         return res.status(400).json({
           message:
-            "No WhatsApp API configuration found for your account. Please set API URL and API token in WhatsApp settings.",
+            "No WhatsApp provider configuration found for your account. Please save your settings first.",
         });
       }
 
-      const apiUrl = cfg.apiUrl;
-
-      if (apiUrl) {
-        const watiNumber = normalizeTo91(phoneNumber);
-
-        if (!req.file) {
-          const url = `${apiUrl}/api/v1/sendSessionMessage/${watiNumber}?messageText=${encodeURIComponent(finalContent)}`;
-          try {
-            const resp = await sendToWati(url, {
-              lookup: { ownerUserId: ownerId },
-            });
-            watiResp = resp;
-            console.log(
-              `✅ WATI: Text message sent to ${watiNumber} (status ${resp.status})`,
-            );
-          } catch (e) {
-            console.error(
-              `❌ WATI: Text send failed to ${watiNumber}:`,
-              e.message,
-            );
-          }
-        } else {
-          const FormData = require("form-data");
-          const fileStream = fs.createReadStream(req.file.path);
-          const formData = new FormData();
-          formData.append("file", fileStream, {
-            filename: req.file.originalname,
-            contentType: req.file.mimetype,
-          });
-
-          const url = `${apiUrl}/api/v1/sendSessionFile/${watiNumber}`;
-          try {
-            const resp = await sendToWati(url, {
-              body: formData,
-              headers: formData.getHeaders(),
-              lookup: { ownerUserId: ownerId },
-            });
-            watiResp = resp;
-            console.log(
-              `✅ WATI: File sent to ${watiNumber} (status ${resp.status})`,
-            );
-          } catch (e) {
-            console.error(
-              `❌ WATI: File send failed to ${watiNumber}:`,
-              e.message,
-            );
-          }
-        }
-      }
-    } catch (watiErr) {
+      const sendResult = await sendWhatsAppMessage({
+        ownerUserId: ownerId,
+        phoneNumber,
+        content: finalContent,
+        filePath: req.file?.path,
+        fileName: req.file?.originalname,
+        mimeType: req.file?.mimetype,
+      });
+      providerResp = sendResult.response;
+      console.log(
+        `WhatsApp message sent via ${sendResult.provider} (status ${sendResult.response?.status})`,
+      );
+    } catch (providerErr) {
+      const providerMessage = providerErr.response?.data || providerErr.message;
       console.error(
-        "⚠️ WATI API Error (message still saved locally):",
-        watiErr.response?.data || watiErr.message,
+        "WhatsApp provider error (message still saved locally):",
+        providerMessage,
       );
     }
 
-    const normalizedPhone = normalizeTo91(phoneNumber);
-
-    // Determine initial status based on provider response if available
-    const providerOk =
-      watiResp &&
-      watiResp.data &&
-      (watiResp.data.ok || watiResp.data.result === "success");
+    const cfg = await loadWhatsappConfig({ ownerUserId: ownerId });
+    const normalizedPhone = normalizePhoneNumber(
+      phoneNumber,
+      cfg?.defaultCountry || "91",
+    );
+    const providerMeta = extractProviderMessageMeta(cfg?.provider, providerResp);
 
     const newMessage = new ChatMessage({
       userId: ownerId,
@@ -321,11 +172,10 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       fileName,
       mimeType,
       phoneNumber: normalizedPhone,
-      status: providerOk ? "sent" : "failed",
-      // save external/provider identifiers when available
-      externalId: watiResp?.data?.message?.whatsappMessageId || null,
-      providerTicketId: watiResp?.data?.message?.ticketId || null,
-      providerResponse: watiResp ? JSON.stringify(watiResp.data) : null,
+      status: providerMeta.providerOk ? "sent" : "failed",
+      externalId: providerMeta.externalId,
+      providerTicketId: providerMeta.providerTicketId,
+      providerResponse: providerResp ? JSON.stringify(providerResp.data) : null,
       timestamp: new Date(),
     });
 
@@ -529,7 +379,7 @@ router.post("/webhook", async (req, res) => {
     let cleanFrom = rawFrom.split("@")[0].replace(/\D/g, "");
     const shortMobile =
       cleanFrom.length > 10 ? cleanFrom.slice(-10) : cleanFrom;
-    const normalizedFrom = normalizeTo91(cleanFrom);
+    const normalizedFrom = normalizePhoneNumber(cleanFrom);
 
     console.log(
       `🔍 Processing message from: ${cleanFrom} (short: ${shortMobile}) -> normalized: ${normalizedFrom}`,
@@ -748,40 +598,31 @@ router.post("/webhook", async (req, res) => {
         console.log(`🤖 No template match. Calling AI for: "${messageText}"`);
         replyContent = await aiService.generateAIReply(messageText);
       }
-
       if (replyContent) {
-        // 3. Dispatch to WhatsApp (via WATI) - resolve config from DB first
         try {
           const cfg = await loadWhatsappConfig({
             ownerUserId: targetUserId,
           });
 
-          // Require per-user config — do not fall back to a global token
-          if (!cfg || !cfg.apiUrl || !cfg.apiTokenEncrypted) {
+          if (!cfg) {
             console.warn(
               `Skipping auto-reply: no WhatsApp config for user ${targetUserId}`,
             );
           } else {
-            const apiUrl = cfg.apiUrl;
-            const watiNumber = normalizeTo91(cleanFrom);
-            try {
-              const url = `${apiUrl}/api/v1/sendSessionMessage/${watiNumber}?messageText=${encodeURIComponent(replyContent)}`;
-              await sendToWati(url, {
-                cfg,
-                lookup: { ownerUserId: targetUserId },
-              });
-              console.log(`📤 Auto-reply sent to ${watiNumber} via WATI`);
-            } catch (waitErr) {
-              console.error(
-                "⚠️ WATI Auto-Reply Dispatch Error:",
-                waitErr.response?.data || waitErr.message,
-              );
-            }
+            const sendResult = await sendWhatsAppMessage({
+              ownerUserId: targetUserId,
+              phoneNumber: cleanFrom,
+              content: replyContent,
+            });
+            console.log(
+              `Auto-reply sent to ${normalizePhoneNumber(cleanFrom, cfg.defaultCountry)} via ${sendResult.provider}`,
+            );
           }
         } catch (e) {
+          const providerMessage = e.response?.data || e.message;
           console.error(
-            "Error resolving WhatsApp config for auto-reply:",
-            e.message,
+            "Error dispatching WhatsApp auto-reply:",
+            providerMessage,
           );
         }
 
@@ -792,7 +633,7 @@ router.post("/webhook", async (req, res) => {
           sender: "Admin",
           type: "text",
           content: replyContent,
-          phoneNumber: normalizeTo91(shortMobile),
+          phoneNumber: normalizePhoneNumber(shortMobile),
           status: "sent",
           timestamp: new Date(),
         });
@@ -803,7 +644,7 @@ router.post("/webhook", async (req, res) => {
         if (req.app.get("io")) {
           const io = req.app.get("io");
           io.emit(`new_message_${cleanFrom}`, autoReplyMsg);
-          io.emit(`new_message_${normalizeTo91(cleanFrom)}`, autoReplyMsg);
+          io.emit(`new_message_${normalizePhoneNumber(cleanFrom)}`, autoReplyMsg);
           if (shortMobile !== cleanFrom) {
             io.emit(`new_message_${shortMobile}`, autoReplyMsg);
           }
@@ -834,20 +675,7 @@ router.get("/config", verifyToken, async (req, res) => {
     if (!cfg) return res.json({ ok: true, config: {} });
 
     // Only the owner user may see the full apiToken. Others get masked value.
-    const out = { ...cfg };
-    const cfgOwnerId =
-      (cfg.ownerUserId || cfg.owner || cfg.createdBy) &&
-      String(cfg.ownerUserId || cfg.owner || cfg.createdBy);
-    if (!cfgOwnerId || String(ownerId) !== cfgOwnerId) {
-      if (out.apiToken) {
-        // mask showing only last 6 characters
-        const t = String(out.apiToken);
-        out.apiToken = t.length > 6 ? "****" + t.slice(-6) : "****";
-      }
-      // remove sensitive fields
-      delete out.apiTokenEncrypted;
-    }
-    return res.json({ ok: true, config: out });
+    return res.json({ ok: true, config: getConfigSummary(cfg) });
   } catch (e) {
     console.error("Error fetching WhatsApp config:", e.message);
     return res.status(500).json({ ok: false, message: e.message });
@@ -863,49 +691,11 @@ router.put("/config", verifyToken, async (req, res) => {
         ? req.user.parentUserId
         : req.userId;
 
-    const data = {
-      provider: payload.provider || payload.provider || "WATI",
-      apiUrl: payload.apiUrl || payload.WHATSAPP_API_URL || "",
-      apiToken: payload.apiToken || payload.WHATSAPP_API_TOKEN || "",
-      verifyToken: payload.verifyToken || payload.WHATSAPP_VERIFY_TOKEN || "",
-      appSecret: payload.appSecret || payload.WHATSAPP_APP_SECRET || "",
-      signatureHeader:
-        payload.signatureHeader ||
-        payload.WHATSAPP_SIGNATURE_HEADER ||
-        "X-Hub-Signature-256",
-      enableSignatureVerification: !!payload.enableSignatureVerification,
-      defaultCountry:
-        payload.defaultCountry || payload.WHATSAPP_DEFAULT_COUNTRY || "91",
-    };
-
-    // Encrypt apiToken before saving to DB
-    if (data.apiToken) {
-      data.apiTokenEncrypted = encrypt(data.apiToken);
-      delete data.apiToken;
-    }
-
-    // Ensure owner is set for this config and optionally company
-    data.ownerUserId = ownerId;
-    if (payload.companyId) data.companyId = payload.companyId;
-
-    const filter = payload.companyId
-      ? { companyId: payload.companyId }
-      : { ownerUserId: ownerId };
-
-    const updated = await WhatsAppConfig.findOneAndUpdate(filter, data, {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true,
+    const updated = await saveWhatsappConfig({
+      ownerUserId: ownerId,
+      payload,
     });
-
-    // update cache (decrypt for in-memory use)
-    const cached = updated.toObject ? updated.toObject() : updated;
-    if (cached.apiTokenEncrypted)
-      cached.apiToken = decrypt(cached.apiTokenEncrypted);
-    const key = makeLookupKey({ ownerUserId: ownerId });
-    _whConfigCache.set(key, cached);
-    _whConfigCacheAt.set(key, Date.now());
-    return res.json({ ok: true, config: cached });
+    return res.json({ ok: true, config: getConfigSummary(updated) });
   } catch (e) {
     console.error("Error saving WhatsApp config:", e.message);
     return res.status(500).json({ ok: false, message: e.message });
@@ -985,21 +775,26 @@ router.post("/test", async (req, res) => {
         .status(400)
         .json({ message: "phoneNumber and message required" });
 
-    const cfg = await loadWhatsappConfig();
-    const apiUrl = (cfg && cfg.apiUrl) || process.env.WHATSAPP_API_URL;
-    if (!apiUrl) {
-      return res
-        .status(400)
-        .json({ message: "WHATSAPP API URL not configured on server" });
+    const authToken = authHeader.split(" ")[1];
+    let ownerUserId = null;
+    try {
+      const jwt = require("jsonwebtoken");
+      ownerUserId = jwt.decode(authToken)?.userId || null;
+    } catch (e) {
+      ownerUserId = null;
     }
 
-    const watiNumber = normalizeTo91(phoneNumber);
-    const url = `${apiUrl}/api/v1/sendSessionMessage/${watiNumber}?messageText=${encodeURIComponent(message)}`;
-
-    console.log("🔧 WATI Test ->", { url, usingConfig: !!cfg });
-
-    const resp = await sendToWati(url);
-    return res.json({ ok: true, status: resp.status, data: resp.data });
+    const resp = await sendWhatsAppMessage({
+      ownerUserId,
+      phoneNumber,
+      content: message,
+    });
+    return res.json({
+      ok: true,
+      provider: resp.provider,
+      status: resp.response?.status,
+      data: resp.response?.data,
+    });
   } catch (err) {
     console.error("WATI Test Error:", err.response?.data || err.message);
     return res

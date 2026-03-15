@@ -66,14 +66,22 @@ router.get("/summary", verifyToken, async (req, res) => {
                     .lean()
             ]);
 
-            const counts = { new: 0, inProgress: 0, converted: 0, closed: 0, dropped: 0 };
+            const counts = {
+                new: 0,
+                contacted: 0,
+                interested: 0,
+                notInterested: 0,
+                converted: 0,
+                closed: 0,
+            };
             countsResult.forEach(c => {
                 const status = c._id?.toLowerCase();
                 if (status === "new") counts.new = c.count;
-                else if (status === "in progress") counts.inProgress = c.count;
+                else if (status === "contacted" || status === "in progress") counts.contacted = c.count;
+                else if (status === "interested") counts.interested = c.count;
+                else if (status === "not interested" || status === "dropped" || status === "drop") counts.notInterested = c.count;
                 else if (status === "converted") counts.converted = c.count;
                 else if (status === "closed") counts.closed = c.count;
-                else if (status === "dropped" || status === "drop") counts.dropped = c.count;
             });
 
             return {

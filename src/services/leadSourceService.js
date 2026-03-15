@@ -1,35 +1,30 @@
-import axios from "axios";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_URL } from "./apiConfig";
+import getApiClient from "./apiClient";
 
-// Create axios instance with auth token
-const createApiClient = async () => {
-    const token = await AsyncStorage.getItem("token");
-    const headers = {
-        "Content-Type": "application/json",
-    };
-
-    if (token) {
-        headers.Authorization = `Bearer ${token}`;
-    }
-
-    return axios.create({
-        baseURL: API_URL,
-        headers,
-    });
+const shouldSuppressAuthLog = (error) => {
+    const status = error?.response?.status;
+    const code = error?.response?.data?.code;
+    return (
+        error?.isAuthError === true ||
+        status === 401 ||
+        status === 403 ||
+        code === "COMPANY_NOT_ACTIVE" ||
+        code === "COMPANY_NOT_FOUND"
+    );
 };
 
 // GET ALL LEAD SOURCES
 export const getAllLeadSources = async () => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get("/leadsources");
         return response.data;
     } catch (error) {
-        console.error(
-            "Get lead sources error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get lead sources error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -37,14 +32,16 @@ export const getAllLeadSources = async () => {
 // GET SINGLE LEAD SOURCE
 export const getLeadSourceById = async (id) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.get(`/leadsources/${id}`);
         return response.data;
     } catch (error) {
-        console.error(
-            "Get lead source error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Get lead source error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -52,14 +49,16 @@ export const getLeadSourceById = async (id) => {
 // CREATE LEAD SOURCE
 export const createLeadSource = async (leadSourceData) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.post("/leadsources", leadSourceData);
         return response.data;
     } catch (error) {
-        console.error(
-            "Create lead source error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Create lead source error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -67,14 +66,16 @@ export const createLeadSource = async (leadSourceData) => {
 // UPDATE LEAD SOURCE
 export const updateLeadSource = async (id, leadSourceData) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.put(`/leadsources/${id}`, leadSourceData);
         return response.data;
     } catch (error) {
-        console.error(
-            "Update lead source error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Update lead source error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -82,14 +83,16 @@ export const updateLeadSource = async (id, leadSourceData) => {
 // DELETE LEAD SOURCE
 export const deleteLeadSource = async (id) => {
     try {
-        const client = await createApiClient();
+        const client = await getApiClient();
         const response = await client.delete(`/leadsources/${id}`);
         return response.data;
     } catch (error) {
-        console.error(
-            "Delete lead source error:",
-            error.response?.data || error.message,
-        );
+        if (!shouldSuppressAuthLog(error)) {
+            console.error(
+                "Delete lead source error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };

@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import { Animated, Dimensions, Easing, StyleSheet, View } from "react-native";
 import { useAuth } from "../contexts/AuthContext";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width, height } = Dimensions.get("window");
 
 export default function TrendingIntroScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { isLoggedIn, onboardingCompleted } = useAuth();
   // 1. Logo Animation (Breathing Effect)
   const breatheAnim = useRef(new Animated.Value(1)).current;
@@ -143,7 +145,7 @@ export default function TrendingIntroScreen({ navigation }) {
   }, []);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
       {/* Background Glow (Optional gradient for depth) */}
       <View style={styles.backgroundGlow} />
 

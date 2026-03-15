@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const FollowUp = require("../models/FollowUp");
+const Enquiry = require("../models/Enquiry");
 const { verifyToken } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
 
@@ -9,11 +10,27 @@ const cache = require("../utils/responseCache");
 router.get("/", verifyToken, async (req, res) => {
   const _start = Date.now();
   try {
-    const { tab, page = 1, limit = 20 } = req.query;
+    const {
+      tab,
+      status,
+      assignedTo,
+      activityType,
+      date,
+      dateFrom,
+      dateTo,
+      page = 1,
+      limit = 20,
+    } = req.query;
     const cacheKey = cache.key("followups", {
       userId: req.userId,
       role: req.user.role,
       tab,
+      status,
+      assignedTo,
+      activityType,
+      date,
+      dateFrom,
+      dateTo,
       page,
       limit,
     });
@@ -28,6 +45,26 @@ router.get("/", verifyToken, async (req, res) => {
         query.assignedTo = req.userId;
       } else {
         query.userId = req.userId;
+      }
+
+      if (assignedTo && assignedTo !== "all" && req.user.role !== "Staff") {
+        query.assignedTo = assignedTo;
+      }
+
+      if (activityType && activityType !== "all") {
+        query.$or = [{ activityType }, { type: activityType }];
+      }
+
+      if (status && status !== "all") {
+        query.status = status;
+      }
+
+      if (date) {
+        query.date = date;
+      } else if (dateFrom || dateTo) {
+        query.date = query.date || {};
+        if (dateFrom) query.date.$gte = dateFrom;
+        if (dateTo) query.date.$lte = dateTo;
       }
 
       const activeFilter = {
@@ -65,12 +102,34 @@ router.get("/", verifyToken, async (req, res) => {
 
       const followUps = await FollowUp.find(query)
         .select(
-          "date status nextAction remarks enqId enqNo name mobile product image createdAt",
+          "date time followUpDate nextFollowUpDate status nextAction note remarks activityType type staffName activityTime enqId enqNo name mobile product image assignedTo createdAt",
         )
+        .populate("assignedTo", "name")
         .sort({ date: sortOrder })
         .skip(skip)
         .limit(limitNum + 1)
         .lean();
+
+      // Hide orphan follow-ups whose enquiry was deleted.
+      const enqIds = [
+        ...new Set(
+          followUps
+            .map((item) => item.enqId)
+            .filter((id) => mongoose.Types.ObjectId.isValid(String(id))),
+        ),
+      ];
+      if (enqIds.length > 0) {
+        const existing = await Enquiry.find({ _id: { $in: enqIds } })
+          .select("_id")
+          .lean();
+        const existingSet = new Set(existing.map((e) => String(e._id)));
+        for (let i = followUps.length - 1; i >= 0; i -= 1) {
+          const enqId = followUps[i].enqId;
+          if (enqId && !existingSet.has(String(enqId))) {
+            followUps.splice(i, 1);
+          }
+        }
+      }
 
       const hasMore = followUps.length > limitNum;
       if (hasMore) followUps.pop();
@@ -103,17 +162,79 @@ router.post("/", verifyToken, async (req, res) => {
       req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
         : req.userId;
+    const today = new Date().toISOString().split("T")[0];
+    const toObjectId = (value) => {
+      if (!value) return undefined;
+      const raw =
+        typeof value === "object" && value !== null
+          ? value._id || value.id || ""
+          : value;
+      const str = String(raw).trim();
+      return mongoose.Types.ObjectId.isValid(str) ? str : undefined;
+    };
+
+    const assignedToId = toObjectId(req.body.assignedTo) || req.userId;
+    const enquiryId = toObjectId(req.body.enqId);
+    const enqNo = String(req.body.enqNo || "").trim();
+    if (!enqNo) {
+      return res.status(400).json({ message: "enqNo is required" });
+    }
+    const safeRemarks = String(req.body.remarks || req.body.note || "").trim();
+    if (!safeRemarks) {
+      return res.status(400).json({ message: "remarks is required" });
+    }
 
     const newFollowUp = new FollowUp({
       ...req.body,
+      enqId: enquiryId,
+      enqNo,
       userId: ownerId,
-      assignedTo: req.body.assignedTo || req.userId,
+      assignedTo: assignedToId,
+      staffName: req.user?.name || "Staff",
+      activityType: req.body.activityType || req.body.type || "WhatsApp",
+      type: req.body.type || req.body.activityType || "WhatsApp",
+      note: safeRemarks,
+      remarks: safeRemarks,
+      date: req.body.date || req.body.followUpDate || today,
+      followUpDate: req.body.followUpDate || req.body.date || today,
+      nextFollowUpDate: req.body.nextFollowUpDate || req.body.date || req.body.followUpDate || today,
+      activityTime: req.body.activityTime ? new Date(req.body.activityTime) : new Date(),
       status: "Scheduled",
     });
 
     const saved = await newFollowUp.save();
+
+    if (saved?.enqId) {
+      const nextAction = String(saved.nextAction || "").toLowerCase();
+      const activityType = String(
+        saved.activityType || saved.type || "",
+      ).toLowerCase();
+
+      let enquiryStatus = null;
+      if (nextAction === "sales") enquiryStatus = "Converted";
+      else if (nextAction === "drop") enquiryStatus = "Not Interested";
+      else if (
+        nextAction === "followup" ||
+        activityType.includes("call") ||
+        activityType.includes("whatsapp") ||
+        activityType.includes("visit") ||
+        activityType.includes("meeting") ||
+        activityType.includes("email")
+      ) {
+        enquiryStatus = "Contacted";
+      }
+
+      const enquiryUpdate = { lastContactedAt: new Date() };
+      if (enquiryStatus) enquiryUpdate.status = enquiryStatus;
+
+      await Enquiry.findByIdAndUpdate(saved.enqId, {
+        $set: enquiryUpdate,
+      });
+    }
+
     cache.invalidate("followups");
     cache.invalidate("dashboard");
+    cache.invalidate("enquiries");
     res.status(201).json(saved);
   } catch (err) {
     console.error("=== CREATE ERROR ===");
@@ -148,7 +269,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     delete updateData.userId;
 
     const followUp = await FollowUp.findOneAndUpdate(filter, updateData, {
-      new: true,
+      returnDocument: "after",
       runValidators: true,
     });
 
@@ -158,8 +279,24 @@ router.put("/:id", verifyToken, async (req, res) => {
         .json({ message: "Follow-up not found or unauthorized" });
     }
 
+    // Keep enquiry status in sync for lifecycle tracking
+    if (followUp?.enqId) {
+      const nextAction = String(followUp.nextAction || "").toLowerCase();
+      let enquiryStatus = null;
+      if (nextAction === "sales") enquiryStatus = "Converted";
+      else if (nextAction === "drop") enquiryStatus = "Not Interested";
+      else if (nextAction === "followup") enquiryStatus = "Contacted";
+
+      if (enquiryStatus) {
+        await Enquiry.findByIdAndUpdate(followUp.enqId, {
+          $set: { status: enquiryStatus, lastContactedAt: new Date() },
+        });
+      }
+    }
+
     cache.invalidate("followups");
     cache.invalidate("dashboard");
+    cache.invalidate("enquiries");
     res.json(followUp);
   } catch (err) {
     console.error("Update error:", err);
@@ -226,7 +363,10 @@ router.get("/history/:enqNoOrId", verifyToken, async (req, res) => {
       };
     }
 
-    const history = await FollowUp.find(query).sort({ createdAt: -1 }).lean();
+    const history = await FollowUp.find(query)
+      .populate("assignedTo", "name")
+      .sort({ activityTime: 1, createdAt: 1 })
+      .lean();
 
     // [REMOVED DEBUG LOG]
     res.json(history);

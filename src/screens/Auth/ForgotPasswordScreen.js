@@ -16,8 +16,10 @@ import {
 } from "react-native";
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 import { API_URL } from "../../services/apiConfig";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const ForgotPasswordScreen = ({ navigation }) => {
+    const insets = useSafeAreaInsets();
     const [step, setStep] = useState(1); // 1: Email/Mobile, 2: OTP, 3: New Password
     const [identifier, setIdentifier] = useState(""); // Email or Mobile
     const [otp, setOtp] = useState("");
@@ -127,7 +129,7 @@ const ForgotPasswordScreen = ({ navigation }) => {
     return (
         <LinearGradient
             colors={["#0f172a", "#1e1b4b", "#1e293b"]}
-            style={styles.container}>
+            style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <KeyboardAvoidingView
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
                 style={{ flex: 1 }}>

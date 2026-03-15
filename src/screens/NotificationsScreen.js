@@ -9,7 +9,7 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 const COLORS = {
     primary: "#6366f1",
@@ -113,6 +113,7 @@ const getNotificationSection = (date) => {
 };
 
 export default function NotificationsScreen({ navigation }) {
+    const insets = useSafeAreaInsets();
     const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -194,7 +195,7 @@ export default function NotificationsScreen({ navigation }) {
     );
 
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <StatusBar
                 barStyle="dark-content"
                 backgroundColor={COLORS.gray[50]}

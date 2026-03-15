@@ -6,6 +6,7 @@ import { AuthProvider } from "./src/contexts/AuthContext";
 import "./src/firebaseConfig"; // Initialize Firebase first
 import AppNavigator from "./src/navigation/AppNavigator";
 import { API_URL } from "./src/services/apiConfig";
+import SuspensionModal from "./src/components/SuspensionModal";
 
 console.log("🛠️ App booting with API:", API_URL);
 
@@ -18,8 +19,12 @@ export default function App() {
         <GestureHandlerRootView style={{ flex: 1 }}>
             <SafeAreaProvider>
                 <AuthProvider>
-                    <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+                    <StatusBar
+                        barStyle="dark-content"
+                        backgroundColor="#ffffff"
+                    />
                     <AppNavigator />
+                    <SuspensionModal />
                 </AuthProvider>
             </SafeAreaProvider>
         </GestureHandlerRootView>

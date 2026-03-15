@@ -32,6 +32,7 @@ import Animated, {
 import InlineAlert from "../../components/InlineAlert";
 import { useAuth } from "../../contexts/AuthContext";
 import { API_URL } from "../../services/apiConfig";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
@@ -202,6 +203,7 @@ const CustomButton = ({ onPress, loading, title, icon }) => {
 };
 
 const SignupScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const { login } = useAuth();
   const [step, setStep] = useState(1); // 1: Details, 2: OTP
   const [fullName, setFullName] = useState("");
@@ -230,6 +232,12 @@ const SignupScreen = ({ navigation }) => {
   // Enable Auto-Verification Listener
   useEffect(() => {
     if (Platform.OS === "web") return;
+    if (!auth) {
+      console.warn(
+        "Firebase auth not initialized; skipping auto-verification listener.",
+      );
+      return;
+    }
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user && step === 2) {
@@ -324,6 +332,8 @@ const SignupScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      const preferredMethod = Platform.OS === "web" ? "email" : "sms";
+
       // 1. Send Email OTP (Both Web & Native)
       // User requested option: Auto-get Mobile OTP OR enter Email OTP manually.
       // So we send the Email OTP in parallel.
@@ -331,6 +341,7 @@ const SignupScreen = ({ navigation }) => {
         email,
         mobile: formattedMobile,
         type: "signup",
+        method: preferredMethod,
       });
 
       if (!backendResponse.data.success) {
@@ -358,7 +369,7 @@ const SignupScreen = ({ navigation }) => {
         // Backend already sent OTP above (email + optional SMS). We'll rely on
         // backend verification flow instead of Firebase Recaptcha for native.
         setConfirm({ type: "backend-verify" });
-        showInline("We have sent a verification code via Email/SMS.", "info");
+        showInline("We have sent a verification code via SMS.", "info");
         setLoading(false);
         setStep(2);
       }
@@ -388,10 +399,16 @@ const SignupScreen = ({ navigation }) => {
     try {
       // If we're using backend verification (default now)
       if (Platform.OS === "web" || confirm.type === "backend-verify") {
-        const verifyResponse = await axios.post(`${API_URL}/auth/verify-otp`, {
-          email, // Backend uses email as key for now
-          otp,
-        });
+        const formattedMobile = mobile.startsWith("+") ? mobile : `+91${mobile}`;
+        const verifyPayload =
+          Platform.OS === "web"
+            ? { email, otp }
+            : { mobile: formattedMobile, otp };
+
+        const verifyResponse = await axios.post(
+          `${API_URL}/auth/verify-otp`,
+          verifyPayload,
+        );
         if (!verifyResponse.data.success) {
           throw new Error("Invalid OTP (Backend Verification)");
         }
@@ -436,12 +453,14 @@ const SignupScreen = ({ navigation }) => {
         await axios.post(`${API_URL}/auth/send-otp`, {
           email,
           mobile: formattedMobile,
+          method: "email",
         });
       } else {
         // Resend via backend (email + SMS if configured)
         const backendResponse = await axios.post(`${API_URL}/auth/send-otp`, {
           email,
           mobile: formattedMobile,
+          method: "sms",
         });
         if (!backendResponse.data.success) {
           throw new Error(
@@ -449,7 +468,7 @@ const SignupScreen = ({ navigation }) => {
           );
         }
         setConfirm({ type: "backend-verify" });
-        showInline("Verification code resent via Email/SMS.", "info");
+        showInline("Verification code resent via SMS.", "info");
       }
     } catch (error) {
       console.error(error);
@@ -460,7 +479,7 @@ const SignupScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
       {/* Recaptcha removed — using backend OTP instead */}
       {/* Abstract Background Elements - Enhanced */}
@@ -931,3 +950,4 @@ const styles = StyleSheet.create({
 });
 
 export default SignupScreen;
+

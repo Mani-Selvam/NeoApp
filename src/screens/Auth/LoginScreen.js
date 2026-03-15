@@ -31,6 +31,7 @@ import Animated, {
 import InlineAlert from "../../components/InlineAlert";
 import { useAuth } from "../../contexts/AuthContext";
 import { API_URL } from "../../services/apiConfig";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width, height } = Dimensions.get("window");
 
@@ -188,6 +189,7 @@ const CustomButton = ({ onPress, loading, title }) => {
 };
 
 const LoginScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -248,7 +250,7 @@ const LoginScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
       {/* Abstract Background Elements - Enhanced */}
       <AnimatedBlob style={styles.blobTopLeft} />

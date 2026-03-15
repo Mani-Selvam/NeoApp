@@ -7,6 +7,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { API_URL } from "./apiConfig";
+import { emitAuthError } from "./authErrorBus";
 
 let cachedToken = null;
 let apiClient = null;
@@ -30,6 +31,26 @@ const getApiClient = async () => {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
     });
+
+    apiClient.interceptors.response.use(
+        (response) => response,
+        (error) => {
+            const status = error?.response?.status;
+            const message =
+                error?.response?.data?.message ||
+                error?.response?.data?.error ||
+                error?.message ||
+                "";
+
+            if (status === 401 || status === 403) {
+                // Company suspension, inactive user, expired token, etc.
+                error.isAuthError = true;
+                emitAuthError({ status, message, data: error?.response?.data });
+            }
+
+            return Promise.reject(error);
+        },
+    );
 
     return apiClient;
 };

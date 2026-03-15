@@ -95,6 +95,11 @@ class ResponseCache {
                 this.cache.delete(key);
             }
         }
+        for (const key of this.pending.keys()) {
+            if (key.startsWith(prefix)) {
+                this.pending.delete(key);
+            }
+        }
     }
 
     /**

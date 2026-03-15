@@ -20,6 +20,7 @@ import {
     View
 } from 'react-native';
 import * as messageTemplateService from '../services/messageTemplateService';
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get('window');
 
@@ -102,6 +103,7 @@ const getCategoryColor = (cat) => {
 };
 
 export default function MessageTemplateScreen({ navigation }) {
+    const insets = useSafeAreaInsets();
     const [templates, setTemplates] = useState([]);
     const [loading, setLoading] = useState(true);
     const [modalVisible, setModalVisible] = useState(false);
@@ -196,7 +198,7 @@ export default function MessageTemplateScreen({ navigation }) {
     };
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <StatusBar barStyle="dark-content" backgroundColor={COLORS.bg} />
 
             <SafeAreaView style={styles.header}>
