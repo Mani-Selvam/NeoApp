@@ -3,6 +3,7 @@
     "name": "myApp",
     "slug": "myapp",
     "version": "1.0.0",
+    "icon": "./src/assets/logo.png",
     "orientation": "portrait",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
@@ -16,6 +17,10 @@
     "android": {
       "package": "com.myapp",
       "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/logo.png",
+        "backgroundColor": "#FFFFFF"
+      },
       "permissions": [
         "READ_CALL_LOG",
         "READ_PHONE_STATE",

@@ -178,6 +178,11 @@ app.use(
     withPlan("WhatsApp Integration"),
     require("./routes/messageTemplateRoutes"),
 );
+app.use(
+    "/api/email",
+    withPlan("Basic CRM", ["/track"]),
+    require("./routes/emailRoutes"),
+);
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/company", require("./routes/companyRoutes"));
 app.use("/api/superadmin", require("./routes/superadmin.routes"));

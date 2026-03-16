@@ -29,6 +29,8 @@ import ReportScreen from "../screens/ReportScreen";
 import StaffScreen from "../screens/StaffScreen";
 import WhatsAppSettingsScreen from "../screens/WhatsAppSettingsScreen";
 import TargetsScreen from "../screens/TargetsScreen";
+import EmailScreen from "../screens/EmailScreen";
+import EmailSettingsScreen from "../screens/EmailSettingsScreen";
 import {
     startCallMonitoring,
     stopCallMonitoring,
@@ -439,6 +441,8 @@ export default function AppNavigator() {
           <Stack.Screen name="ProductScreen" component={ProductScreen} />
           <Stack.Screen name="StaffScreen" component={StaffScreen} />
           <Stack.Screen name="TargetsScreen" component={TargetsScreen as any} />
+          <Stack.Screen name="EmailScreen" component={EmailScreen as any} />
+          <Stack.Screen name="EmailSettingsScreen" component={EmailSettingsScreen as any} />
           <Stack.Screen
             name="MessageTemplateScreen"
             component={MessageTemplateScreen as any}

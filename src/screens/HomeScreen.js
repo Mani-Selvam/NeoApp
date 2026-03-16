@@ -1109,243 +1109,278 @@ const SideMenu = ({ visible, onClose, navigation, user, onLogout }) => {
                                 </View>
                             </LinearGradient>
 
-                    <ScrollView
-                        style={M.list}
-                        showsVerticalScrollIndicator={false}>
-                        <MotiView
-                            from={{ opacity: 0, translateY: 10 }}
-                            animate={{ opacity: 1, translateY: 0 }}
-                            transition={{
-                                delay: 120,
-                                type: "timing",
-                                duration: 260,
-                            }}
-                            style={M.upgradeCard}>
-                            <LinearGradient
-                                colors={["#0B1220", "#163B9A"]}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 1, y: 1 }}
-                                style={M.upgradeCardInner}>
-                                <View style={M.upgradeHeaderRow}>
-                                    <Text style={M.upgradeTitle}>
-                                        Upgrade to Pro
-                                    </Text>
-                                    <Text style={M.upgradeBadge}>PRO</Text>
-                                </View>
-                                <Text style={M.upgradeSub}>Unlock:</Text>
-                                {[
-                                    "Unlimited Leads",
-                                    "Advanced Reports",
-                                    "Team Access",
-                                ].map((t) => (
-                                    <View key={t} style={M.upgradeBulletRow}>
-                                        <Ionicons
-                                            name="checkmark-circle"
-                                            size={16}
-                                            color="#A7F3D0"
-                                        />
-                                        <Text style={M.upgradeBulletText}>
-                                            {t}
-                                        </Text>
-                                    </View>
-                                ))}
-                                <TouchableOpacity
-                                    activeOpacity={0.9}
-                                    onPress={() => {
-                                        onClose();
-                                        setTimeout(() => {
-                                            navigation.navigate("PricingScreen");
-                                        }, 220);
-                                    }}>
+                            <ScrollView
+                                style={M.list}
+                                showsVerticalScrollIndicator={false}>
+                                <MotiView
+                                    from={{ opacity: 0, translateY: 10 }}
+                                    animate={{ opacity: 1, translateY: 0 }}
+                                    transition={{
+                                        delay: 120,
+                                        type: "timing",
+                                        duration: 260,
+                                    }}
+                                    style={M.upgradeCard}>
                                     <LinearGradient
-                                        colors={["#1A6BFF", "#7B61FF"]}
+                                        colors={["#0B1220", "#163B9A"]}
                                         start={{ x: 0, y: 0 }}
                                         end={{ x: 1, y: 1 }}
-                                        style={M.upgradeBtn}>
-                                        <Text style={M.upgradeBtnText}>
-                                            Upgrade Now
+                                        style={M.upgradeCardInner}>
+                                        <View style={M.upgradeHeaderRow}>
+                                            <Text style={M.upgradeTitle}>
+                                                Upgrade to Pro
+                                            </Text>
+                                            <Text style={M.upgradeBadge}>
+                                                PRO
+                                            </Text>
+                                        </View>
+                                        <Text style={M.upgradeSub}>
+                                            Unlock:
                                         </Text>
-                                        <Ionicons
-                                            name="arrow-forward"
-                                            size={16}
-                                            color="#fff"
-                                        />
+                                        {[
+                                            "Unlimited Leads",
+                                            "Advanced Reports",
+                                            "Team Access",
+                                        ].map((t) => (
+                                            <View
+                                                key={t}
+                                                style={M.upgradeBulletRow}>
+                                                <Ionicons
+                                                    name="checkmark-circle"
+                                                    size={16}
+                                                    color="#A7F3D0"
+                                                />
+                                                <Text
+                                                    style={M.upgradeBulletText}>
+                                                    {t}
+                                                </Text>
+                                            </View>
+                                        ))}
+                                        <TouchableOpacity
+                                            activeOpacity={0.9}
+                                            onPress={() => {
+                                                onClose();
+                                                setTimeout(() => {
+                                                    navigation.navigate(
+                                                        "PricingScreen",
+                                                    );
+                                                }, 220);
+                                            }}>
+                                            <LinearGradient
+                                                colors={["#1A6BFF", "#7B61FF"]}
+                                                start={{ x: 0, y: 0 }}
+                                                end={{ x: 1, y: 1 }}
+                                                style={M.upgradeBtn}>
+                                                <Text style={M.upgradeBtnText}>
+                                                    Upgrade Now
+                                                </Text>
+                                                <Ionicons
+                                                    name="arrow-forward"
+                                                    size={16}
+                                                    color="#fff"
+                                                />
+                                            </LinearGradient>
+                                        </TouchableOpacity>
                                     </LinearGradient>
-                                </TouchableOpacity>
-                            </LinearGradient>
-                        </MotiView>
+                                </MotiView>
 
-                        <MenuItem
-                            active
-                            icon="home-outline"
-                            label="Dashboard"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("Home");
-                            }}
-                        />
-                        <MenuItem
-                            icon="help-circle-outline"
-                            label="Help & Support"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("SupportHelp");
-                            }}
-                        />
-                        <MenuItem
-                            icon="people-outline"
-                            label="Enquiries"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("Enquiry");
-                            }}
-                        />
-                        <MenuItem
-                            icon="repeat-outline"
-                            label="Auto Call"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("AutoCallScreen");
-                            }}
-                        />
-                        <MenuItem
-                            icon="call-outline"
-                            label="Follow-ups"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("FollowUp");
-                            }}
-                        />
-                        <MenuItem
-                            icon="list-outline"
-                            label="Call Logs"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("CallLog");
-                            }}
-                        />
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="link-outline"
-                                label="Lead Sources"
-                                onPress={() => {
-                                    onClose();
-                                    navigation.navigate("LeadSourceScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="pricetags-outline"
-                                label="Products"
-                                onPress={() => {
-                                    onClose();
-                                    navigation.navigate("ProductScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="people-circle-outline"
-                                label="Staff"
-                                onPress={() => {
-                                    onClose();
-                                    navigation.navigate("StaffScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="flag-outline"
-                                label="Targets"
-                                onPress={() => {
-                                    onClose();
-                                    navigation.navigate("TargetsScreen");
-                                }}
-                            />
-                        )}
-                        <MenuItem
-                            icon="bar-chart-outline"
-                            label="Reports"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("Report");
-                            }}
-                        />
-                        <MenuItem
-                            icon="card-outline"
-                            label="Pricing"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("PricingScreen");
-                            }}
-                        />
-                        <MenuItem
-                            icon="chatbubble-ellipses-outline"
-                            label="Templates"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("MessageTemplateScreen");
-                            }}
-                        />
-                        <MenuItem
-                            icon="settings-outline"
-                            label="Settings"
-                            onPress={() => {
-                                onClose();
-                                navigation.navigate("WhatsAppSettings");
-                            }}
-                        />
-                        <View
-                            style={{
-                                height: 1,
-                                backgroundColor: C.border,
-                                marginVertical: 8,
-                                marginHorizontal: 10,
-                            }}
-                        />
-                        <MenuItem
-                            icon="log-out-outline"
-                            label="Logout"
-                            color={C.rose}
-                            onPress={onLogout}
-                        />
-                        <View
-                            style={{
-                                alignItems: "center",
-                                paddingTop: 20,
-                                paddingBottom: 28,
-                                borderTopWidth: 1,
-                                borderTopColor: C.border,
-                                marginTop: 10,
-                            }}>
-                            <Image
-                                source={require("../assets/logo.png")}
-                                style={{
-                                    width: 110,
-                                    height: 34,
-                                    marginBottom: 8,
-                                }}
-                                resizeMode="contain"
-                            />
-                            <Text
-                                style={{
-                                    fontSize: 14,
-                                    color: C.textSub,
-                                    fontWeight: "700",
-                                }}>
-                                Neophorn Technologies
-                            </Text>
-                            <Text
-                                style={{
-                                    fontSize: 11,
-                                    color: C.textMuted,
-                                    marginTop: 2,
-                                }}>
-                                CRM System · v1.0.0
-                            </Text>
-                        </View>
-                    </ScrollView>
+                                <MenuItem
+                                    active
+                                    icon="home-outline"
+                                    label="Dashboard"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("Home");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="help-circle-outline"
+                                    label="Help & Support"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("SupportHelp");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="people-outline"
+                                    label="Enquiries"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("Enquiry");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="repeat-outline"
+                                    label="Auto Call"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("AutoCallScreen");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="call-outline"
+                                    label="Follow-ups"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("FollowUp");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="mail-outline"
+                                    label="Email"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("EmailScreen");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="list-outline"
+                                    label="Call Logs"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("CallLog");
+                                    }}
+                                />
+                                {user?.role !== "Staff" && (
+                                    <MenuItem
+                                        icon="link-outline"
+                                        label="Lead Sources"
+                                        onPress={() => {
+                                            onClose();
+                                            navigation.navigate(
+                                                "LeadSourceScreen",
+                                            );
+                                        }}
+                                    />
+                                )}
+                                {user?.role !== "Staff" && (
+                                    <MenuItem
+                                        icon="pricetags-outline"
+                                        label="Products"
+                                        onPress={() => {
+                                            onClose();
+                                            navigation.navigate(
+                                                "ProductScreen",
+                                            );
+                                        }}
+                                    />
+                                )}
+                                {user?.role !== "Staff" && (
+                                    <MenuItem
+                                        icon="people-circle-outline"
+                                        label="Staff"
+                                        onPress={() => {
+                                            onClose();
+                                            navigation.navigate("StaffScreen");
+                                        }}
+                                    />
+                                )}
+                                {user?.role !== "Staff" && (
+                                    <MenuItem
+                                        icon="flag-outline"
+                                        label="Targets"
+                                        onPress={() => {
+                                            onClose();
+                                            navigation.navigate(
+                                                "TargetsScreen",
+                                            );
+                                        }}
+                                    />
+                                )}
+                                <MenuItem
+                                    icon="bar-chart-outline"
+                                    label="Reports"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("Report");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="card-outline"
+                                    label="Pricing"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("PricingScreen");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="chatbubble-ellipses-outline"
+                                    label="Templates"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate(
+                                            "MessageTemplateScreen",
+                                        );
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="settings-outline"
+                                    label="WhatsApp Settings"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate("WhatsAppSettings");
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="mail-open-outline"
+                                    label="Email Settings"
+                                    onPress={() => {
+                                        onClose();
+                                        navigation.navigate(
+                                            "EmailSettingsScreen",
+                                        );
+                                    }}
+                                />
+                                <View
+                                    style={{
+                                        height: 1,
+                                        backgroundColor: C.border,
+                                        marginVertical: 8,
+                                        marginHorizontal: 10,
+                                    }}
+                                />
+                                <MenuItem
+                                    icon="log-out-outline"
+                                    label="Logout"
+                                    color={C.rose}
+                                    onPress={onLogout}
+                                />
+                                <View
+                                    style={{
+                                        alignItems: "center",
+                                        paddingTop: 20,
+                                        paddingBottom: 28,
+                                        borderTopWidth: 1,
+                                        borderTopColor: C.border,
+                                        marginTop: 10,
+                                    }}>
+                                    <Image
+                                        source={require("../assets/logo.png")}
+                                        style={{
+                                            width: 110,
+                                            height: 34,
+                                            marginBottom: 8,
+                                        }}
+                                        resizeMode="contain"
+                                    />
+                                    <Text
+                                        style={{
+                                            fontSize: 14,
+                                            color: C.textSub,
+                                            fontWeight: "700",
+                                        }}>
+                                        Neophorn Technologies
+                                    </Text>
+                                    <Text
+                                        style={{
+                                            fontSize: 11,
+                                            color: C.textMuted,
+                                            marginTop: 2,
+                                        }}>
+                                        CRM System · v1.0.0
+                                    </Text>
+                                </View>
+                            </ScrollView>
                         </TouchableOpacity>
                     </Animated.View>
                 </TouchableOpacity>

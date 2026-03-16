@@ -137,17 +137,17 @@ const toLocalIso = (d) => {
 
 // --- PREMIUM CARD COMPONENT ---
 const ModernCard = React.memo(
-    ({
-        item,
-        index,
-        onShowDetails,
-        onEdit,
-        onDelete,
-        onFollowUp,
-        onCall,
-        onWhatsApp,
-        onFilterByEmail,
-    }) => {
+	    ({
+	        item,
+	        index,
+	        onShowDetails,
+	        onEdit,
+	        onDelete,
+	        onFollowUp,
+	        onCall,
+	        onWhatsApp,
+	        onEmail,
+	    }) => {
         const scaleValue = useRef(new Animated.Value(1)).current;
 
         const handlePressIn = () =>
@@ -353,15 +353,13 @@ const ModernCard = React.memo(
                                     </View>
                                 </View>
 
-                                {item.email ? (
-                                    <TouchableOpacity
-                                        onPress={() =>
-                                            onFilterByEmail?.(item.email)
-                                        }
-                                        style={styles.emailRow}>
-                                        <Ionicons
-                                            name="mail-outline"
-                                            size={11}
+	                                {item.email ? (
+	                                    <TouchableOpacity
+	                                        onPress={() => onEmail?.(item)}
+	                                        style={styles.emailRow}>
+	                                        <Ionicons
+	                                            name="mail-outline"
+	                                            size={11}
                                             color={COLORS.textLight}
                                         />
                                         <Text
@@ -499,11 +497,11 @@ const ModernCard = React.memo(
                                 </Text>
                             </TouchableOpacity>
 
-                            <View style={styles.actionRight}>
-                                <TouchableOpacity
-                                    style={[
-                                        styles.actionIconBtn,
-                                        {
+	                            <View style={styles.actionRight}>
+	                                <TouchableOpacity
+	                                    style={[
+	                                        styles.actionIconBtn,
+	                                        {
                                             backgroundColor:
                                                 COLORS.primary + "12",
                                         },
@@ -530,10 +528,58 @@ const ModernCard = React.memo(
                                         color={COLORS.danger}
                                     />
                                 </TouchableOpacity>
-                            </View>
-                        </View>
-                    </Animated.View>
-                </TouchableOpacity>
+	                            </View>
+	                        </View>
+
+	                        <View style={styles.actionBarSecondary}>
+	                            <TouchableOpacity
+	                                style={[
+	                                    styles.actionBtnPrimary,
+	                                    {
+	                                        backgroundColor: "#2563EB" + "18",
+	                                        opacity: item.email ? 1 : 0.55,
+	                                    },
+	                                ]}
+	                                disabled={!item.email}
+	                                onPress={() => onEmail?.(item)}>
+	                                <Ionicons
+	                                    name="mail-outline"
+	                                    size={16}
+	                                    color={"#2563EB"}
+	                                />
+	                                <Text
+	                                    style={[
+	                                        styles.actionBtnLabel,
+	                                        { color: "#2563EB" },
+	                                    ]}>
+	                                    Email
+	                                </Text>
+	                            </TouchableOpacity>
+
+	                            <TouchableOpacity
+	                                style={[
+	                                    styles.actionBtnPrimary,
+	                                    {
+	                                        backgroundColor: COLORS.primary + "18",
+	                                    },
+	                                ]}
+	                                onPress={() => onFollowUp?.(item)}>
+	                                <Ionicons
+	                                    name="calendar-outline"
+	                                    size={16}
+	                                    color={COLORS.primary}
+	                                />
+	                                <Text
+	                                    style={[
+	                                        styles.actionBtnLabel,
+	                                        { color: COLORS.primary },
+	                                    ]}>
+	                                    Follow up
+	                                </Text>
+	                            </TouchableOpacity>
+	                        </View>
+	                    </Animated.View>
+	                </TouchableOpacity>
             </MotiView>
         );
     },
@@ -911,24 +957,32 @@ export default function EnquiryListScreen({ navigation, route }) {
         }
     };
 
-	    const handleWhatsApp = useCallback(
-	        (enquiry) => {
-	            if (!enquiry || !enquiry.mobile) return;
-	            navigation.navigate("WhatsAppChat", { enquiry });
-	        },
-	        [navigation],
-	    );
+		    const handleWhatsApp = useCallback(
+		        (enquiry) => {
+		            if (!enquiry || !enquiry.mobile) return;
+		            navigation.navigate("WhatsAppChat", { enquiry });
+		        },
+		        [navigation],
+		    );
 
-	    const handleFilterByEmail = useCallback((email) => {
-	        if (!email) return;
-	        skipNextSearchFetchRef.current = true;
-	        setSearchQuery(email);
-	        fetchEnquiriesRef.current?.(true);
-	    }, []);
+		    const handleEmail = useCallback(
+		        (enquiry) => {
+		            if (!enquiry?.email) {
+		                Alert.alert("Email", "No email address found for this lead.");
+		                return;
+		            }
+		            navigation.navigate("EmailScreen", {
+		                toEmail: enquiry.email,
+		                enquiryId: enquiry._id,
+		                leadName: enquiry.name,
+		            });
+		        },
+		        [navigation],
+		    );
 
-	    const handleEnquirySaved = useCallback((...args) => {
-	        fetchEnquiriesRef.current?.(...args);
-	    }, []);
+		    const handleEnquirySaved = useCallback((...args) => {
+		        fetchEnquiriesRef.current?.(...args);
+		    }, []);
 
 	    const handleEdit = useCallback(
 	        (enquiry) => {
@@ -960,28 +1014,28 @@ export default function EnquiryListScreen({ navigation, route }) {
 	        [],
 	    );
 
-	    const renderEnquiryItem = useCallback(
-	        ({ item, index }) => (
-	            <ModernCard
-	                item={item}
-	                index={index}
-	                onShowDetails={handleShowDetails}
-	                onEdit={handleEdit}
-	                onDelete={handleDelete}
-	                onFollowUp={handleFollowUp}
-	                onCall={handleCall}
-	                onWhatsApp={handleWhatsApp}
-	                onFilterByEmail={handleFilterByEmail}
-	            />
-	        ),
-	        [
-	            handleCall,
-	            handleDelete,
-	            handleEdit,
-	            handleFilterByEmail,
-	            handleFollowUp,
-	            handleShowDetails,
-	            handleWhatsApp,
+		    const renderEnquiryItem = useCallback(
+		        ({ item, index }) => (
+		            <ModernCard
+		                item={item}
+		                index={index}
+		                onShowDetails={handleShowDetails}
+		                onEdit={handleEdit}
+		                onDelete={handleDelete}
+		                onFollowUp={handleFollowUp}
+		                onCall={handleCall}
+		                onWhatsApp={handleWhatsApp}
+		                onEmail={handleEmail}
+		            />
+		        ),
+		        [
+		            handleCall,
+		            handleDelete,
+		            handleEdit,
+		            handleEmail,
+		            handleFollowUp,
+		            handleShowDetails,
+		            handleWhatsApp,
 	        ],
 	    );
 
@@ -1047,14 +1101,22 @@ export default function EnquiryListScreen({ navigation, route }) {
                             onPress={() => setMenuVisible(false)}
                             active
                         />
-                        <MenuItem
-                            icon="call-outline"
-                            label="Follow-ups"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                navigation.navigate("FollowUp");
-                            }}
-                        />
+	                        <MenuItem
+	                            icon="call-outline"
+	                            label="Follow-ups"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("FollowUp");
+	                            }}
+	                        />
+	                        <MenuItem
+	                            icon="mail-outline"
+	                            label="Email"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("EmailScreen");
+	                            }}
+	                        />
                         {user?.role !== "Staff" && (
                             <MenuItem
                                 icon="link-outline"
@@ -1101,7 +1163,22 @@ export default function EnquiryListScreen({ navigation, route }) {
                                 navigation.navigate("CallLog");
                             }}
                         />
-                        <MenuItem icon="settings-outline" label="Settings" />
+	                        <MenuItem
+	                            icon="settings-outline"
+	                            label="WhatsApp Settings"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("WhatsAppSettings");
+	                            }}
+	                        />
+	                        <MenuItem
+	                            icon="mail-open-outline"
+	                            label="Email Settings"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("EmailSettingsScreen");
+	                            }}
+	                        />
                         <MenuItem
                             icon="log-out-outline"
                             label="Logout"
@@ -1651,24 +1728,41 @@ export default function EnquiryListScreen({ navigation, route }) {
                                 <Ionicons name="call" color="#fff" size={18} />
                                 <Text style={styles.modalBtnText}>Call</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[
-                                    styles.modalBtn,
-                                    { backgroundColor: COLORS.whatsapp },
-                                ]}
-                                onPress={() => handleWhatsApp(selectedEnquiry)}>
+	                            <TouchableOpacity
+	                                style={[
+	                                    styles.modalBtn,
+	                                    { backgroundColor: COLORS.whatsapp },
+	                                ]}
+	                                onPress={() => handleWhatsApp(selectedEnquiry)}>
                                 <Ionicons
                                     name="logo-whatsapp"
                                     color="#fff"
                                     size={18}
                                 />
-                                <Text style={styles.modalBtnText}>
-                                    WhatsApp
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={() => handleFollowUp(selectedEnquiry)}
-                                style={{ flex: 1 }}>
+	                                <Text style={styles.modalBtnText}>
+	                                    WhatsApp
+	                                </Text>
+	                            </TouchableOpacity>
+	                            {selectedEnquiry?.email ? (
+	                                <TouchableOpacity
+	                                    style={[
+	                                        styles.modalBtn,
+	                                        { backgroundColor: "#2563EB" },
+	                                    ]}
+	                                    onPress={() => handleEmail(selectedEnquiry)}>
+	                                    <Ionicons
+	                                        name="mail-outline"
+	                                        color="#fff"
+	                                        size={18}
+	                                    />
+	                                    <Text style={styles.modalBtnText}>
+	                                        Email
+	                                    </Text>
+	                                </TouchableOpacity>
+	                            ) : null}
+	                            <TouchableOpacity
+	                                onPress={() => handleFollowUp(selectedEnquiry)}
+	                                style={{ flex: 1 }}>
                                 <LinearGradient
                                     colors={COLORS.gradients.primary}
                                     style={styles.modalBtnGrad}>
@@ -2402,10 +2496,11 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.divider,
         marginBottom: 12,
     },
-    actionBar: { flexDirection: "row", alignItems: "center", gap: 8 },
-    actionBtnPrimary: {
-        flex: 1,
-        flexDirection: "row",
+	    actionBar: { flexDirection: "row", alignItems: "center", gap: 8 },
+	    actionBarSecondary: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+	    actionBtnPrimary: {
+	        flex: 1,
+	        flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
         gap: 6,

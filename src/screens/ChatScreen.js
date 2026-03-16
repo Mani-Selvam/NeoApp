@@ -23,6 +23,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { io } from "socket.io-client";
 import { API_URL, getImageUrl } from "../services/apiConfig";
 import * as templateService from "../services/messageTemplateService";
@@ -31,1007 +32,1293 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 
-const COLORS = {
-  primary: "#6366F1",
-  primaryLight: "#818CF8",
-  accent: "#F59E0B",
-  bg: "#F8FAFC",
-  textMain: "#1E293B",
-  textMuted: "#64748B",
-  white: "#FFFFFF",
-  cardOwner: "#6366F1",
-  cardCustomer: "#FFFFFF",
-  glass: "rgba(255, 255, 255, 0.9)",
+// ─── DESIGN TOKENS ───────────────────────────────────────────────────────────
+// Aesthetic: Forest Green × Warm Cream × Rich Espresso
+// A premium WhatsApp-inspired chat UI with warmth and depth
+const C = {
+    // Backgrounds
+    bg: "#F2EDE6", // warm linen
+    chatBg: "#EDE7DC", // slightly deeper chat area
+    surface: "#FFFFFF",
+    surface2: "#F9F5F0",
+
+    // Forest green — outgoing bubbles
+    forest: "#1E6B4A",
+    forestDark: "#164D36",
+    forestLight: "#2A8A60",
+    forestSoft: "rgba(30,107,74,0.10)",
+    forestBorder: "rgba(30,107,74,0.22)",
+
+    // Espresso — text and UI
+    espresso: "#1C0F06",
+    brown: "#5C3A20",
+    tan: "#9C7355",
+    sand: "#C4A882",
+    linen: "#E8DDD0",
+
+    // Chat bubble colors
+    bubbleOut: "#1E6B4A", // outgoing — forest green
+    bubbleIn: "#FFFFFF", // incoming — white
+    bubbleInBg: "#FFFFFF",
+
+    // Status
+    online: "#22C55E",
+    delivered: "#9CA3AF",
+    read: "#34B7F1",
+
+    // Input bar
+    inputBg: "#FFFFFF",
+    inputBorder: "#E8DDD0",
+
+    border: "#E8DDD0",
+    shadow: "#3D1F0A",
 };
 
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 const sanitizePhoneNumber = (raw) => {
-  const clean = String(raw || "").replace(/\D/g, "");
-  if (!clean) return "";
-  const last10 = clean.slice(-10);
-  if (!last10) return clean;
-  const duplicateLocal = `${last10}${last10}`;
-  const duplicateWithCountry = `91${last10}${last10}`;
-  if (clean === duplicateLocal || clean === duplicateWithCountry) {
-    return `91${last10}`;
-  }
-  return clean;
+    const clean = String(raw || "").replace(/\D/g, "");
+    if (!clean) return "";
+    const last10 = clean.slice(-10);
+    if (!last10) return clean;
+    const duplicateLocal = `${last10}${last10}`;
+    const duplicateWithCountry = `91${last10}${last10}`;
+    if (clean === duplicateLocal || clean === duplicateWithCountry)
+        return `91${last10}`;
+    return clean;
 };
 
-export default function ChatScreen({ route, navigation }) {
-  const insets = useSafeAreaInsets();
-  // Defensive: `route.params` may be undefined if navigated to incorrectly.
-  // Support two shapes: { enquiry: {...} } or passing enquiry directly as params.
-  const routeParams = route?.params;
-  const enquiry =
-    routeParams && typeof routeParams === "object"
-      ? routeParams.enquiry && typeof routeParams.enquiry === "object"
-        ? routeParams.enquiry
-        : routeParams
-      : {};
-  const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const socket = useRef(null);
-  const flatListRef = useRef(null);
-  const initialScrollDone = useRef(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [inputAnimatedValue] = useState(new Animated.Value(0));
+// ─── AVATAR ──────────────────────────────────────────────────────────────────
+const Avatar = ({ name, size = 42 }) => (
+    <LinearGradient
+        colors={[C.forest, C.forestDark]}
+        style={{
+            width: size,
+            height: size,
+            borderRadius: size * 0.32,
+            justifyContent: "center",
+            alignItems: "center",
+        }}>
+        <Text
+            style={{ color: "#fff", fontSize: size * 0.42, fontWeight: "900" }}>
+            {name?.charAt(0)?.toUpperCase() ?? "C"}
+        </Text>
+    </LinearGradient>
+);
 
-  // --- TEMPLATE STATES ---
-  const [templates, setTemplates] = useState([]);
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [filteredTemplates, setFilteredTemplates] = useState([]);
-  const [mentionSearch, setMentionSearch] = useState("");
-
-  useEffect(() => {
-    // Only setup socket or load history if we have a phone number to subscribe to.
-    loadTemplates();
-    if (enquiry && enquiry.mobile) {
-      setupSocket();
-    }
-
-    // Keyboard listeners
-    const keyboardDidShowListener = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      (e) => {
-        setKeyboardHeight(e.endCoordinates.height);
-        Animated.timing(inputAnimatedValue, {
-          toValue: 1,
-          duration: 250,
-          useNativeDriver: true,
-        }).start();
-      },
-    );
-    const keyboardDidHideListener = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => {
-        setKeyboardHeight(0);
-        Animated.timing(inputAnimatedValue, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: true,
-        }).start();
-      },
-    );
-
-    return () => {
-      socket.current?.disconnect();
-      keyboardDidShowListener.remove();
-      keyboardDidHideListener.remove();
-    };
-  }, []);
-
-  // Refresh history whenever screen is focused (back-return fix)
-  useFocusEffect(
-    useCallback(() => {
-      if (enquiry && enquiry.mobile) loadHistory();
-    }, [enquiry?.mobile]),
-  );
-
-  const loadTemplates = async () => {
-    try {
-      const data = await templateService.getMessageTemplates();
-      setTemplates(data || []);
-    } catch (error) {
-      console.error("Templates fetch fail:", error);
-    }
-  };
-
-  const setupSocket = () => {
-    const socketBaseUrl = API_URL.replace("/api", "");
-    socket.current = io(socketBaseUrl);
-
-    // Helper to add message without duplicates
-    const addMessage = (newMsg) => {
-      setMessages((prev) => {
-        // If message with same ID exists, replace it (update status/content)
-        const exists = prev.some((m) => m._id === newMsg._id);
-        if (exists) {
-          return prev.map((m) =>
-            m._id === newMsg._id ? { ...m, ...newMsg } : m,
-          );
-        }
-
-        // If it's an Admin message, try to replace any 'sending' optimistic message
-        if (newMsg.sender === "Admin") {
-          const hasOptimistic = prev.some(
-            (m) => m.status === "sending" || String(m._id).startsWith("temp_"),
-          );
-          if (hasOptimistic) {
-            // Remove temp ones and add the real one
-            return [
-              ...prev.filter((m) => !String(m._id).startsWith("temp_")),
-              newMsg,
-            ];
-          }
-        }
-
-        return [...prev, newMsg];
-      });
-      setTimeout(
-        () => flatListRef.current?.scrollToEnd({ animated: true }),
-        200,
-      );
-    };
-
-    // Listen on multiple phone number formats for maximum reliability
-    const rawMobile = (enquiry.mobile || "").replace(/\D/g, "");
-    const short10 = rawMobile.length > 10 ? rawMobile.slice(-10) : rawMobile;
-    const withCC = rawMobile.length === 10 ? `91${rawMobile}` : rawMobile;
-    const normalizedWithCC = `91${short10}`;
-
-    // Build unique set of channel names (no trailing spaces) and include global channel
-    const channels = new Set([
-      `new_message_${(enquiry.mobile || "").replace(/\s/g, "")}`,
-      `new_message_${rawMobile}`,
-      `new_message_${short10}`,
-      `new_message_${withCC}`,
-      `new_message_${normalizedWithCC}`,
-      `global_new_message`,
-    ]);
-
-    channels.forEach((channel) => {
-      socket.current.on(channel, addMessage);
-    });
-
-    console.log("🔌 Chat socket listening on:", [...channels]);
-  };
-
-  // Load latest messages (page 1)
-  const loadHistory = async () => {
-    try {
-      const result = await whatsappService.getChatHistory(
-        enquiry.mobile,
-        1,
-        30,
-      );
-      setMessages(result.messages || []);
-      setHasMore(result.pagination?.hasMore || false);
-      setCurrentPage(1);
-    } catch (error) {
-      console.error("History fail:", error);
-    } finally {
-      setLoading(false);
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
-        initialScrollDone.current = true;
-      }, 300);
-    }
-  };
-
-  // Load older messages when user scrolls to top
-  const loadOlderMessages = async () => {
-    if (loadingOlder || !hasMore) return;
-    setLoadingOlder(true);
-    try {
-      const nextPage = currentPage + 1;
-      const result = await whatsappService.getChatHistory(
-        enquiry.mobile,
-        nextPage,
-        30,
-      );
-      const olderMessages = result.messages || [];
-      if (olderMessages.length > 0) {
-        // Prepend older messages (they come in chronological order)
-        setMessages((prev) => [...olderMessages, ...prev]);
-        setCurrentPage(nextPage);
-        setHasMore(result.pagination?.hasMore || false);
-      } else {
-        setHasMore(false);
-      }
-    } catch (error) {
-      console.error("Load older fail:", error);
-    } finally {
-      setLoadingOlder(false);
-    }
-  };
-
-  const handleSend = async (mediaFile = null, mediaType = "text") => {
-    if (!inputText.trim() && !mediaFile) return;
-
-    const text = inputText;
-    if (!mediaFile) setInputText("");
-
-    // 🚀 OPTIMISTIC UI UPDATE
-    // Create a temporary message object to show instantly
-    const tempId = `temp_${Date.now()}`;
-    const optimisticMsg = {
-      _id: tempId,
-      sender: "Admin",
-      content: text || (mediaType === "image" ? "Image" : "Document"),
-      type: mediaType,
-      timestamp: new Date().toISOString(),
-      status: "sending", // Visual indicator
-    };
-
-    setMessages((prev) => [...prev, optimisticMsg]);
-    setSending(true);
-
-    // Auto scroll to bottom for the new optimistic message
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-
-    try {
-      const response = await whatsappService.sendMessage({
-        phoneNumber: sanitizePhoneNumber(enquiry.mobile),
-        content: text,
-        type: mediaType,
-        enquiryId: enquiry._id,
-        file: mediaFile,
-      });
-
-      // If the socket is fast, it will replace this.
-      // If not, we could update the temp message status here.
-      setMessages((prev) =>
-        prev.map((m) =>
-          m._id === tempId
-            ? { ...m, status: "sent", _id: response._id || m._id }
-            : m,
-        ),
-      );
-    } catch (error) {
-      console.error("Send fail:", error);
-      // Remove optimistic message on failure or show error icon
-      setMessages((prev) => prev.filter((m) => m._id !== tempId));
-      Alert.alert(
-        "Error",
-        "Failed to send message. Please check your connection.",
-      );
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleTextChange = (text) => {
-    setInputText(text);
-
-    // Detect mention trigger '@'
-    const words = text.split(/\s/);
-    const lastWord = words[words.length - 1];
-
-    if (lastWord.startsWith("@")) {
-      const query = lastWord.slice(1).toLowerCase();
-      setMentionSearch(query);
-
-      const filtered = templates.filter(
-        (t) =>
-          t.status === "Active" &&
-          (t.keyword.toLowerCase().includes(query) ||
-            t.name.toLowerCase().includes(query)),
-      );
-
-      setFilteredTemplates(filtered);
-      setShowTemplates(filtered.length > 0);
-    } else {
-      setShowTemplates(false);
-    }
-  };
-
-  const selectTemplate = (template) => {
-    const words = inputText.split(/\s/);
-    words.pop(); // Remove the @keyword
-    const newText = [...words, template.content].join(" ");
-    setInputText(newText);
-    setShowTemplates(false);
-  };
-
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-    });
-
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      handleSend(
-        {
-          uri: asset.uri,
-          type: "image/jpeg",
-          name: "image.jpg",
-        },
-        "image",
-      );
-    }
-  };
-
-  const pickDocument = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: "*/*",
-    });
-
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      handleSend(
-        {
-          uri: asset.uri,
-          type: asset.mimeType,
-          name: asset.name,
-        },
-        "document",
-      );
-    }
-  };
-
-  const handleCall = async () => {
-    try {
-      const raw = (enquiry.mobile || "").replace(/\D/g, "");
-      if (!raw) {
-        Alert.alert(
-          "No phone number",
-          "This contact has no phone number available.",
-        );
-        return;
-      }
-      const telUrl = `tel:${raw}`;
-      const can = await Linking.canOpenURL(telUrl);
-      if (!can) {
-        Alert.alert("Unsupported", "Calling is not supported on this device.");
-        return;
-      }
-      await Linking.openURL(telUrl);
-    } catch (err) {
-      console.error("Call open error:", err);
-      Alert.alert("Error", "Unable to start the call. Please try manually.");
-    }
-  };
-
-  const renderMessage = ({ item }) => {
+// ─── MESSAGE BUBBLE ──────────────────────────────────────────────────────────
+const MessageBubble = ({ item }) => {
     const isOwner = item.sender === "Admin";
 
+    const getStatusIcon = () => {
+        if (!isOwner) return null;
+        if (item.status === "sending")
+            return { name: "clock-outline", color: "rgba(255,255,255,0.45)" };
+        if (item.status === "sent")
+            return { name: "check", color: "rgba(255,255,255,0.65)" };
+        if (item.status === "delivered")
+            return { name: "check-all", color: "rgba(255,255,255,0.65)" };
+        if (item.status === "read")
+            return { name: "check-all", color: "#34B7F1" };
+        return { name: "check", color: "rgba(255,255,255,0.65)" };
+    };
+
+    const statusIcon = getStatusIcon();
+    const time = new Date(item.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+
     return (
-      <MotiView
-        from={{ opacity: 0, scale: 0.9, translateY: 10 }}
-        animate={{ opacity: 1, scale: 1, translateY: 0 }}
-        transition={{ type: "timing", duration: 400 }}
-        style={[
-          styles.msgContainer,
-          isOwner ? styles.msgOwner : styles.msgCustomer,
-        ]}
-      >
-        <View
-          style={[
-            styles.bubble,
-            isOwner ? styles.bubbleOwner : styles.bubbleCustomer,
-            !isOwner && styles.customerShadow,
-          ]}
-        >
-          {item.type === "image" ? (
-            <TouchableOpacity activeOpacity={0.9}>
-              <Image
-                source={{ uri: getImageUrl(item.content) }}
-                style={styles.msgImage}
-                resizeMode="cover"
-              />
-            </TouchableOpacity>
-          ) : item.type === "audio" || item.type === "ptt" ? (
-            <View style={styles.audioMsg}>
-              <Ionicons
-                name="play-circle"
-                size={32}
-                color={isOwner ? COLORS.white : COLORS.primary}
-              />
-              <View style={styles.audioWaveform}>
-                <View
-                  style={[
-                    styles.waveLine,
-                    {
-                      height: 10,
-                      backgroundColor: isOwner
-                        ? "rgba(255,255,255,0.4)"
-                        : "#DDD",
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.waveLine,
-                    {
-                      height: 20,
-                      backgroundColor: isOwner
-                        ? "rgba(255,255,255,0.4)"
-                        : "#DDD",
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.waveLine,
-                    {
-                      height: 15,
-                      backgroundColor: isOwner
-                        ? "rgba(255,255,255,0.4)"
-                        : "#DDD",
-                    },
-                  ]}
-                />
-                <View
-                  style={[
-                    styles.waveLine,
-                    {
-                      height: 25,
-                      backgroundColor: isOwner
-                        ? "rgba(255,255,255,0.4)"
-                        : "#DDD",
-                    },
-                  ]}
-                />
-              </View>
-              <Text
-                style={[
-                  styles.audioDuration,
-                  isOwner ? styles.textWhiteMuted : styles.textMuted,
-                ]}
-              >
-                0:12
-              </Text>
-            </View>
-          ) : item.type === "document" ? (
-            <TouchableOpacity style={styles.docMsg}>
-              <View style={styles.docIconCircle}>
-                <Feather
-                  name="file-text"
-                  size={20}
-                  color={isOwner ? COLORS.primary : COLORS.white}
-                />
-              </View>
-              <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text
-                  style={[
-                    styles.msgText,
-                    isOwner ? styles.textWhite : styles.textDark,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {item.fileName || "Document"}
-                </Text>
-                <Text
-                  style={[
-                    styles.docSize,
-                    isOwner ? styles.textWhiteMuted : styles.textMuted,
-                  ]}
-                >
-                  {item.mimeType?.split("/")[1]?.toUpperCase() || "PDF"}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <Text
-              style={[
-                styles.msgText,
-                isOwner ? styles.textWhite : styles.textDark,
-              ]}
-            >
-              {item.content}
-            </Text>
-          )}
-
-          <View style={styles.msgMeta}>
-            <Text
-              style={[
-                styles.timestamp,
-                isOwner ? styles.textWhiteMuted : styles.textMuted,
-              ]}
-            >
-              {new Date(item.timestamp).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </Text>
-            {isOwner &&
-              (() => {
-                // Show: clock for sending, single check for sent,
-                // double check for delivered, blue double-check for read
-                let iconName = "check";
-                let iconColor = "rgba(255,255,255,0.6)";
-                if (item.status === "sending") {
-                  iconName = "clock-outline";
-                  iconColor = "rgba(255,255,255,0.4)";
-                } else if (item.status === "sent") {
-                  iconName = "check";
-                  iconColor = "rgba(255,255,255,0.6)";
-                } else if (item.status === "delivered") {
-                  iconName = "check-all";
-                  iconColor = "rgba(255,255,255,0.6)";
-                } else if (item.status === "read") {
-                  iconName = "check-all";
-                  iconColor = "#34B7F1"; // WhatsApp read-blue
-                }
-
-                return (
-                  <MaterialCommunityIcons
-                    name={iconName}
-                    size={14}
-                    color={iconColor}
-                    style={{ marginLeft: 4 }}
-                  />
-                );
-              })()}
-          </View>
-        </View>
-      </MotiView>
-    );
-  };
-
-  return (
-    <KeyboardAvoidingView
-      style={[styles.container, { paddingTop: insets.top + 10 }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
-    >
-      <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
-
-      {/* Advanced Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}
-        >
-          <Feather name="chevron-left" size={28} color={COLORS.textMain} />
-        </TouchableOpacity>
-
-        <View style={styles.headerMain}>
-          <View style={styles.avatarContainer}>
-            <Text style={styles.avatarText}>
-              {enquiry.name?.charAt(0).toUpperCase() || "C"}
-            </Text>
-            <View style={styles.activeDot} />
-          </View>
-          <View style={styles.headerInfo}>
-            <Text style={styles.headerName} numberOfLines={1}>
-              {enquiry.name || "Customer"}
-            </Text>
-            <Text style={styles.headerStatus}>Active Now</Text>
-          </View>
-        </View>
-
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.actionIcon} onPress={handleCall}>
-            <Feather name="phone" size={20} color={COLORS.textMain} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionIcon}>
-            <Feather name="more-vertical" size={20} color={COLORS.textMain} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={COLORS.primary} size="large" />
-        </View>
-      ) : (
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          renderItem={renderMessage}
-          keyExtractor={(item) => item._id}
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingBottom: keyboardHeight > 0 ? keyboardHeight + 100 : 100 },
-          ]}
-          onEndReachedThreshold={0.1}
-          maxToRenderPerBatch={15}
-          windowSize={10}
-          initialNumToRender={20}
-          ListHeaderComponent={
-            loadingOlder ? (
-              <View style={styles.loadingOlder}>
-                <ActivityIndicator color={COLORS.primary} size="small" />
-                <Text style={styles.loadingOlderText}>
-                  Loading older messages...
-                </Text>
-              </View>
-            ) : hasMore ? (
-              <TouchableOpacity
-                style={styles.loadMoreBtn}
-                onPress={loadOlderMessages}
-              >
-                <Feather name="chevrons-up" size={18} color={COLORS.primary} />
-                <Text style={styles.loadMoreText}>Load older messages</Text>
-              </TouchableOpacity>
-            ) : null
-          }
-          onScroll={({ nativeEvent }) => {
-            // Trigger load-older when scrolled near the top
-            if (
-              nativeEvent.contentOffset.y < 50 &&
-              hasMore &&
-              !loadingOlder &&
-              initialScrollDone.current
-            ) {
-              loadOlderMessages();
-            }
-          }}
-          scrollEventThrottle={400}
-        />
-      )}
-
-      {/* Premium Floating Input */}
-      <View style={styles.inputContainer}>
-        {/* Floating Template Suggestions */}
-        <AnimatePresence>
-          {showTemplates && (
-            <MotiView
-              from={{ opacity: 0, translateY: 10, scale: 0.95 }}
-              animate={{ opacity: 1, translateY: 0, scale: 1 }}
-              exit={{ opacity: 0, translateY: 10, scale: 0.95 }}
-              style={styles.templatePicker}
-            >
-              <View style={styles.templateHeader}>
-                <Ionicons name="flash" size={14} color={COLORS.primary} />
-                <Text style={styles.templateHeaderText}>Quick Templates</Text>
-              </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.templateList}
-              >
-                {filteredTemplates.map((item) => (
-                  <TouchableOpacity
-                    key={item._id}
-                    style={styles.templateItem}
-                    onPress={() => selectTemplate(item)}
-                  >
-                    <View style={styles.templateIcon}>
-                      <Text style={styles.templateInitial}>{item.name[0]}</Text>
+        <MotiView
+            from={{ opacity: 0, translateY: 8, scale: 0.96 }}
+            animate={{ opacity: 1, translateY: 0, scale: 1 }}
+            transition={{ type: "timing", duration: 280 }}
+            style={[S.msgRow, isOwner ? S.msgRowOut : S.msgRowIn]}>
+            {/* Incoming avatar */}
+            {!isOwner && (
+                <View style={S.incomingAvatar}>
+                    <View style={S.incomingAvatarInner}>
+                        <Ionicons
+                            name="logo-whatsapp"
+                            size={14}
+                            color="#25D366"
+                        />
                     </View>
-                    <View>
-                      <Text style={styles.templateItemName}>
-                        @{item.keyword}
-                      </Text>
-                      <Text style={styles.templateItemLabel} numberOfLines={1}>
-                        {item.name}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </MotiView>
-          )}
-        </AnimatePresence>
-
-        <Animated.View
-          style={[
-            styles.floatingInputContainer,
-            {
-              transform: [
-                {
-                  translateY: inputAnimatedValue.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, -10],
-                  }),
-                },
-              ],
-            },
-          ]}
-        >
-          <TouchableOpacity style={styles.plusBtn} onPress={pickDocument}>
-            <Feather name="paperclip" size={22} color={COLORS.white} />
-          </TouchableOpacity>
-
-          <View style={styles.inputWrapper}>
-            <TextInput
-              style={styles.input}
-              placeholder="Type a message..."
-              placeholderTextColor={COLORS.textMuted}
-              multiline
-              value={inputText}
-              onChangeText={handleTextChange}
-            />
-            <TouchableOpacity style={styles.iconInInput} onPress={pickImage}>
-              <Feather name="image" size={20} color={COLORS.textMuted} />
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.sendBtn, !inputText.trim() && styles.micBtn]}
-            onPress={() => handleSend()}
-            disabled={sending}
-          >
-            {sending ? (
-              <ActivityIndicator size="small" color={COLORS.white} />
-            ) : (
-              <Ionicons
-                name={inputText.trim() ? "send" : "mic"}
-                size={20}
-                color={COLORS.white}
-              />
+                </View>
             )}
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
-    </KeyboardAvoidingView>
-  );
+
+            <View
+                style={[
+                    S.bubble,
+                    isOwner ? S.bubbleOut : S.bubbleIn,
+                    { maxWidth: width * 0.72 },
+                ]}>
+                {/* IMAGE */}
+                {item.type === "image" ? (
+                    <TouchableOpacity activeOpacity={0.9}>
+                        <Image
+                            source={{ uri: getImageUrl(item.content) }}
+                            style={S.msgImage}
+                            resizeMode="cover"
+                        />
+                        <View style={S.metaOverImage}>
+                            <Text
+                                style={[
+                                    S.timestamp,
+                                    { color: "rgba(255,255,255,0.85)" },
+                                ]}>
+                                {time}
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
+                ) : /* AUDIO */
+                item.type === "audio" || item.type === "ptt" ? (
+                    <View style={S.audioMsg}>
+                        <TouchableOpacity
+                            style={[
+                                S.audioPlayBtn,
+                                isOwner && {
+                                    backgroundColor: "rgba(255,255,255,0.2)",
+                                },
+                            ]}>
+                            <Ionicons
+                                name="play"
+                                size={16}
+                                color={isOwner ? "#fff" : C.forest}
+                            />
+                        </TouchableOpacity>
+                        <View style={S.waveformWrap}>
+                            {[8, 14, 10, 20, 16, 12, 18, 10, 14, 8, 16, 12].map(
+                                (h, i) => (
+                                    <View
+                                        key={i}
+                                        style={[
+                                            S.waveLine,
+                                            {
+                                                height: h,
+                                                backgroundColor: isOwner
+                                                    ? i < 6
+                                                        ? "rgba(255,255,255,0.85)"
+                                                        : "rgba(255,255,255,0.35)"
+                                                    : i < 6
+                                                      ? C.forest
+                                                      : C.sand,
+                                            },
+                                        ]}
+                                    />
+                                ),
+                            )}
+                        </View>
+                        <Text
+                            style={[
+                                S.audioDuration,
+                                {
+                                    color: isOwner
+                                        ? "rgba(255,255,255,0.7)"
+                                        : C.tan,
+                                },
+                            ]}>
+                            0:12
+                        </Text>
+                        <View
+                            style={[
+                                S.msgMeta,
+                                { marginTop: 0, marginLeft: 6 },
+                            ]}>
+                            <Text
+                                style={[
+                                    S.timestamp,
+                                    isOwner
+                                        ? { color: "rgba(255,255,255,0.6)" }
+                                        : { color: C.tan },
+                                ]}>
+                                {time}
+                            </Text>
+                            {statusIcon && (
+                                <MaterialCommunityIcons
+                                    name={statusIcon.name}
+                                    size={12}
+                                    color={statusIcon.color}
+                                    style={{ marginLeft: 3 }}
+                                />
+                            )}
+                        </View>
+                    </View>
+                ) : /* DOCUMENT */
+                item.type === "document" ? (
+                    <TouchableOpacity style={S.docMsg} activeOpacity={0.8}>
+                        <View
+                            style={[
+                                S.docIcon,
+                                isOwner && {
+                                    backgroundColor: "rgba(255,255,255,0.18)",
+                                },
+                            ]}>
+                            <Feather
+                                name="file-text"
+                                size={18}
+                                color={isOwner ? "#fff" : C.forest}
+                            />
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text
+                                style={[
+                                    S.docName,
+                                    isOwner
+                                        ? { color: "#fff" }
+                                        : { color: C.espresso },
+                                ]}
+                                numberOfLines={1}>
+                                {item.fileName || "Document"}
+                            </Text>
+                            <Text
+                                style={[
+                                    S.docType,
+                                    isOwner
+                                        ? { color: "rgba(255,255,255,0.6)" }
+                                        : { color: C.tan },
+                                ]}>
+                                {item.mimeType?.split("/")[1]?.toUpperCase() ||
+                                    "PDF"}
+                            </Text>
+                        </View>
+                        <View style={S.msgMeta}>
+                            <Text
+                                style={[
+                                    S.timestamp,
+                                    isOwner
+                                        ? { color: "rgba(255,255,255,0.6)" }
+                                        : { color: C.tan },
+                                ]}>
+                                {time}
+                            </Text>
+                            {statusIcon && (
+                                <MaterialCommunityIcons
+                                    name={statusIcon.name}
+                                    size={12}
+                                    color={statusIcon.color}
+                                    style={{ marginLeft: 3 }}
+                                />
+                            )}
+                        </View>
+                    </TouchableOpacity>
+                ) : (
+                    /* TEXT */
+                    <View>
+                        <Text
+                            style={[
+                                S.msgText,
+                                isOwner ? S.msgTextOut : S.msgTextIn,
+                            ]}>
+                            {item.content}
+                        </Text>
+                        <View style={S.msgMeta}>
+                            <Text
+                                style={[
+                                    S.timestamp,
+                                    isOwner
+                                        ? { color: "rgba(255,255,255,0.6)" }
+                                        : { color: C.tan },
+                                ]}>
+                                {time}
+                            </Text>
+                            {statusIcon && (
+                                <MaterialCommunityIcons
+                                    name={statusIcon.name}
+                                    size={12}
+                                    color={statusIcon.color}
+                                    style={{ marginLeft: 3 }}
+                                />
+                            )}
+                        </View>
+                    </View>
+                )}
+            </View>
+        </MotiView>
+    );
+};
+
+// ─── DATE SEPARATOR ──────────────────────────────────────────────────────────
+const DateSep = ({ label }) => (
+    <View style={S.dateSep}>
+        <View style={S.dateSepLine} />
+        <View style={S.dateSepChip}>
+            <Text style={S.dateSepText}>{label}</Text>
+        </View>
+        <View style={S.dateSepLine} />
+    </View>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+export default function ChatScreen({ route, navigation }) {
+    const insets = useSafeAreaInsets();
+
+    const routeParams = route?.params;
+    const enquiry =
+        routeParams && typeof routeParams === "object"
+            ? routeParams.enquiry && typeof routeParams.enquiry === "object"
+                ? routeParams.enquiry
+                : routeParams
+            : {};
+
+    const [messages, setMessages] = useState([]);
+    const [inputText, setInputText] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [sending, setSending] = useState(false);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const [hasMore, setHasMore] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+    const [templates, setTemplates] = useState([]);
+    const [showTemplates, setShowTemplates] = useState(false);
+    const [filteredTemplates, setFilteredTemplates] = useState([]);
+
+    const socket = useRef(null);
+    const flatListRef = useRef(null);
+    const initialScrollDone = useRef(false);
+    const inputAnim = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        loadTemplates();
+        if (enquiry?.mobile) setupSocket();
+
+        const show = Keyboard.addListener(
+            Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+            (e) => {
+                setKeyboardHeight(e.endCoordinates.height);
+                Animated.timing(inputAnim, {
+                    toValue: 1,
+                    duration: 240,
+                    useNativeDriver: true,
+                }).start();
+            },
+        );
+        const hide = Keyboard.addListener(
+            Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
+            () => {
+                setKeyboardHeight(0);
+                Animated.timing(inputAnim, {
+                    toValue: 0,
+                    duration: 240,
+                    useNativeDriver: true,
+                }).start();
+            },
+        );
+        return () => {
+            socket.current?.disconnect();
+            show.remove();
+            hide.remove();
+        };
+    }, []);
+
+    useFocusEffect(
+        useCallback(() => {
+            if (enquiry?.mobile) loadHistory();
+        }, [enquiry?.mobile]),
+    );
+
+    const loadTemplates = async () => {
+        try {
+            const data = await templateService.getMessageTemplates();
+            setTemplates(data || []);
+        } catch (e) {
+            console.error("Templates fetch fail:", e);
+        }
+    };
+
+    const setupSocket = () => {
+        const base = API_URL.replace("/api", "");
+        socket.current = io(base);
+        const addMessage = (newMsg) => {
+            setMessages((prev) => {
+                const exists = prev.some((m) => m._id === newMsg._id);
+                if (exists)
+                    return prev.map((m) =>
+                        m._id === newMsg._id ? { ...m, ...newMsg } : m,
+                    );
+                if (newMsg.sender === "Admin") {
+                    const hasOpt = prev.some(
+                        (m) =>
+                            m.status === "sending" ||
+                            String(m._id).startsWith("temp_"),
+                    );
+                    if (hasOpt)
+                        return [
+                            ...prev.filter(
+                                (m) => !String(m._id).startsWith("temp_"),
+                            ),
+                            newMsg,
+                        ];
+                }
+                return [...prev, newMsg];
+            });
+            setTimeout(
+                () => flatListRef.current?.scrollToEnd({ animated: true }),
+                200,
+            );
+        };
+        const raw = (enquiry.mobile || "").replace(/\D/g, "");
+        const s10 = raw.length > 10 ? raw.slice(-10) : raw;
+        const channels = new Set([
+            `new_message_${(enquiry.mobile || "").replace(/\s/g, "")}`,
+            `new_message_${raw}`,
+            `new_message_${s10}`,
+            `new_message_${raw.length === 10 ? `91${raw}` : raw}`,
+            `new_message_91${s10}`,
+            `global_new_message`,
+        ]);
+        channels.forEach((ch) => socket.current.on(ch, addMessage));
+    };
+
+    const loadHistory = async () => {
+        try {
+            const result = await whatsappService.getChatHistory(
+                enquiry.mobile,
+                1,
+                30,
+            );
+            setMessages(result.messages || []);
+            setHasMore(result.pagination?.hasMore || false);
+            setCurrentPage(1);
+        } catch (e) {
+            console.error("History fail:", e);
+        } finally {
+            setLoading(false);
+            setTimeout(() => {
+                flatListRef.current?.scrollToEnd({ animated: false });
+                initialScrollDone.current = true;
+            }, 300);
+        }
+    };
+
+    const loadOlderMessages = async () => {
+        if (loadingOlder || !hasMore) return;
+        setLoadingOlder(true);
+        try {
+            const nextPage = currentPage + 1;
+            const result = await whatsappService.getChatHistory(
+                enquiry.mobile,
+                nextPage,
+                30,
+            );
+            const older = result.messages || [];
+            if (older.length > 0) {
+                setMessages((prev) => [...older, ...prev]);
+                setCurrentPage(nextPage);
+                setHasMore(result.pagination?.hasMore || false);
+            } else {
+                setHasMore(false);
+            }
+        } catch (e) {
+            console.error("Load older fail:", e);
+        } finally {
+            setLoadingOlder(false);
+        }
+    };
+
+    const handleSend = async (mediaFile = null, mediaType = "text") => {
+        if (!inputText.trim() && !mediaFile) return;
+        const text = inputText;
+        if (!mediaFile) setInputText("");
+        const tempId = `temp_${Date.now()}`;
+        const optimisticMsg = {
+            _id: tempId,
+            sender: "Admin",
+            content: text || (mediaType === "image" ? "Image" : "Document"),
+            type: mediaType,
+            timestamp: new Date().toISOString(),
+            status: "sending",
+        };
+        setMessages((prev) => [...prev, optimisticMsg]);
+        setSending(true);
+        setTimeout(
+            () => flatListRef.current?.scrollToEnd({ animated: true }),
+            100,
+        );
+        try {
+            const response = await whatsappService.sendMessage({
+                phoneNumber: sanitizePhoneNumber(enquiry.mobile),
+                content: text,
+                type: mediaType,
+                enquiryId: enquiry._id,
+                file: mediaFile,
+            });
+            setMessages((prev) =>
+                prev.map((m) =>
+                    m._id === tempId
+                        ? { ...m, status: "sent", _id: response._id || m._id }
+                        : m,
+                ),
+            );
+        } catch (e) {
+            console.error("Send fail:", e);
+            setMessages((prev) => prev.filter((m) => m._id !== tempId));
+            Alert.alert(
+                "Error",
+                "Failed to send. Please check your connection.",
+            );
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const handleTextChange = (text) => {
+        setInputText(text);
+        const words = text.split(/\s/);
+        const lastWord = words[words.length - 1];
+        if (lastWord.startsWith("@")) {
+            const query = lastWord.slice(1).toLowerCase();
+            const filtered = templates.filter(
+                (t) =>
+                    t.status === "Active" &&
+                    (t.keyword.toLowerCase().includes(query) ||
+                        t.name.toLowerCase().includes(query)),
+            );
+            setFilteredTemplates(filtered);
+            setShowTemplates(filtered.length > 0);
+        } else {
+            setShowTemplates(false);
+        }
+    };
+
+    const selectTemplate = (template) => {
+        const words = inputText.split(/\s/);
+        words.pop();
+        setInputText([...words, template.content].join(" "));
+        setShowTemplates(false);
+    };
+
+    const pickImage = async () => {
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.7,
+        });
+        if (!result.canceled) {
+            const asset = result.assets[0];
+            handleSend(
+                { uri: asset.uri, type: "image/jpeg", name: "image.jpg" },
+                "image",
+            );
+        }
+    };
+
+    const pickDocument = async () => {
+        const result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
+        if (!result.canceled) {
+            const asset = result.assets[0];
+            handleSend(
+                { uri: asset.uri, type: asset.mimeType, name: asset.name },
+                "document",
+            );
+        }
+    };
+
+    const handleCall = async () => {
+        try {
+            const raw = (enquiry.mobile || "").replace(/\D/g, "");
+            if (!raw) {
+                Alert.alert(
+                    "No phone number",
+                    "This contact has no phone number.",
+                );
+                return;
+            }
+            const telUrl = `tel:${raw}`;
+            const can = await Linking.canOpenURL(telUrl);
+            if (!can) {
+                Alert.alert(
+                    "Unsupported",
+                    "Calling is not supported on this device.",
+                );
+                return;
+            }
+            await Linking.openURL(telUrl);
+        } catch (err) {
+            Alert.alert("Error", "Unable to start the call.");
+        }
+    };
+
+    const hasText = inputText.trim().length > 0;
+
+    // ── RENDER ──────────────────────────────────────────────────────────────
+    return (
+        <View style={[S.root, { paddingTop: insets.top }]}>
+            <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+
+            {/* ── HEADER ──────────────────────────────────────────────── */}
+            <View style={S.header}>
+                {/* Back */}
+                <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={S.headerBack}
+                    activeOpacity={0.75}>
+                    <Ionicons
+                        name="arrow-back-outline"
+                        size={22}
+                        color={C.espresso}
+                    />
+                </TouchableOpacity>
+
+                {/* Identity */}
+                <View style={S.headerIdentity}>
+                    <View style={S.headerAvatarWrap}>
+                        <Avatar name={enquiry.name} size={42} />
+                        <View style={S.onlineDot} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={S.headerName} numberOfLines={1}>
+                            {enquiry.name || "Customer"}
+                        </Text>
+                        <View
+                            style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 5,
+                            }}>
+                            <Ionicons
+                                name="logo-whatsapp"
+                                size={11}
+                                color="#25D366"
+                            />
+                            <Text style={S.headerStatus}>
+                                Online · WhatsApp
+                            </Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* Actions */}
+                <View style={S.headerActions}>
+                    <TouchableOpacity
+                        style={S.headerActionBtn}
+                        onPress={handleCall}
+                        activeOpacity={0.8}>
+                        <Ionicons
+                            name="call-outline"
+                            size={18}
+                            color={C.forest}
+                        />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={S.headerActionBtn}
+                        activeOpacity={0.8}>
+                        <Ionicons
+                            name="ellipsis-vertical"
+                            size={18}
+                            color={C.brown}
+                        />
+                    </TouchableOpacity>
+                </View>
+            </View>
+
+            {/* ── CHAT AREA ──────────────────────────────────────────── */}
+            <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}>
+                {/* Wallpaper pattern background */}
+                <View style={S.chatBg}>
+                    {/* Subtle dot pattern overlay */}
+                    <View style={S.bgPattern} pointerEvents="none" />
+                </View>
+
+                {loading ? (
+                    <View style={S.center}>
+                        <View style={S.loadingBox}>
+                            <ActivityIndicator color={C.forest} size="large" />
+                            <Text style={S.loadingText}>Loading messages…</Text>
+                        </View>
+                    </View>
+                ) : (
+                    <FlatList
+                        ref={flatListRef}
+                        data={messages}
+                        renderItem={({ item }) => <MessageBubble item={item} />}
+                        keyExtractor={(item) => item._id}
+                        contentContainerStyle={[
+                            S.listContent,
+                            {
+                                paddingBottom:
+                                    keyboardHeight > 0
+                                        ? keyboardHeight + 90
+                                        : 90,
+                            },
+                        ]}
+                        showsVerticalScrollIndicator={false}
+                        onEndReachedThreshold={0.1}
+                        maxToRenderPerBatch={15}
+                        windowSize={10}
+                        initialNumToRender={20}
+                        ListHeaderComponent={
+                            loadingOlder ? (
+                                <View style={S.loadingOlder}>
+                                    <ActivityIndicator
+                                        color={C.forest}
+                                        size="small"
+                                    />
+                                    <Text style={S.loadingOlderText}>
+                                        Loading older…
+                                    </Text>
+                                </View>
+                            ) : hasMore ? (
+                                <TouchableOpacity
+                                    style={S.loadMoreBtn}
+                                    onPress={loadOlderMessages}
+                                    activeOpacity={0.8}>
+                                    <Feather
+                                        name="chevrons-up"
+                                        size={16}
+                                        color={C.forest}
+                                    />
+                                    <Text style={S.loadMoreText}>
+                                        Load older messages
+                                    </Text>
+                                </TouchableOpacity>
+                            ) : (
+                                <DateSep label="Today" />
+                            )
+                        }
+                        onScroll={({ nativeEvent }) => {
+                            if (
+                                nativeEvent.contentOffset.y < 50 &&
+                                hasMore &&
+                                !loadingOlder &&
+                                initialScrollDone.current
+                            )
+                                loadOlderMessages();
+                        }}
+                        scrollEventThrottle={400}
+                    />
+                )}
+
+                {/* ── INPUT AREA ─────────────────────────────────────── */}
+                <View
+                    style={[
+                        S.inputArea,
+                        { paddingBottom: Math.max(insets.bottom, 12) },
+                    ]}>
+                    {/* Template picker */}
+                    <AnimatePresence>
+                        {showTemplates && (
+                            <MotiView
+                                from={{
+                                    opacity: 0,
+                                    translateY: 12,
+                                    scale: 0.96,
+                                }}
+                                animate={{
+                                    opacity: 1,
+                                    translateY: 0,
+                                    scale: 1,
+                                }}
+                                exit={{
+                                    opacity: 0,
+                                    translateY: 12,
+                                    scale: 0.96,
+                                }}
+                                style={S.templatePicker}>
+                                <View style={S.templatePickerHeader}>
+                                    <Ionicons
+                                        name="flash-outline"
+                                        size={13}
+                                        color={C.forest}
+                                    />
+                                    <Text style={S.templatePickerTitle}>
+                                        Quick Templates
+                                    </Text>
+                                </View>
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    contentContainerStyle={S.templateList}>
+                                    {filteredTemplates.map((item) => (
+                                        <TouchableOpacity
+                                            key={item._id}
+                                            style={S.templateChip}
+                                            onPress={() => selectTemplate(item)}
+                                            activeOpacity={0.8}>
+                                            <View style={S.templateChipIcon}>
+                                                <Text
+                                                    style={
+                                                        S.templateChipInitial
+                                                    }>
+                                                    {item.name[0]}
+                                                </Text>
+                                            </View>
+                                            <View>
+                                                <Text
+                                                    style={
+                                                        S.templateChipKeyword
+                                                    }>
+                                                    @{item.keyword}
+                                                </Text>
+                                                <Text
+                                                    style={S.templateChipName}
+                                                    numberOfLines={1}>
+                                                    {item.name}
+                                                </Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
+                            </MotiView>
+                        )}
+                    </AnimatePresence>
+
+                    {/* Input row */}
+                    <View style={S.inputRow}>
+                        {/* Attach button */}
+                        <TouchableOpacity
+                            style={S.attachBtn}
+                            onPress={pickDocument}
+                            activeOpacity={0.8}>
+                            <Feather
+                                name="paperclip"
+                                size={20}
+                                color={C.brown}
+                            />
+                        </TouchableOpacity>
+
+                        {/* Text input box */}
+                        <View style={S.inputBox}>
+                            <TextInput
+                                style={S.inputField}
+                                placeholder="Message…"
+                                placeholderTextColor={C.sand}
+                                multiline
+                                maxLength={2000}
+                                value={inputText}
+                                onChangeText={handleTextChange}
+                            />
+                            {/* Image picker */}
+                            <TouchableOpacity
+                                style={S.inputIconBtn}
+                                onPress={pickImage}
+                                activeOpacity={0.8}>
+                                <Feather name="image" size={18} color={C.tan} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Send / Mic button */}
+                        <TouchableOpacity
+                            style={[S.sendBtn, hasText && S.sendBtnActive]}
+                            onPress={() => handleSend()}
+                            disabled={sending}
+                            activeOpacity={0.85}>
+                            {sending ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <Ionicons
+                                    name={hasText ? "send" : "mic-outline"}
+                                    size={hasText ? 18 : 20}
+                                    color="#fff"
+                                    style={hasText && { marginLeft: 2 }}
+                                />
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </KeyboardAvoidingView>
+        </View>
+    );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.bg },
-  innerContainer: { flex: 1 },
-  header: {
-    marginTop: Platform.OS === "android" ? StatusBar.currentHeight : 0,
-    height: 70,
-    backgroundColor: COLORS.white,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F1F5F9",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-  },
-  backBtn: { marginRight: 12 },
-  headerMain: { flex: 1, flexDirection: "row", alignItems: "center" },
-  avatarContainer: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: COLORS.primary + "15",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 10,
-  },
-  avatarText: { fontWeight: "bold", fontSize: 18, color: COLORS.primary },
-  activeDot: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#10B981",
-    borderWidth: 2,
-    borderColor: COLORS.white,
-  },
-  headerInfo: { flex: 1 },
-  headerName: { fontSize: 17, fontWeight: "700", color: COLORS.textMain },
-  headerStatus: { fontSize: 12, color: "#10B981", fontWeight: "600" },
-  headerActions: { flexDirection: "row" },
-  actionIcon: { marginLeft: 15 },
+// ─── STYLES ──────────────────────────────────────────────────────────────────
+const S = StyleSheet.create({
+    root: { flex: 1, backgroundColor: C.bg },
 
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  listContent: {
-    paddingVertical: 20,
-    paddingHorizontal: 16,
-    paddingBottom: 100,
-  },
+    // ── Header ──
+    header: {
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        backgroundColor: C.bg,
+        borderBottomWidth: 1,
+        borderBottomColor: C.linen,
+        gap: 10,
+        shadowColor: C.shadow,
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 2,
+    },
+    headerBack: {
+        width: 40,
+        height: 40,
+        borderRadius: 13,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: C.surface2,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    headerIdentity: {
+        flex: 1,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+    },
+    headerAvatarWrap: { position: "relative" },
+    onlineDot: {
+        position: "absolute",
+        bottom: -1,
+        right: -1,
+        width: 11,
+        height: 11,
+        borderRadius: 6,
+        backgroundColor: C.online,
+        borderWidth: 2,
+        borderColor: C.bg,
+    },
+    headerName: {
+        fontSize: 15,
+        fontWeight: "800",
+        color: C.espresso,
+        letterSpacing: -0.2,
+    },
+    headerStatus: { fontSize: 11, fontWeight: "600", color: C.tan },
+    headerActions: { flexDirection: "row", gap: 8 },
+    headerActionBtn: {
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: C.surface2,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
 
-  msgContainer: { marginVertical: 6, maxWidth: "85%" },
-  msgOwner: { alignSelf: "flex-end" },
-  msgCustomer: { alignSelf: "flex-start" },
+    // ── Chat background ──
+    chatBg: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: C.chatBg,
+    },
+    bgPattern: {
+        ...StyleSheet.absoluteFillObject,
+        opacity: 0.25,
+    },
 
-  bubble: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  bubbleOwner: {
-    backgroundColor: COLORS.primary,
-    borderBottomRightRadius: 4,
-  },
-  bubbleCustomer: {
-    backgroundColor: COLORS.white,
-    borderBottomLeftRadius: 4,
-  },
-  customerShadow: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    elevation: 2,
-  },
+    // ── Loading ──
+    center: { flex: 1, justifyContent: "center", alignItems: "center" },
+    loadingBox: {
+        backgroundColor: C.surface,
+        borderRadius: 20,
+        padding: 28,
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: C.border,
+        shadowColor: C.shadow,
+        shadowOpacity: 0.08,
+        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 5 },
+        elevation: 4,
+    },
+    loadingText: {
+        color: C.tan,
+        fontWeight: "700",
+        marginTop: 12,
+        fontSize: 13,
+    },
 
-  msgText: { fontSize: 16, lineHeight: 24 },
-  textWhite: { color: COLORS.white },
-  textDark: { color: COLORS.textMain },
-  textWhiteMuted: { color: "rgba(255,255,255,0.7)" },
+    // ── Message list ──
+    listContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 100 },
 
-  msgImage: { width: 240, height: 240, borderRadius: 12, marginBottom: 5 },
-  docMsg: { flexDirection: "row", alignItems: "center", minWidth: 180 },
-  docIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  docSize: { fontSize: 11, marginTop: 2 },
+    // ── Message row ──
+    msgRow: { marginVertical: 3, flexDirection: "row", alignItems: "flex-end" },
+    msgRowOut: { justifyContent: "flex-end" },
+    msgRowIn: { justifyContent: "flex-start", gap: 6 },
 
-  audioMsg: {
-    flexDirection: "row",
-    alignItems: "center",
-    minWidth: 200,
-    paddingVertical: 5,
-  },
-  audioWaveform: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginHorizontal: 10,
-    flex: 1,
-  },
-  waveLine: { width: 3, borderRadius: 1.5, marginHorizontal: 1 },
-  audioDuration: { fontSize: 12 },
+    // ── Incoming avatar ──
+    incomingAvatar: { marginBottom: 2 },
+    incomingAvatarInner: {
+        width: 28,
+        height: 28,
+        borderRadius: 9,
+        backgroundColor: "#E8F5E9",
+        justifyContent: "center",
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: "#C8E6C9",
+    },
 
-  msgMeta: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    marginTop: 4,
-  },
-  timestamp: { fontSize: 10 },
+    // ── Bubbles ──
+    bubble: {
+        borderRadius: 18,
+        paddingHorizontal: 13,
+        paddingVertical: 9,
+        shadowColor: C.shadow,
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 2,
+    },
+    bubbleOut: {
+        backgroundColor: C.bubbleOut,
+        borderBottomRightRadius: 4,
+        shadowColor: C.forestDark,
+        shadowOpacity: 0.18,
+    },
+    bubbleIn: {
+        backgroundColor: C.bubbleIn,
+        borderBottomLeftRadius: 4,
+    },
 
-  inputContainer: { backgroundColor: "transparent" },
-  floatingInputContainer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    padding: 12,
-    paddingBottom: Platform.OS === "ios" ? 30 : 45,
-    backgroundColor: "transparent",
-  },
-  plusBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 16,
-    backgroundColor: COLORS.textMain,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 10,
-  },
-  inputWrapper: {
-    flex: 1,
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 15,
-    paddingVertical: 4,
-    minHeight: 50,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    elevation: 4,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: COLORS.textMain,
-    paddingTop: Platform.OS === "ios" ? 12 : 0,
-  },
-  iconInInput: { marginLeft: 10 },
-  sendBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 16,
-    backgroundColor: COLORS.primary,
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 10,
-  },
-  micBtn: { backgroundColor: COLORS.primaryLight },
-  loadingOlder: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 12,
-    marginBottom: 10,
-  },
-  loadingOlderText: {
-    marginLeft: 8,
-    fontSize: 13,
-    color: COLORS.textMuted,
-    fontWeight: "500",
-  },
-  loadMoreBtn: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 10,
-    marginBottom: 10,
-    backgroundColor: COLORS.primary + "10",
-    borderRadius: 12,
-    alignSelf: "center",
-    paddingHorizontal: 20,
-  },
-  loadMoreText: {
-    marginLeft: 6,
-    fontSize: 13,
-    color: COLORS.primary,
-    fontWeight: "600",
-  },
+    // ── Message text ──
+    msgText: { fontSize: 15, lineHeight: 22 },
+    msgTextOut: { color: "#FFFFFF" },
+    msgTextIn: { color: C.espresso },
 
-  // TEMPLATE PICKER STYLES
-  templatePicker: {
-    backgroundColor: COLORS.white,
-    marginHorizontal: 12,
-    borderRadius: 16,
-    marginBottom: 8,
-    paddingVertical: 10,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
+    // ── Meta (time + status) ──
+    msgMeta: {
+        flexDirection: "row",
+        justifyContent: "flex-end",
+        alignItems: "center",
+        marginTop: 4,
+        gap: 2,
+    },
+    timestamp: { fontSize: 10, fontWeight: "600" },
+
+    // ── Image ──
+    msgImage: { width: 220, height: 200, borderRadius: 14 },
+    metaOverImage: {
+        position: "absolute",
+        bottom: 8,
+        right: 10,
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "rgba(0,0,0,0.38)",
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 8,
+    },
+
+    // ── Audio ──
+    audioMsg: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        minWidth: 190,
+        paddingVertical: 4,
+    },
+    audioPlayBtn: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        backgroundColor: "rgba(255,255,255,0.15)",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    waveformWrap: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 2,
+        flex: 1,
+    },
+    waveLine: { width: 3, borderRadius: 1.5 },
+    audioDuration: { fontSize: 11, fontWeight: "600" },
+
+    // ── Document ──
+    docMsg: {
+        flexDirection: "row",
+        alignItems: "center",
+        minWidth: 180,
+        paddingVertical: 2,
+    },
+    docIcon: {
+        width: 38,
+        height: 38,
+        borderRadius: 11,
+        backgroundColor: C.forestSoft,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    docName: { fontSize: 14, fontWeight: "700" },
+    docType: { fontSize: 11, fontWeight: "600", marginTop: 2 },
+
+    // ── Date separator ──
+    dateSep: {
+        flexDirection: "row",
+        alignItems: "center",
+        marginVertical: 16,
+        gap: 10,
+    },
+    dateSepLine: { flex: 1, height: 1, backgroundColor: C.linen },
+    dateSepChip: {
+        backgroundColor: "rgba(196,168,130,0.25)",
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: C.linen,
+    },
+    dateSepText: { fontSize: 11, color: C.tan, fontWeight: "700" },
+
+    // ── Load older ──
+    loadingOlder: {
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+        paddingVertical: 12,
+        gap: 8,
+    },
+    loadingOlderText: { fontSize: 13, color: C.tan, fontWeight: "600" },
+    loadMoreBtn: {
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+        paddingVertical: 9,
+        paddingHorizontal: 18,
+        gap: 6,
+        backgroundColor: C.forestSoft,
+        borderRadius: 20,
+        alignSelf: "center",
+        borderWidth: 1,
+        borderColor: C.forestBorder,
+        marginBottom: 12,
+    },
+    loadMoreText: { fontSize: 13, color: C.forest, fontWeight: "700" },
+
+    // ── Input area ──
+    inputArea: {
+        backgroundColor: C.bg,
+        borderTopWidth: 1,
+        borderTopColor: C.linen,
+        paddingTop: 10,
+        paddingHorizontal: 12,
+    },
+
+    // ── Template picker ──
+    templatePicker: {
+        backgroundColor: C.surface,
+        borderRadius: 18,
+        marginBottom: 10,
+        paddingVertical: 12,
+        borderWidth: 1,
+        borderColor: C.border,
+        shadowColor: C.shadow,
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
         shadowOffset: { width: 0, height: -4 },
+        elevation: 6,
+    },
+    templatePickerHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        paddingHorizontal: 14,
+        marginBottom: 10,
+    },
+    templatePickerTitle: {
+        fontSize: 11,
+        fontWeight: "900",
+        color: C.tan,
+        textTransform: "uppercase",
+        letterSpacing: 0.8,
+    },
+    templateList: { paddingHorizontal: 12, gap: 10 },
+    templateChip: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        backgroundColor: C.surface2,
+        padding: 10,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: C.border,
+        minWidth: 140,
+    },
+    templateChipIcon: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        backgroundColor: C.forestSoft,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    templateChipInitial: { fontSize: 13, fontWeight: "900", color: C.forest },
+    templateChipKeyword: { fontSize: 13, fontWeight: "800", color: C.espresso },
+    templateChipName: {
+        fontSize: 11,
+        color: C.tan,
+        fontWeight: "600",
+        maxWidth: 90,
+    },
+
+    // ── Input row ──
+    inputRow: {
+        flexDirection: "row",
+        alignItems: "flex-end",
+        gap: 8,
+    },
+    attachBtn: {
+        width: 44,
+        height: 44,
+        borderRadius: 14,
+        backgroundColor: C.surface2,
+        borderWidth: 1,
+        borderColor: C.border,
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 1,
+    },
+    inputBox: {
+        flex: 1,
+        flexDirection: "row",
+        alignItems: "flex-end",
+        backgroundColor: C.inputBg,
+        borderRadius: 22,
+        borderWidth: 1,
+        borderColor: C.inputBorder,
+        paddingLeft: 16,
+        paddingRight: 6,
+        paddingVertical: 6,
+        minHeight: 46,
+        shadowColor: C.shadow,
+        shadowOpacity: 0.05,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+        elevation: 2,
+    },
+    inputField: {
+        flex: 1,
+        fontSize: 15,
+        color: C.espresso,
+        paddingTop: Platform.OS === "ios" ? 6 : 2,
+        paddingBottom: Platform.OS === "ios" ? 6 : 2,
+        maxHeight: 120,
+        lineHeight: 22,
+    },
+    inputIconBtn: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    sendBtn: {
+        width: 46,
+        height: 46,
+        borderRadius: 15,
+        backgroundColor: C.tan,
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 1,
+        shadowColor: C.shadow,
         shadowOpacity: 0.1,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 3 },
+        elevation: 3,
+    },
+    sendBtnActive: {
+        backgroundColor: C.forest,
+        shadowColor: C.forestDark,
+        shadowOpacity: 0.3,
         shadowRadius: 10,
-      },
-      android: {
-        elevation: 10,
-      },
-    }),
-  },
-  templateHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 15,
-    marginBottom: 10,
-    gap: 6,
-  },
-  templateHeaderText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: COLORS.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  templateList: {
-    paddingHorizontal: 12,
-    gap: 12,
-  },
-  templateItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.bg,
-    padding: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#F1F5F9",
-    minWidth: 140,
-    gap: 10,
-  },
-  templateIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: COLORS.primary + "15",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  templateInitial: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: COLORS.primary,
-  },
-  templateItemName: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: COLORS.textMain,
-  },
-  templateItemLabel: {
-    fontSize: 11,
-    color: COLORS.textMuted,
-    fontWeight: "600",
-    width: 80,
-  },
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 5,
+    },
 });

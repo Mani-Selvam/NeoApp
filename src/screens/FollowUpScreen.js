@@ -987,12 +987,20 @@ export default function DashboardScreen({ navigation, route }) {
                                 navigation.navigate("Enquiry");
                             }}
                         />
-                        <MenuItem
-                            icon="call-outline"
-                            label="Follow-ups"
-                            onPress={() => setMenuVisible(false)}
-                            active
-                        />
+	                        <MenuItem
+	                            icon="call-outline"
+	                            label="Follow-ups"
+	                            onPress={() => setMenuVisible(false)}
+	                            active
+	                        />
+	                        <MenuItem
+	                            icon="mail-outline"
+	                            label="Email"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("EmailScreen");
+	                            }}
+	                        />
                         {user?.role !== "Staff" && (
                             <MenuItem
                                 icon="link-outline"
@@ -1039,7 +1047,22 @@ export default function DashboardScreen({ navigation, route }) {
                                 navigation.navigate("CallLog");
                             }}
                         />
-                        <MenuItem icon="settings-outline" label="Settings" />
+	                        <MenuItem
+	                            icon="settings-outline"
+	                            label="WhatsApp Settings"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("WhatsAppSettings");
+	                            }}
+	                        />
+	                        <MenuItem
+	                            icon="mail-open-outline"
+	                            label="Email Settings"
+	                            onPress={() => {
+	                                setMenuVisible(false);
+	                                navigation.navigate("EmailSettingsScreen");
+	                            }}
+	                        />
                         <MenuItem
                             icon="log-out-outline"
                             label="Logout"
