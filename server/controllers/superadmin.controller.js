@@ -9,6 +9,7 @@ const Coupon = require("../models/Coupon");
 const CompanySubscription = require("../models/CompanySubscription");
 const CompanyPlanOverride = require("../models/CompanyPlanOverride");
 const { resolveEffectivePlan } = require("../services/planResolver");
+const { clearCompanyPlanCache } = require("../middleware/planGuard");
 	const {
 	  getUsdInrRate,
 	  setUsdInrRate,
@@ -168,7 +169,16 @@ exports.getCompanies = async (_req, res) => {
               $filter: {
                 input: "$users",
                 as: "u",
-                cond: { $in: ["$$u.role", ["Staff", "staff", "Admin", "admin"]] },
+                cond: { $in: ["$$u.role", ["Staff", "staff"]] },
+              },
+            },
+          },
+          adminCount: {
+            $size: {
+              $filter: {
+                input: "$users",
+                as: "u",
+                cond: { $in: ["$$u.role", ["Admin", "admin"]] },
               },
             },
           },
@@ -198,6 +208,7 @@ exports.getCompanies = async (_req, res) => {
           status: 1,
           createdAt: 1,
           staffCount: 1,
+          adminCount: 1,
           ownerEmail: "$owner.email",
           subscriptionStatus: "$activeSub.status",
           planId: "$activeSub.planId",
@@ -420,12 +431,39 @@ exports.updateUserRole = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid role" });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.params.userId,
-      { $set: { role } },
-      { returnDocument: "after" },
-    ).select("-password");
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    const userDoc = await User.findById(req.params.userId).select("-password");
+    if (!userDoc) return res.status(404).json({ success: false, message: "User not found" });
+
+    const nextRole = String(role || "").toLowerCase();
+    const currentRole = String(userDoc.role || "").toLowerCase();
+    const companyId = userDoc.company_id ? String(userDoc.company_id) : "";
+
+    if (nextRole === "admin" && currentRole !== "admin" && companyId) {
+      const resolved = await resolveEffectivePlan(companyId);
+      if (!resolved?.hasPlan) {
+        return res.status(403).json({
+          success: false,
+          code: "NO_ACTIVE_PLAN",
+          message: "No active plan for this company",
+        });
+      }
+
+      const limit = Number(resolved.plan?.maxAdmins || 0);
+      const current = Number(resolved.plan?.adminsUsed || 0);
+      if (limit <= 0 || current >= limit) {
+        return res.status(403).json({
+          success: false,
+          code: "ADMIN_LIMIT_REACHED",
+          message: "Admin limit reached for this company plan",
+          limit,
+          current,
+        });
+      }
+    }
+
+    userDoc.role = role;
+    await userDoc.save();
+    const user = userDoc.toObject ? userDoc.toObject() : userDoc;
 
     await logAction(req, "USER_ROLE_UPDATED", { userId: req.params.userId, role });
     res.json({ success: true, user });
@@ -492,6 +530,14 @@ exports.updatePlan = async (req, res) => {
       { returnDocument: "after", runValidators: true },
     );
     if (!plan) return res.status(404).json({ success: false, message: "Plan not found" });
+
+    const impactedSubscriptions = await CompanySubscription.find({ planId: plan._id })
+      .select("companyId")
+      .lean();
+    impactedSubscriptions.forEach((subscription) => {
+      clearCompanyPlanCache(subscription.companyId);
+    });
+
     await logAction(req, "PLAN_UPDATED", { planId: plan._id, changes: updates });
     res.json(plan);
   } catch (error) {
@@ -798,7 +844,7 @@ exports.getSubscriptions = async (_req, res) => {
   try {
     const subscriptions = await CompanySubscription.find()
       .populate("companyId", "name code status")
-      .populate("planId", "name code basePrice")
+      .populate("planId", "name code basePrice maxAdmins maxStaff extraAdminPrice extraStaffPrice")
       .populate("couponId", "code discountType discountValue")
       .sort({ createdAt: -1 })
       .lean();
@@ -838,6 +884,8 @@ exports.assignSubscription = async (req, res) => {
       manualOverrideExpiry,
       couponCode,
       notes,
+      allocatedAdmins,
+      allocatedStaff,
     } = req.body;
 
     if (!companyId || !planId) {
@@ -880,6 +928,21 @@ exports.assignSubscription = async (req, res) => {
     const defaultEnd = new Date(start);
     defaultEnd.setDate(defaultEnd.getDate() + (plan.trialDays || 30));
 
+    const safeAllocatedAdmins = Math.max(
+      Number(allocatedAdmins || 0),
+      Number(plan.maxAdmins || 0),
+    );
+    const safeAllocatedStaff = Math.max(
+      Number(allocatedStaff || 0),
+      Number(plan.maxStaff || 0),
+    );
+    const extraAdminsPurchased = Math.max(0, safeAllocatedAdmins - Number(plan.maxAdmins || 0));
+    const extraStaffPurchased = Math.max(0, safeAllocatedStaff - Number(plan.maxStaff || 0));
+    const finalPrice =
+      Number(plan.basePrice || 0) +
+      extraAdminsPurchased * Number(plan.extraAdminPrice || 0) +
+      extraStaffPurchased * Number(plan.extraStaffPrice || 0);
+
     const sub = await CompanySubscription.create({
       companyId,
       planId,
@@ -889,7 +952,13 @@ exports.assignSubscription = async (req, res) => {
       endDate: parseDate(endDate, defaultEnd),
       trialUsed,
       manualOverrideExpiry: parseDate(manualOverrideExpiry, null),
-      finalPrice: plan.basePrice,
+      finalPrice,
+      allocatedAdmins: safeAllocatedAdmins,
+      allocatedStaff: safeAllocatedStaff,
+      extraAdminsPurchased,
+      extraStaffPurchased,
+      extraAdminPrice: Number(plan.extraAdminPrice || 0),
+      extraStaffPrice: Number(plan.extraStaffPrice || 0),
       notes,
     });
 

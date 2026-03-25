@@ -53,6 +53,8 @@ export default function Subscriptions() {
           company: s.companyId?.name || "-",
           companyStatus: s.companyId?.status || "",
           plan: s.planId?.name || "-",
+          allocatedAdmins: Number(s.allocatedAdmins || s.planId?.maxAdmins || 0),
+          allocatedStaff: Number(s.allocatedStaff || s.planId?.maxStaff || 0),
           status: s.status || "Unknown",
           startDate: formatDate(s.startDate),
           endDate: formatDate(s.endDate),
@@ -69,6 +71,10 @@ export default function Subscriptions() {
 
   useEffect(() => {
     load();
+    const intervalId = setInterval(() => {
+      load();
+    }, 10000);
+    return () => clearInterval(intervalId);
   }, []);
 
   const filteredRows = useMemo(() => {
@@ -124,6 +130,16 @@ export default function Subscriptions() {
         ),
     },
     { key: "plan", label: "Plan" },
+    {
+      key: "allocatedAdmins",
+      label: "Admins",
+      render: (value) => value,
+    },
+    {
+      key: "allocatedStaff",
+      label: "Staff",
+      render: (value) => value,
+    },
     {
       key: "status",
       label: "Status",

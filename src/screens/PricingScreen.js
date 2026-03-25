@@ -1,719 +1,645 @@
 import React, { useCallback, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Platform, ScrollView, StatusBar, StyleSheet,
+  Text, TouchableOpacity, useWindowDimensions, View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect } from "@react-navigation/native";
-import { MotiView } from "moti";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { getBillingPlans } from "../services/userService";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { PricingSkeleton } from "../components/skeleton/screens";
+import { SkeletonPulse } from "../components/skeleton/Skeleton";
+import { useAuth } from "../contexts/AuthContext";
+import { createRazorpayOrder, getBillingPlans } from "../services/userService";
 
-const C = {
-    bg: "#F2F4F8",
-    surface: "#FFFFFF",
-    text: "#0A0F1E",
-    textSub: "#3A4060",
-    muted: "#7C85A3",
-    border: "#E8ECF4",
-    primary: "#1A6BFF",
-    purple: "#7B61FF",
-    emerald: "#00C48C",
-    orange: "#FF9500",
-    rose: "#FF3B5C",
-    shadow: "rgba(10,15,30,0.10)",
+// ─── Design tokens ─────────────────────────────────────────────────────────────
+const T = {
+  bg:      "#F0F4FF",
+  card:    "#FFFFFF",
+  text:    "#0D1B2A",
+  sub:     "#374151",
+  muted:   "#64748B",
+  light:   "#94A3B8",
+  border:  "#E2E8F0",
+  divider: "#F1F5F9",
+  shadow:  "#1E293B",
+  // each tier has its own gradient pair + accent dot + soft bg
+  free:       { a:"#16A34A", b:"#0891B2", dot:"#16A34A", soft:"#F0FDF4" },
+  basic:      { a:"#0D9488", b:"#0369A1", dot:"#0D9488", soft:"#F0FDFA" },
+  pro:        { a:"#2563EB", b:"#7C3AED", dot:"#2563EB", soft:"#EFF6FF" },
+  enterprise: { a:"#EA580C", b:"#DC2626", dot:"#EA580C", soft:"#FFF7ED" },
 };
 
-const formatFromUsd = (usdAmount, displayCurrency, usdInrRate) => {
-    const usd = Number(usdAmount || 0);
-    const c =
-        String(displayCurrency || "INR").toUpperCase() === "USD" ? "USD" : "INR";
-    const rate = Number(usdInrRate || 0);
+// ─── Responsive scale ──────────────────────────────────────────────────────────
+const useScale = () => {
+  const { width, height } = useWindowDimensions();
+  return useMemo(() => {
+    const isTablet = width >= 768;
+    const isLarge  = width >= 414;
+    const base     = isTablet ? 16 : isLarge ? 15 : 14;
+    return {
+      isTablet, width, height,
+      f:  { xs:base-3, sm:base-1, base, md:base+1, lg:base+2, xl:base+5, xxl:base+10 },
+      sp: { xs:4, sm:6, md:10, lg:16, xl:24 },
+      hPad: isTablet ? 24 : 16,
+      r:    isTablet ? 20 : 16,
+    };
+  }, [width, height]);
+};
 
-    if (c === "USD") return `$${usd.toFixed(2)}`;
-    const inr = Number.isFinite(rate) && rate > 0 ? usd * rate : usd;
-    return `₹${Math.round(inr).toLocaleString("en-IN")}`;
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+const fmtPrice = (usd, cur, rate) => {
+  const n = Number(usd || 0);
+  if (String(cur || "INR").toUpperCase() === "USD") return `$${n.toFixed(2)}`;
+  const r = Number(rate || 0);
+  const inr = Number.isFinite(r) && r > 0 ? n * r : n;
+  return `₹${Math.round(inr).toLocaleString("en-IN")}`;
 };
 
 const getTier = (plan) => {
-    const code = String(plan?.code || "").toLowerCase();
-    const name = String(plan?.name || "").toLowerCase();
-    const raw = `${code} ${name}`;
-    if (raw.includes("enter")) return "enterprise";
-    if (raw.includes("pro")) return "pro";
-    if (raw.includes("basic")) return "basic";
-    if (raw.includes("free")) return "free";
-    return "basic";
+  const raw = `${plan?.code || ""} ${plan?.name || ""}`.toLowerCase();
+  if (raw.includes("enter")) return "enterprise";
+  if (raw.includes("pro"))   return "pro";
+  if (raw.includes("basic")) return "basic";
+  return "free";
 };
 
-const isEnterprise = (plan) => getTier(plan) === "enterprise";
+const TIER_LABELS = { free:"FREE", basic:"BASIC", pro:"PRO", enterprise:"ENTERPRISE" };
 
-const getAccent = (tier) => {
-    if (tier === "pro") return { colors: [C.primary, C.purple] };
-    if (tier === "enterprise") return { colors: [C.orange, "#FF5E3A"] };
-    if (tier === "free") return { colors: ["#16A34A", "#0EA5E9"] };
-    return { colors: [C.emerald, "#00A67A"] };
+const TIER_SUBTITLES = {
+  free:       "Perfect to get started",
+  basic:      "Essential features included",
+  pro:        "Best for growing teams",
+  enterprise: "Custom pricing for large teams",
 };
 
-const Badge = ({ label, tone = "neutral" }) => {
-    const toneMap = {
-        neutral: { bg: "#EEF2FF", fg: C.primary },
-        pro: { bg: "rgba(123,97,255,0.14)", fg: C.purple },
-        warn: { bg: "rgba(255,149,0,0.14)", fg: C.orange },
-        danger: { bg: "rgba(255,59,92,0.12)", fg: C.rose },
-        success: { bg: "rgba(0,196,140,0.14)", fg: C.emerald },
-    };
-    const t = toneMap[tone] || toneMap.neutral;
-    return (
-        <View style={[S.badge, { backgroundColor: t.bg }]}>
-            <Text style={[S.badgeText, { color: t.fg }]}>{label}</Text>
-        </View>
-    );
+const getFeatures = (plan) => {
+  const tier = getTier(plan);
+  const rows = [
+    { icon:"people-outline",             label:`${plan?.maxStaff||0} staff members` },
+    { icon:"shield-checkmark-outline",   label:`${plan?.maxAdmins||0} admin account${(plan?.maxAdmins||0)!==1?"s":""}` },
+    ...(plan?.trialDays > 0 ? [{ icon:"time-outline", label:`${plan.trialDays}-day free trial` }] : []),
+    { icon:"people-circle-outline",      label:"Enquiry management" },
+    { icon:"call-outline",               label:"Follow-up & call tracking" },
+    { icon:"bar-chart-outline",          label:"Analytics & reports" },
+    ...( ["pro","enterprise"].includes(tier) ? [
+      { icon:"chatbubble-ellipses-outline", label:"WhatsApp & email integration" },
+      { icon:"repeat-outline",             label:"Auto-call scheduler" },
+      { icon:"notifications-outline",      label:"Smart follow-up reminders" },
+    ] : []),
+    ...( tier === "enterprise" ? [
+      { icon:"cloud-upload-outline",  label:"Custom data export" },
+      { icon:"headset-outline",       label:"Dedicated account manager" },
+      { icon:"key-outline",           label:"Custom SLA & contract" },
+      { icon:"git-branch-outline",    label:"API & webhook access" },
+    ] : []),
+  ];
+  return rows;
 };
 
-const Metric = ({ icon, label }) => (
-    <View style={S.metric}>
-        <Ionicons name={icon} size={14} color={C.muted} />
-        <Text style={S.metricText} numberOfLines={1}>
-            {label}
-        </Text>
-    </View>
-);
+// ─── Plan card ─────────────────────────────────────────────────────────────────
+const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
+  const [open, setOpen] = useState(false);
+  const tier   = getTier(plan);
+  const col    = T[tier] || T.basic;
+  const isEntr = tier === "enterprise";
+  const feats  = getFeatures(plan);
+  const innerR = Math.max(sc.r - 2, 0); // inner radius when border=2
 
-const PlanCard = ({ plan, selected, onSelect, displayPrice }) => {
-    const tier = getTier(plan);
-    const accent = getAccent(tier);
-    const recommended = tier === "pro";
-    const enterprise = tier === "enterprise";
+  return (
+    // Outer isolation wrapper — padding ensures the colored border of this
+    // card never visually merges with the next card below it
+    <View style={{ marginBottom: 16 }}>
+      <View style={[
+        PCS.card,
+        { borderRadius: sc.r },
+        selected
+          ? { borderColor: col.dot, borderWidth: 2 }
+          : { borderColor: T.border, borderWidth: 1 },
+      ]}>
 
-    const borderColors = selected
-        ? accent.colors
-        : [C.border, C.border];
-
-    const title = plan?.name || "Plan";
-    const subtitle = enterprise
-        ? "Custom plan for teams"
-        : "Everything you need to grow";
-
-    const cta = enterprise ? "Contact sales" : "Select plan";
-
-    return (
+        {/* ── Gradient header — each tier gets a unique color pair ── */}
         <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => onSelect(plan.id)}
-            style={S.planTap}>
-            <LinearGradient
-                colors={borderColors}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={S.planBorder}>
-                <View style={S.planCard}>
-                    <View style={S.planTopRow}>
-                        <View style={{ flex: 1, paddingRight: 10 }}>
-                            <View style={S.planTitleRow}>
-                                <Text style={S.planTitle} numberOfLines={1}>
-                                    {title}
-                                </Text>
-                                {recommended && <Badge label="Popular" tone="pro" />}
-                                {plan?.isOverrideApplied && (
-                                    <Badge label="Special price" tone="success" />
-                                )}
-                            </View>
-                            <Text style={S.planSubtitle} numberOfLines={2}>
-                                {subtitle}
-                            </Text>
-                        </View>
+          onPress={() => { Haptics.selectionAsync(); onSelect(plan.id); }}
+          activeOpacity={0.92}
+        >
+          <LinearGradient
+            colors={[col.a, col.b]}
+            start={{ x:0, y:0 }} end={{ x:1, y:1 }}
+            style={[PCS.header, {
+              borderTopLeftRadius:  selected ? innerR : sc.r - 1,
+              borderTopRightRadius: selected ? innerR : sc.r - 1,
+            }]}
+          >
+            {/* decorative large circle */}
+            <View style={PCS.hDecor} />
 
-                        <View style={S.radioWrap}>
-                            <View
-                                style={[
-                                    S.radioOuter,
-                                    selected && { borderColor: C.primary },
-                                ]}>
-                                {selected && <View style={S.radioInner} />}
-                            </View>
-                        </View>
-                    </View>
+            {/* Left col — tier pill + plan name + subtitle */}
+            <View style={{ flex: 1 }}>
+              <View style={PCS.tierPill}>
+                <Text style={[PCS.tierPillText, { fontSize: sc.f.xs - 1 }]}>
+                  {TIER_LABELS[tier]}
+                </Text>
+              </View>
+              <Text style={[PCS.hName, { fontSize: sc.f.xl, marginTop: 6 }]}>
+                {plan?.name || "Plan"}
+              </Text>
+              <Text style={[PCS.hSub, { fontSize: sc.f.xs }]}>
+                {TIER_SUBTITLES[tier]}
+              </Text>
+            </View>
 
-                    <View style={S.priceRow}>
-                        <Text style={S.priceText}>
-                            {enterprise ? "Custom" : displayPrice}
-                        </Text>
-                        {!enterprise && (
-                            <Text style={S.pricePeriod}>/ month</Text>
-                        )}
-                    </View>
-
-                    <View style={S.metricsRow}>
-                        {!!plan?.trialDays && plan.trialDays > 0 && (
-                            <Metric
-                                icon="time-outline"
-                                label={`${plan.trialDays} day trial`}
-                            />
-                        )}
-                        <Metric
-                            icon="shield-checkmark-outline"
-                            label={`Admins: ${plan?.maxAdmins || 0}`}
-                        />
-                        <Metric
-                            icon="people-outline"
-                            label={`Staff: ${plan?.maxStaff || 0}`}
-                        />
-                    </View>
-
-                    <View style={S.planBottomRow}>
-                        <Text style={S.planHint}>
-                            Tap to {cta}
-                        </Text>
-                        <LinearGradient
-                            colors={accent.colors}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 1 }}
-                            style={S.planChip}>
-                            <Text style={S.planChipText}>
-                                {tier.toUpperCase()}
-                            </Text>
-                        </LinearGradient>
-                    </View>
-                </View>
-            </LinearGradient>
+            {/* Right col — radio + price */}
+            <View style={{ alignItems: "flex-end", gap: 10 }}>
+              <View style={[PCS.radio, selected && PCS.radioSelected]}>
+                {selected && <View style={PCS.radioDot} />}
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={[PCS.hPrice, { fontSize: sc.f.xl }]}>
+                  {isEntr ? "Custom" : displayPrice}
+                </Text>
+                {!isEntr && (
+                  <Text style={[PCS.hPer, { fontSize: sc.f.xs }]}>per month</Text>
+                )}
+              </View>
+            </View>
+          </LinearGradient>
         </TouchableOpacity>
-    );
+
+        {/* ── Stats row — tap anywhere to select ── */}
+        <TouchableOpacity
+          onPress={() => { Haptics.selectionAsync(); onSelect(plan.id); }}
+          activeOpacity={0.9}
+          style={[PCS.statsWrap, { paddingHorizontal: sc.sp.lg, paddingVertical: sc.sp.md }]}
+        >
+          <View style={PCS.statsRow}>
+            {[
+              { num: plan?.maxStaff  || 0,   label: "Staff" },
+              { num: plan?.maxAdmins || 0,   label: "Admins" },
+              { num: plan?.trialDays > 0 ? plan.trialDays : "—", label: "Trial days" },
+            ].map((s, i) => (
+              <React.Fragment key={s.label}>
+                {i > 0 && <View style={PCS.statDiv} />}
+                <View style={[PCS.statBox, { backgroundColor: col.soft }]}>
+                  <Text style={[PCS.statNum, { fontSize: sc.f.lg, color: col.dot }]}>
+                    {s.num}
+                  </Text>
+                  <Text style={[PCS.statLabel, { fontSize: sc.f.xs - 1 }]}>{s.label}</Text>
+                </View>
+              </React.Fragment>
+            ))}
+            {plan?.isOverrideApplied && (
+              <>
+                <View style={PCS.statDiv} />
+                <View style={[PCS.statBox, { backgroundColor: "#F0FDF4" }]}>
+                  <Ionicons name="pricetag-outline" size={sc.f.md} color="#059669" />
+                  <Text style={[PCS.statLabel, { fontSize: sc.f.xs - 1, color: "#059669" }]}>
+                    Special
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {/* ── Expand toggle ── */}
+        <TouchableOpacity
+          onPress={() => setOpen(o => !o)}
+          activeOpacity={0.8}
+          style={[PCS.expandRow, { paddingHorizontal: sc.sp.lg }]}
+        >
+          <Text style={[PCS.expandLabel, { fontSize: sc.f.sm, color: col.dot }]}>
+            {open ? "Hide features" : `View all ${feats.length} features`}
+          </Text>
+          <View style={[PCS.expandChevron, { backgroundColor: col.soft }]}>
+            <Ionicons
+              name={open ? "chevron-up" : "chevron-down"}
+              size={sc.f.sm}
+              color={col.dot}
+            />
+          </View>
+        </TouchableOpacity>
+
+        {/* ── Feature list — plain View, no animation ── */}
+        {open && (
+          <TouchableOpacity
+            onPress={() => { Haptics.selectionAsync(); onSelect(plan.id); }}
+            activeOpacity={0.95}
+            style={[PCS.featBox, {
+              marginHorizontal: sc.sp.lg,
+              marginBottom: sc.sp.md,
+              borderRadius: sc.r - 4,
+            }]}
+          >
+            {feats.map((f, i) => (
+              <View
+                key={i}
+                style={[
+                  PCS.featRow,
+                  i < feats.length - 1 && { borderBottomWidth: 1, borderBottomColor: T.divider },
+                ]}
+              >
+                <View style={[PCS.featIconBox, { backgroundColor: col.dot + "14" }]}>
+                  <Ionicons name={f.icon} size={sc.f.sm} color={col.dot} />
+                </View>
+                <Text style={[PCS.featText, { fontSize: sc.f.sm }]}>{f.label}</Text>
+                <Ionicons name="checkmark-circle" size={sc.f.md} color={col.dot} />
+              </View>
+            ))}
+          </TouchableOpacity>
+        )}
+
+        {/* ── Select button ── */}
+        <TouchableOpacity
+          onPress={() => { Haptics.selectionAsync(); onSelect(plan.id); }}
+          activeOpacity={0.88}
+          style={[
+            PCS.selBtn,
+            { marginHorizontal: sc.sp.lg, marginBottom: sc.sp.lg, borderRadius: sc.r - 4 },
+            selected
+              ? { backgroundColor: col.dot, borderColor: col.dot }
+              : { backgroundColor: "transparent", borderColor: col.dot },
+          ]}
+        >
+          {selected ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Ionicons name="checkmark-circle" size={sc.f.md} color="#fff" />
+              <Text style={[PCS.selBtnText, { fontSize: sc.f.sm, color: "#fff" }]}>
+                Selected
+              </Text>
+            </View>
+          ) : (
+            <Text style={[PCS.selBtnText, { fontSize: sc.f.sm, color: col.dot }]}>
+              {isEntr ? "Contact Sales" : "Select Plan"}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 };
 
-export default function PricingScreen({ navigation }) {
-    const insets = useSafeAreaInsets();
-    const [selectedId, setSelectedId] = useState(null);
-    const [pricingPlans, setPricingPlans] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [displayCurrency, setDisplayCurrency] = useState("INR");
-    const [usdInrRate, setUsdInrRate] = useState(83);
+const PCS = StyleSheet.create({
+  card:      { backgroundColor: T.card, overflow: "hidden",
+               shadowColor: T.shadow, shadowOffset:{width:0,height:4},
+               shadowOpacity:0.07, shadowRadius:14, elevation:3 },
+  header:    { padding:18, flexDirection:"row", alignItems:"flex-start",
+               justifyContent:"space-between", overflow:"hidden", position:"relative" },
+  hDecor:    { position:"absolute", top:-44, right:-44, width:140, height:140,
+               borderRadius:70, backgroundColor:"rgba(255,255,255,0.09)" },
+  tierPill:  { alignSelf:"flex-start", backgroundColor:"rgba(255,255,255,0.22)",
+               paddingHorizontal:9, paddingVertical:4, borderRadius:99,
+               borderWidth:1, borderColor:"rgba(255,255,255,0.32)" },
+  tierPillText: { color:"#fff", fontWeight:"900", letterSpacing:1.2 },
+  hName:     { color:"#fff", fontWeight:"900", letterSpacing:-0.4 },
+  hSub:      { color:"rgba(255,255,255,0.76)", fontWeight:"500", marginTop:3, maxWidth:160 },
+  radio:     { width:24, height:24, borderRadius:12, borderWidth:2,
+               borderColor:"rgba(255,255,255,0.5)", alignItems:"center", justifyContent:"center" },
+  radioSelected: { backgroundColor:"rgba(255,255,255,0.28)", borderColor:"#fff" },
+  radioDot:  { width:10, height:10, borderRadius:5, backgroundColor:"#fff" },
+  hPrice:    { color:"#fff", fontWeight:"900", letterSpacing:-0.5 },
+  hPer:      { color:"rgba(255,255,255,0.70)", fontWeight:"600", marginTop:2 },
 
-    const loadPlans = useCallback(async () => {
-        try {
-            setLoading(true);
-            const res = await getBillingPlans();
-            const rate = Number(res?.rates?.USD_INR || 83);
-            setUsdInrRate(rate);
+  statsWrap: { borderBottomWidth:1, borderBottomColor:T.divider },
+  statsRow:  { flexDirection:"row", alignItems:"stretch" },
+  statBox:   { flex:1, alignItems:"center", paddingVertical:11, gap:2, borderRadius:10 },
+  statDiv:   { width:1, backgroundColor:T.border, marginVertical:8 },
+  statNum:   { fontWeight:"900", letterSpacing:-0.5 },
+  statLabel: { color:T.muted, fontWeight:"600", textTransform:"uppercase", letterSpacing:0.4 },
 
-            const serverPlans = (res?.plans || []).map((p) => ({
-                id: p._id,
-                code: p.code,
-                name: p.name,
-                trialDays: Number(p.trialDays || 0),
-                maxAdmins: Number(p.maxAdmins || 0),
-                maxStaff: Number(p.maxStaff || 0),
-                basePriceUsd: Number(p.basePrice || 0),
-                isOverrideApplied: Boolean(p.isOverrideApplied),
-            }));
+  expandRow:    { flexDirection:"row", alignItems:"center", justifyContent:"space-between",
+                  paddingVertical:12, borderBottomWidth:1, borderBottomColor:T.divider },
+  expandLabel:  { fontWeight:"700" },
+  expandChevron:{ width:26, height:26, borderRadius:13, alignItems:"center", justifyContent:"center" },
 
-            setPricingPlans(serverPlans);
-            const effectiveId = res?.effectivePlan?.id || null;
-            setSelectedId(effectiveId || serverPlans[0]?.id || null);
-        } catch (_e) {
-            setPricingPlans([]);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+  featBox:      { backgroundColor:T.bg, borderWidth:1, borderColor:T.border, overflow:"hidden" },
+  featRow:      { flexDirection:"row", alignItems:"center", gap:10, paddingHorizontal:12, paddingVertical:11 },
+  featIconBox:  { width:30, height:30, borderRadius:15, alignItems:"center", justifyContent:"center" },
+  featText:     { flex:1, fontWeight:"600", color:T.sub },
 
-    useFocusEffect(
-        useCallback(() => {
-            loadPlans();
-        }, [loadPlans]),
-    );
-
-    const selectedPlan = useMemo(
-        () =>
-            pricingPlans.find((p) => String(p.id) === String(selectedId)) ||
-            null,
-        [pricingPlans, selectedId],
-    );
-
-    const getDisplayPrice = useCallback(
-        (plan) =>
-            formatFromUsd(
-                Number(plan?.basePriceUsd || 0),
-                displayCurrency,
-                usdInrRate,
-            ),
-        [displayCurrency, usdInrRate],
-    );
-
-    const handleSelect = (id) => {
-        Haptics.selectionAsync();
-        setSelectedId(id);
-    };
-
-    const handleClose = () => {
-        Haptics.selectionAsync();
-        if (navigation?.canGoBack?.()) navigation.goBack();
-    };
-
-    const handleContinue = () => {
-        if (!selectedPlan) return;
-        Haptics.selectionAsync();
-        if (isEnterprise(selectedPlan)) {
-            navigation.navigate("EnterpriseContactScreen", {
-                plan: selectedPlan,
-            });
-            return;
-        }
-        navigation.navigate("CheckoutScreen", {
-            plan: selectedPlan,
-            displayCurrency,
-            usdInrRate,
-        });
-    };
-
-    const continueLabel = selectedPlan
-        ? isEnterprise(selectedPlan)
-            ? "Contact Sales"
-            : "Continue"
-        : "Continue";
-
-    return (
-        <SafeAreaView style={[S.container, { paddingTop: insets.top }]}>
-            <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
-
-            <View style={S.navBar}>
-                <TouchableOpacity
-                    onPress={handleClose}
-                    activeOpacity={0.85}
-                    style={S.navBtn}>
-                    <Ionicons
-                        name={
-                            Platform.OS === "ios"
-                                ? "chevron-back"
-                                : "arrow-back"
-                        }
-                        size={22}
-                        color={C.text}
-                    />
-                </TouchableOpacity>
-                <Text style={S.navTitle}>Pricing</Text>
-                <View style={{ width: 44 }} />
-            </View>
-
-            <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={S.content}>
-                <LinearGradient
-                    colors={[C.primary, C.purple]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={S.hero}>
-                    <View style={S.heroTopRow}>
-                        <View style={S.heroIcon}>
-                            <Ionicons name="sparkles" size={18} color="#fff" />
-                        </View>
-                        <Badge label="PRO BENEFITS" tone="pro" />
-                    </View>
-                    <Text style={S.heroTitle}>Upgrade your CRM workflow</Text>
-                    <Text style={S.heroSub}>
-                        Unlimited leads, advanced reports, and team access—built
-                        for fast follow-ups.
-                    </Text>
-
-                    <View style={S.heroBullets}>
-                        {[
-                            "Unlimited Leads",
-                            "Advanced Reports",
-                            "Team Access",
-                        ].map((t) => (
-                            <View key={t} style={S.heroBulletRow}>
-                                <Ionicons
-                                    name="checkmark-circle"
-                                    size={16}
-                                    color="rgba(255,255,255,0.92)"
-                                />
-                                <Text style={S.heroBulletText}>{t}</Text>
-                            </View>
-                        ))}
-                    </View>
-                </LinearGradient>
-
-                <View style={S.currencyRow}>
-                    <Text style={S.sectionTitle}>Display currency</Text>
-                    <View style={S.currencyPills}>
-                        <TouchableOpacity
-                            style={[
-                                S.currencyPill,
-                                displayCurrency === "USD" &&
-                                    S.currencyPillActive,
-                            ]}
-                            onPress={() => setDisplayCurrency("USD")}
-                            activeOpacity={0.9}>
-                            <Text
-                                style={[
-                                    S.currencyPillText,
-                                    displayCurrency === "USD" &&
-                                        S.currencyPillTextActive,
-                                ]}>
-                                $ USD
-                            </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
-                                S.currencyPill,
-                                displayCurrency === "INR" &&
-                                    S.currencyPillActive,
-                            ]}
-                            onPress={() => setDisplayCurrency("INR")}
-                            activeOpacity={0.9}>
-                            <Text
-                                style={[
-                                    S.currencyPillText,
-                                    displayCurrency === "INR" &&
-                                        S.currencyPillTextActive,
-                                ]}>
-                                ₹ INR
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                <View style={S.sectionHeader}>
-                    <Text style={S.sectionTitle}>Choose your plan</Text>
-                    <Text style={S.sectionMeta}>
-                        {pricingPlans.length || 0} options
-                    </Text>
-                </View>
-
-                {loading ? (
-                    <View style={{ paddingTop: 40 }}>
-                        <ActivityIndicator size="large" color={C.primary} />
-                    </View>
-                ) : pricingPlans.length === 0 ? (
-                    <View style={S.emptyCard}>
-                        <Ionicons
-                            name="alert-circle-outline"
-                            size={20}
-                            color={C.muted}
-                        />
-                        <Text style={S.emptyText}>
-                            No active plans available right now.
-                        </Text>
-                    </View>
-                ) : (
-                    <View style={S.plansList}>
-                        {pricingPlans.map((plan, idx) => (
-                            <MotiView
-                                key={plan.id}
-                                from={{ opacity: 0, translateY: 12 }}
-                                animate={{ opacity: 1, translateY: 0 }}
-                                transition={{
-                                    type: "timing",
-                                    duration: 260,
-                                    delay: 40 + idx * 55,
-                                }}>
-                                <PlanCard
-                                    plan={plan}
-                                    selected={String(selectedId) === String(plan.id)}
-                                    onSelect={handleSelect}
-                                    displayPrice={getDisplayPrice(plan)}
-                                />
-                            </MotiView>
-                        ))}
-                    </View>
-                )}
-
-                <View style={{ height: 110 }} />
-            </ScrollView>
-
-            <View style={[S.footer, { paddingBottom: Math.max(14, insets.bottom + 10) }]}>
-                {selectedPlan ? (
-                    <View style={S.summary}>
-                        <View style={{ flex: 1, paddingRight: 10 }}>
-                            <Text style={S.summaryLabel}>Selected plan</Text>
-                            <Text style={S.summaryName} numberOfLines={1}>
-                                {selectedPlan.name}
-                            </Text>
-                        </View>
-                        <Text style={S.summaryPrice}>
-                            {isEnterprise(selectedPlan)
-                                ? "Custom"
-                                : getDisplayPrice(selectedPlan)}
-                        </Text>
-                    </View>
-                ) : null}
-
-                <TouchableOpacity
-                    style={[
-                        S.ctaBtn,
-                        !selectedPlan && { opacity: 0.6 },
-                    ]}
-                    activeOpacity={0.9}
-                    disabled={!selectedPlan}
-                    onPress={handleContinue}>
-                    <LinearGradient
-                        colors={[C.text, "#18244A"]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={S.ctaGrad}>
-                        <Text style={S.ctaText}>{continueLabel}</Text>
-                        <Ionicons
-                            name="arrow-forward"
-                            size={18}
-                            color="#fff"
-                        />
-                    </LinearGradient>
-                </TouchableOpacity>
-            </View>
-        </SafeAreaView>
-    );
-}
-
-const S = StyleSheet.create({
-    container: { flex: 1, backgroundColor: C.bg },
-    navBar: {
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    navBtn: {
-        width: 44,
-        height: 44,
-        borderRadius: 14,
-        backgroundColor: C.surface,
-        borderWidth: 1,
-        borderColor: C.border,
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: C.shadow,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.08,
-        shadowRadius: 14,
-        elevation: 2,
-    },
-    navTitle: { fontSize: 17, fontWeight: "900", color: C.text },
-    content: { paddingHorizontal: 16, paddingBottom: 10, gap: 14 },
-
-    hero: {
-        borderRadius: 26,
-        padding: 18,
-        overflow: "hidden",
-        shadowColor: C.shadow,
-        shadowOffset: { width: 0, height: 16 },
-        shadowOpacity: 0.18,
-        shadowRadius: 24,
-        elevation: 6,
-    },
-    heroTopRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 10,
-    },
-    heroIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 14,
-        backgroundColor: "rgba(255,255,255,0.18)",
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.22)",
-    },
-    heroTitle: {
-        fontSize: 22,
-        fontWeight: "900",
-        color: "#fff",
-        letterSpacing: -0.3,
-    },
-    heroSub: {
-        marginTop: 8,
-        color: "rgba(255,255,255,0.85)",
-        fontSize: 13,
-        lineHeight: 19,
-    },
-    heroBullets: {
-        marginTop: 14,
-        gap: 8,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: "rgba(255,255,255,0.18)",
-    },
-    heroBulletRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-    heroBulletText: {
-        color: "rgba(255,255,255,0.92)",
-        fontSize: 13,
-        fontWeight: "700",
-    },
-
-    sectionHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        paddingTop: 6,
-    },
-    sectionTitle: { fontSize: 14, fontWeight: "900", color: C.text },
-    sectionMeta: { fontSize: 12, fontWeight: "700", color: C.muted },
-
-    currencyRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        backgroundColor: C.surface,
-        borderWidth: 1,
-        borderColor: C.border,
-        borderRadius: 18,
-        padding: 12,
-    },
-    currencyPills: {
-        flexDirection: "row",
-        backgroundColor: C.bg,
-        borderRadius: 999,
-        padding: 3,
-        borderWidth: 1,
-        borderColor: C.border,
-    },
-    currencyPill: {
-        paddingHorizontal: 12,
-        paddingVertical: 7,
-        borderRadius: 999,
-    },
-    currencyPillActive: { backgroundColor: C.text },
-    currencyPillText: { fontSize: 12, fontWeight: "900", color: C.textSub },
-    currencyPillTextActive: { color: "#fff" },
-
-    plansList: { gap: 12 },
-    planTap: { borderRadius: 22 },
-    planBorder: { borderRadius: 22, padding: 2 },
-    planCard: {
-        borderRadius: 20,
-        backgroundColor: C.surface,
-        borderWidth: 1,
-        borderColor: C.border,
-        padding: 14,
-        shadowColor: C.shadow,
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.06,
-        shadowRadius: 18,
-        elevation: 2,
-    },
-    planTopRow: { flexDirection: "row", alignItems: "flex-start" },
-    planTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-    planTitle: {
-        fontSize: 16,
-        fontWeight: "900",
-        color: C.text,
-        maxWidth: "70%",
-    },
-    planSubtitle: { marginTop: 6, fontSize: 12, color: C.muted, lineHeight: 18 },
-    radioWrap: { paddingTop: 2 },
-    radioOuter: {
-        width: 22,
-        height: 22,
-        borderRadius: 11,
-        borderWidth: 2,
-        borderColor: C.border,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    radioInner: {
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        backgroundColor: C.primary,
-    },
-    priceRow: { flexDirection: "row", alignItems: "flex-end", marginTop: 12 },
-    priceText: { fontSize: 22, fontWeight: "900", color: C.text },
-    pricePeriod: { marginLeft: 6, marginBottom: 2, color: C.muted, fontWeight: "700" },
-    metricsRow: { marginTop: 10, flexDirection: "row", flexWrap: "wrap", gap: 8 },
-    metric: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 7,
-        borderRadius: 999,
-        backgroundColor: C.bg,
-        borderWidth: 1,
-        borderColor: C.border,
-    },
-    metricText: { fontSize: 12, fontWeight: "800", color: C.textSub, maxWidth: 150 },
-    planBottomRow: {
-        marginTop: 12,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    planHint: { fontSize: 12, fontWeight: "700", color: C.muted },
-    planChip: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-    },
-    planChipText: { color: "#fff", fontSize: 11, fontWeight: "900" },
-
-    badge: {
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: "rgba(232,236,244,0.9)",
-    },
-    badgeText: { fontSize: 11, fontWeight: "900" },
-
-    emptyCard: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-        backgroundColor: C.surface,
-        borderWidth: 1,
-        borderColor: C.border,
-        borderRadius: 18,
-        padding: 14,
-    },
-    emptyText: { color: C.muted, fontSize: 13, fontWeight: "700" },
-
-    footer: {
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingHorizontal: 16,
-        paddingTop: 10,
-        backgroundColor: "rgba(242,244,248,0.94)",
-        borderTopWidth: 1,
-        borderTopColor: C.border,
-    },
-    summary: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        backgroundColor: C.surface,
-        borderWidth: 1,
-        borderColor: C.border,
-        borderRadius: 18,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        marginBottom: 10,
-    },
-    summaryLabel: { fontSize: 11, fontWeight: "900", color: C.muted, textTransform: "uppercase", letterSpacing: 0.8 },
-    summaryName: { marginTop: 4, fontSize: 15, fontWeight: "900", color: C.text },
-    summaryPrice: { fontSize: 18, fontWeight: "900", color: C.primary },
-    ctaBtn: { borderRadius: 18, overflow: "hidden" },
-    ctaGrad: {
-        height: 54,
-        borderRadius: 18,
-        paddingHorizontal: 16,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    ctaText: { fontSize: 16, fontWeight: "900", color: "#fff" },
+  selBtn:     { height:44, borderWidth:1.5, alignItems:"center", justifyContent:"center" },
+  selBtnText: { fontWeight:"800", letterSpacing:0.3 },
 });
 
+// ─── Main screen ───────────────────────────────────────────────────────────────
+export default function PricingScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
+  const sc     = useScale();
+  const { refreshBillingPlan } = useAuth();
+
+  const [selectedId, setSelectedId] = useState(null);
+  const [plans,      setPlans]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [currency,   setCurrency]   = useState("INR");
+  const [rate,       setRate]       = useState(83);
+  const [activatingFree, setActivatingFree] = useState(false);
+
+  const loadPlans = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await getBillingPlans();
+      setRate(Number(res?.rates?.USD_INR || 83));
+      const mapped = (res?.plans || []).map(p => ({
+        id: p._id, code: p.code, name: p.name,
+        trialDays: Number(p.trialDays || 0),
+        maxAdmins: Number(p.maxAdmins || 0),
+        maxStaff:  Number(p.maxStaff  || 0),
+        extraAdminPriceUsd: Number(p.extraAdminPrice || 0),
+        extraStaffPriceUsd: Number(p.extraStaffPrice || 0),
+        basePriceUsd: Number(p.basePrice || 0),
+        isOverrideApplied: Boolean(p.isOverrideApplied),
+      }));
+      setPlans(mapped);
+      const eid = res?.effectivePlan?.id || null;
+      setSelectedId(eid || mapped[0]?.id || null);
+    } catch { setPlans([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  useFocusEffect(useCallback(() => { loadPlans(); }, [loadPlans]));
+
+  const selected  = useMemo(() =>
+    plans.find(p => String(p.id) === String(selectedId)) || null,
+    [plans, selectedId]
+  );
+  const selTier   = selected ? (T[getTier(selected)] || T.pro) : T.pro;
+  const getPrice  = useCallback(
+    (plan) => fmtPrice(plan?.basePriceUsd || 0, currency, rate),
+    [currency, rate]
+  );
+
+  const handleContinue = async () => {
+    if (!selected) return;
+    Haptics.selectionAsync();
+    if (getTier(selected) === "enterprise")
+      navigation.navigate("EnterpriseContactScreen", { plan: selected });
+    else if (Number(selected?.basePriceUsd || 0) <= 0) {
+      try {
+        setActivatingFree(true);
+        const result = await createRazorpayOrder({
+          planId: selected.id,
+          adminCount: selected.maxAdmins || 0,
+          staffCount: selected.maxStaff || 0,
+        });
+        await refreshBillingPlan?.().catch(() => {});
+        navigation.replace("PaymentSuccessScreen", {
+          planName: result?.plan?.name || selected?.name || "Free",
+          finalPrice: result?.pricing?.finalPrice ?? 0,
+          renewDate: result?.renewDate || null,
+          displayCurrency: currency,
+          usdInrRate: rate,
+        });
+      } catch (e) {
+        Alert.alert(
+          "Plan Activation Failed",
+          e?.message || "Unable to activate the free plan right now.",
+        );
+      } finally {
+        setActivatingFree(false);
+      }
+    } else
+      navigation.navigate("CheckoutScreen", {
+        plan: selected,
+        displayCurrency: currency,
+        usdInrRate: rate,
+        initialAdminCount: selected.maxAdmins || 0,
+        initialStaffCount: selected.maxStaff || 0,
+      });
+  };
+
+  return (
+    <SafeAreaView style={{ flex:1, backgroundColor: T.bg }} edges={["top"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={T.card} />
+
+      {/* ── Nav ── */}
+      <View style={[S.nav, { paddingHorizontal: sc.hPad }]}>
+        <TouchableOpacity
+          style={S.navBack}
+          onPress={() => { Haptics.selectionAsync(); navigation?.canGoBack?.() && navigation.goBack(); }}
+        >
+          <Ionicons
+            name={Platform.OS === "ios" ? "chevron-back" : "arrow-back"}
+            size={20} color={T.text}
+          />
+        </TouchableOpacity>
+        <View style={{ flex:1, alignItems:"center" }}>
+          <Text style={[S.navTitle, { fontSize: sc.f.md }]}>Choose a Plan</Text>
+        </View>
+        {/* Currency toggle — ₹ / $ */}
+        <View style={S.curToggle}>
+          {["INR","USD"].map(c => (
+            <TouchableOpacity
+              key={c}
+              onPress={() => setCurrency(c)}
+              style={[S.curBtn, currency === c && S.curBtnActive]}
+            >
+              <Text style={[S.curText, { fontSize: sc.f.xs }, currency === c && { color:"#fff" }]}>
+                {c === "INR" ? "₹" : "$"}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingHorizontal: sc.hPad,
+          paddingBottom: 130,
+          paddingTop: 14,
+          gap: sc.sp.lg,
+        }}
+      >
+        {/* ── Hero banner ── */}
+        <View style={[S.hero, { borderRadius: sc.r + 4 }]}>
+          <View style={S.heroD1} />
+          <View style={S.heroD2} />
+          <View style={{ flexDirection:"row", alignItems:"center", gap:10, marginBottom:10 }}>
+            <View style={S.heroIconBox}>
+              <Ionicons name="sparkles" size={15} color={T.text} />
+            </View>
+            <Text style={[S.heroEye, { fontSize: sc.f.xs }]}>UPGRADE YOUR CRM</Text>
+          </View>
+             <Text style={[S.heroEye, { fontSize: sc.f.xl }]}>Grow without limits</Text>
+        </View>
+
+        {/* ── Plans header ── */}
+        <View style={S.plansHeader}>
+          <Text style={[S.plansTitle, { fontSize: sc.f.md }]}>Available Plans</Text>
+          {!loading && (
+            <View style={S.countPill}>
+              <Text style={{ fontSize: sc.f.xs, fontWeight:"800", color: T.pro.a }}>
+                {plans.length} options
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* ── Plan cards — no animation wrapper ── */}
+        {loading ? (
+          <SkeletonPulse><PricingSkeleton /></SkeletonPulse>
+        ) : plans.length === 0 ? (
+          <View style={[S.emptyBox, { borderRadius: sc.r }]}>
+            <Ionicons name="alert-circle-outline" size={22} color={T.muted} />
+            <Text style={{ fontSize: sc.f.sm, color: T.muted, fontWeight:"600" }}>
+              No plans available right now.
+            </Text>
+          </View>
+        ) : (
+          // plain View — zero animation, renders instantly
+          <View>
+            {plans.map(plan => (
+              <PlanCard
+                key={plan.id}
+                plan={plan}
+                selected={String(selectedId) === String(plan.id)}
+                onSelect={(id) => { Haptics.selectionAsync(); setSelectedId(id); }}
+                displayPrice={getPrice(plan)}
+                sc={sc}
+              />
+            ))}
+          </View>
+        )}
+
+        {/* ── Trust strip ── */}
+        <View style={S.trust}>
+          {[
+            { icon:"lock-closed-outline", text:"Secure" },
+            { icon:"refresh-outline",     text:"Cancel anytime" },
+            { icon:"headset-outline",     text:"Support" },
+            { icon:"shield-outline",      text:"No hidden fees" },
+          ].map(t => (
+            <View key={t.text} style={S.trustItem}>
+              <Ionicons name={t.icon} size={12} color={T.muted} />
+              <Text style={[S.trustText, { fontSize: sc.f.xs }]}>{t.text}</Text>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+
+      {/* ── Sticky footer ── */}
+      <View style={[S.footer, { paddingHorizontal: sc.hPad, paddingBottom: Math.max(14, insets.bottom + 10) }]}>
+        {selected && (
+          <View style={[S.summaryRow, { borderRadius: sc.r }]}>
+            <View style={[S.sumDot, { backgroundColor: selTier.dot + "22" }]}>
+              <View style={[S.sumDotInner, { backgroundColor: selTier.dot }]} />
+            </View>
+            <View style={{ flex:1 }}>
+              <Text style={[S.sumLabel, { fontSize: sc.f.xs }]}>Selected</Text>
+              <Text style={[S.sumName,  { fontSize: sc.f.md }]} numberOfLines={1}>
+                {selected.name}
+              </Text>
+            </View>
+            <Text style={[S.sumPrice, { fontSize: sc.f.lg, color: selTier.dot }]}>
+              {getTier(selected) === "enterprise" ? "Custom" : getPrice(selected)}
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[S.cta, { borderRadius: sc.r, opacity: selected && !activatingFree ? 1 : selected ? 0.8 : 0.55 }]}
+          disabled={!selected || activatingFree}
+          onPress={handleContinue}
+          activeOpacity={0.88}
+        >
+          <LinearGradient
+            colors={selected ? [selTier.a, selTier.b] : [T.muted, T.light]}
+            start={{ x:0, y:0 }} end={{ x:1, y:0 }}
+            style={[S.ctaGrad, { borderRadius: sc.r }]}
+          >
+            <Text style={[S.ctaText, { fontSize: sc.f.md }]}>
+              {activatingFree
+                ? "Activating..."
+                : selected && getTier(selected) === "enterprise"
+                  ? "Contact Sales"
+                  : selected && Number(selected?.basePriceUsd || 0) <= 0
+                    ? "Activate Free Plan"
+                    : "Continue"}
+            </Text>
+            <View style={S.ctaArrow}>
+              <Ionicons name="arrow-forward" size={15} color={selTier.a} />
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// ─── Screen styles ──────────────────────────────────────────────────────────────
+const S = StyleSheet.create({
+  // Nav
+  nav:       { flexDirection:"row", alignItems:"center", paddingVertical:10,
+               backgroundColor: T.card, borderBottomWidth:1, borderBottomColor: T.border },
+  navBack:   { width:38, height:38, borderRadius:12, backgroundColor: T.bg,
+               borderWidth:1, borderColor: T.border, alignItems:"center", justifyContent:"center" },
+  navTitle:  { fontWeight:"900", color: T.text },
+  curToggle: { flexDirection:"row", backgroundColor: T.bg, borderRadius:99, padding:3,
+               borderWidth:1, borderColor: T.border },
+  curBtn:    { width:28, height:28, borderRadius:14, alignItems:"center", justifyContent:"center" },
+  curBtnActive: { backgroundColor: T.text },
+  curText:   { fontWeight:"800", color: T.sub },
+
+  // Hero
+  hero:      { padding:20, overflow:"hidden", backgroundColor:T.card, borderWidth:1, borderColor:T.border,
+               shadowColor: T.shadow, shadowOffset:{width:0,height:10},
+                shadowOpacity:0.14, shadowRadius:20, elevation:5 },
+  heroD1:    { position:"absolute", top:-50,  right:-50,  width:180, height:180, borderRadius:90,  backgroundColor:"rgba(37,99,235,0.06)" },
+  heroD2:    { position:"absolute", bottom:-30, left:-20, width:120, height:120, borderRadius:60,  backgroundColor:"rgba(124,58,237,0.05)" },
+  heroIconBox:{ width:32, height:32, borderRadius:10, backgroundColor:"#F8FAFC",
+                 alignItems:"center", justifyContent:"center",
+                 borderWidth:1, borderColor:T.border },
+  heroEye:   { color:T.text, fontWeight:"800", letterSpacing:1.4 },
+  heroTitle: { color:"#fff", fontWeight:"900", letterSpacing:-0.4 },
+  heroSub:   { color:"rgba(255,255,255,0.8)", fontWeight:"500", marginTop:5, lineHeight:19 },
+  heroPills: { flexDirection:"row", flexWrap:"wrap", gap:7, marginTop:14, paddingTop:12,
+               borderTopWidth:1, borderTopColor:"rgba(255,255,255,0.18)" },
+  heroPill:  { flexDirection:"row", alignItems:"center", gap:4,
+               backgroundColor:"rgba(255,255,255,0.14)",
+               paddingHorizontal:8, paddingVertical:4, borderRadius:99 },
+  heroPillText: { color:"rgba(255,255,255,0.92)", fontWeight:"700" },
+
+  // Info card — deliberately plain (no gradient header) so it looks different from plan cards
+  infoCard:  { flexDirection:"row", alignItems:"flex-start", gap:12,
+               backgroundColor: T.card, borderWidth:1, borderColor: T.border,
+               padding:14, overflow:"hidden",
+               shadowColor: T.shadow, shadowOffset:{width:0,height:2},
+               shadowOpacity:0.04, shadowRadius:6, elevation:1 },
+  infoStripe:{ position:"absolute", left:0, top:0, bottom:0, width:3 },
+  infoIconBox:{ width:36, height:36, borderRadius:18, alignItems:"center", justifyContent:"center", flexShrink:0 },
+  infoTitle: { fontWeight:"800", color: T.text, marginBottom:3 },
+  infoText:  { color: T.muted, fontWeight:"500", lineHeight:18 },
+
+  // Plans header row
+  plansHeader: { flexDirection:"row", alignItems:"center", justifyContent:"space-between" },
+  plansTitle:  { fontWeight:"900", color: T.text },
+  countPill:   { backgroundColor: T.pro.soft, paddingHorizontal:10, paddingVertical:4,
+                 borderRadius:99, borderWidth:1, borderColor: T.pro.a + "30" },
+  emptyBox:    { flexDirection:"row", alignItems:"center", gap:10,
+                 backgroundColor: T.card, borderWidth:1, borderColor: T.border, padding:16 },
+
+  // Trust
+  trust:     { flexDirection:"row", justifyContent:"space-around", paddingVertical:4 },
+  trustItem: { flexDirection:"row", alignItems:"center", gap:4 },
+  trustText: { color: T.muted, fontWeight:"600" },
+
+  // Footer
+  footer:    { position:"absolute", left:0, right:0, bottom:0,
+               backgroundColor: T.bg + "F5", borderTopWidth:1, borderTopColor: T.border,
+               paddingTop:10, gap:8 },
+  summaryRow:{ flexDirection:"row", alignItems:"center", gap:10,
+               backgroundColor: T.card, borderWidth:1, borderColor: T.border, padding:12 },
+  sumDot:    { width:34, height:34, borderRadius:17, alignItems:"center", justifyContent:"center" },
+  sumDotInner: { width:12, height:12, borderRadius:6 },
+  sumLabel:  { color: T.muted, fontWeight:"700", textTransform:"uppercase", letterSpacing:0.6 },
+  sumName:   { fontWeight:"900", color: T.text, marginTop:1 },
+  sumPrice:  { fontWeight:"900" },
+  cta:       { overflow:"hidden" },
+  ctaGrad:   { height:52, paddingHorizontal:18, flexDirection:"row",
+               alignItems:"center", justifyContent:"space-between" },
+  ctaText:   { color:"#fff", fontWeight:"900", letterSpacing:0.3 },
+  ctaArrow:  { width:30, height:30, borderRadius:15,
+               backgroundColor:"rgba(255,255,255,0.2)", alignItems:"center", justifyContent:"center" },
+});

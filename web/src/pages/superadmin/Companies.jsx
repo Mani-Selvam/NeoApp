@@ -29,6 +29,7 @@ export default function Companies() {
           name: c.name,
           ownerEmail: c.ownerEmail || "-",
           plan: c.plan || "-",
+          adminCount: c.adminCount || 0,
           staffCount: c.staffCount || 0,
           createdAt: c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "-",
           status: c.status || "Unknown",
@@ -90,6 +91,7 @@ export default function Companies() {
       ),
     },
     { key: "plan", label: "Plan" },
+    { key: "adminCount", label: "Admins" },
     { key: "staffCount", label: "Staff" },
     { key: "createdAt", label: "Created" },
     {
@@ -157,7 +159,16 @@ export default function Companies() {
                   Final Price <strong>${effective.plan?.finalPrice ?? "-"}</strong>
                 </p>
                 <p>
+                  Max Admins <strong>{effective.plan?.maxAdmins ?? "-"}</strong>
+                </p>
+                <p>
                   Max Staff <strong>{effective.plan?.maxStaff ?? "-"}</strong>
+                </p>
+                <p>
+                  Admin Usage <strong>{effective.plan?.adminsUsed ?? 0}</strong>
+                </p>
+                <p>
+                  Staff Usage <strong>{effective.plan?.staffUsed ?? 0}</strong>
                 </p>
                 <p>
                   Expiry

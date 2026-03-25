@@ -1,17 +1,94 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useContext, useEffect, useState } from "react";
-import { DeviceEventEmitter } from "react-native";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { AppState, DeviceEventEmitter } from "react-native";
 import {
-    startCallMonitoring,
     stopCallMonitoring,
 } from "../services/CallMonitorService";
 import notificationService from "../services/notificationService";
 import { API_URL } from "../services/apiConfig";
 import { clearApiClient } from "../services/apiClient";
 import { clearAuthErrorHandler, setAuthErrorHandler } from "../services/authErrorBus";
+import { deleteAuthToken, getAuthToken, setAuthToken } from "../services/secureTokenStorage";
 import { getEffectivePlan } from "../services/userService";
 
 const AuthContext = createContext();
+const BILLING_INFO_KEY = "billingInfo";
+const BILLING_ALERT_KEY_PREFIX = "billingAlert";
+
+const normalizeBillingInfo = (payload, fallbackReason = "") => {
+    const plan = payload?.plan || null;
+    const subscription = payload?.subscription || null;
+    const expiry =
+        subscription?.endDate ||
+        subscription?.effectiveEndDate ||
+        subscription?.manualOverrideExpiry ||
+        subscription?.originalEndDate ||
+        null;
+
+    return {
+        plan,
+        subscription,
+        hasActivePlan: Boolean(plan),
+        reason: fallbackReason || "",
+        expiry,
+    };
+};
+
+const getBillingAlertState = (billingInfo) => {
+    const expiryValue = billingInfo?.expiry;
+    if (!expiryValue) return null;
+
+    const expiry = new Date(expiryValue);
+    const diffMs = expiry.getTime() - Date.now();
+    if (!Number.isFinite(diffMs)) return null;
+
+    if (diffMs <= 0) {
+        return {
+            level: "expired",
+            code: "expired",
+            title: "Plan expired",
+            message: "Your current plan has expired. Upgrade to continue using app actions.",
+        };
+    }
+
+    const planName = `${billingInfo?.plan?.code || ""} ${billingInfo?.plan?.name || ""}`.toLowerCase();
+    const isFreeLike =
+        planName.includes("free") ||
+        String(billingInfo?.subscription?.status || "").toLowerCase().includes("trial") ||
+        Number(billingInfo?.plan?.basePrice || 0) <= 0;
+
+    if (isFreeLike) {
+        if (diffMs <= 60 * 60 * 1000) {
+            return {
+                level: "warning",
+                code: "free-1h",
+                title: "Free plan expiring soon",
+                message: "Your current free plan will expire within 1 hour. Please upgrade now.",
+            };
+        }
+        return null;
+    }
+
+    if (diffMs <= 60 * 60 * 1000) {
+        return {
+            level: "warning",
+            code: "paid-1h",
+            title: "Plan expiring in 1 hour",
+            message: "Your current plan will expire within 1 hour. Please upgrade now.",
+        };
+    }
+
+    if (diffMs <= 24 * 60 * 60 * 1000) {
+        return {
+            level: "notice",
+            code: "paid-1d",
+            title: "Plan expiring tomorrow",
+            message: "Your current plan will expire within 1 day. Please renew or upgrade soon.",
+        };
+    }
+
+    return null;
+};
 
 export const useAuth = () => {
     return useContext(AuthContext);
@@ -25,6 +102,19 @@ export const AuthProvider = ({ children }) => {
     const [userStatus, setUserStatus] = useState("Active");
     const [billingPlan, setBillingPlan] = useState(null);
     const [billingLoading, setBillingLoading] = useState(false);
+    const [billingInfo, setBillingInfo] = useState({
+        plan: null,
+        subscription: null,
+        hasActivePlan: false,
+        reason: "",
+        expiry: null,
+    });
+    const [billingAlert, setBillingAlert] = useState(null);
+    const [billingPrompt, setBillingPrompt] = useState({
+        visible: false,
+        title: "",
+        message: "",
+    });
     const [suspensionInfo, setSuspensionInfo] = useState({
         visible: false,
         companyStatus: "",
@@ -37,9 +127,63 @@ export const AuthProvider = ({ children }) => {
         submitError: "",
     });
 
+    const syncBillingUiState = useCallback(async (nextInfo, { forcePrompt = false } = {}) => {
+        setBillingInfo(nextInfo);
+        setBillingPlan(nextInfo?.plan || null);
+
+        if (nextInfo?.plan) {
+            await AsyncStorage.setItem("billingPlan", JSON.stringify(nextInfo.plan));
+        } else {
+            await AsyncStorage.removeItem("billingPlan");
+        }
+        await AsyncStorage.setItem(BILLING_INFO_KEY, JSON.stringify(nextInfo));
+
+        const nextAlert = getBillingAlertState(nextInfo);
+        setBillingAlert(nextAlert);
+
+        if (!nextAlert) return;
+
+        const entityKey = nextInfo?.subscription?.id || nextInfo?.plan?.id || "billing";
+        const expiryKey = nextInfo?.expiry ? new Date(nextInfo.expiry).toISOString() : "none";
+        const alertStorageKey = `${BILLING_ALERT_KEY_PREFIX}:${entityKey}:${nextAlert.code}:${expiryKey}`;
+        const alreadyShown = await AsyncStorage.getItem(alertStorageKey);
+
+        if (forcePrompt || !alreadyShown) {
+            setBillingPrompt({
+                visible: true,
+                title: nextAlert.title,
+                message: nextAlert.message,
+            });
+            await AsyncStorage.setItem(alertStorageKey, "1");
+        }
+    }, []);
+
+    const refreshBillingPlan = useCallback(async () => {
+        try {
+            setBillingLoading(true);
+            const res = await getEffectivePlan();
+            await syncBillingUiState(normalizeBillingInfo(res));
+        } catch (e) {
+            const status = e?.response?.status;
+            const code = e?.response?.data?.code;
+            const reason =
+                e?.response?.data?.message ||
+                e?.response?.data?.error ||
+                e?.message ||
+                "No active subscription";
+            if (status === 404 || status === 402 || code === "NO_ACTIVE_PLAN") {
+                await syncBillingUiState(normalizeBillingInfo(null, reason), {
+                    forcePrompt: true,
+                });
+            }
+        } finally {
+            setBillingLoading(false);
+        }
+    }, [syncBillingUiState]);
+
     useEffect(() => {
         const checkStatus = async () => {
-            const token = await AsyncStorage.getItem("token");
+            const token = await getAuthToken();
             if (token) {
                 setIsLoggedIn(true);
                 // Try to load cached user
@@ -61,6 +205,17 @@ export const AuthProvider = ({ children }) => {
                     }
                 } catch (e) {
                     // ignore cached plan parse issues
+                }
+
+                try {
+                    const cachedBillingInfo = await AsyncStorage.getItem(BILLING_INFO_KEY);
+                    if (cachedBillingInfo) {
+                        const parsedBillingInfo = JSON.parse(cachedBillingInfo);
+                        setBillingInfo(parsedBillingInfo);
+                        setBillingAlert(getBillingAlertState(parsedBillingInfo));
+                    }
+                } catch (e) {
+                    // ignore cached billing info parse issues
                 }
             }
             const onboarded = await AsyncStorage.getItem("onboardingCompleted");
@@ -109,13 +264,37 @@ export const AuthProvider = ({ children }) => {
     }, [isLoggedIn, user]);
 
     useEffect(() => {
+        const sub = DeviceEventEmitter.addListener("SUBSCRIPTION_UPDATED", () => {
+            if (!isLoggedIn) return;
+            refreshBillingPlan().catch(() => {});
+        });
+
+        return () => {
+            sub?.remove?.();
+        };
+    }, [isLoggedIn, refreshBillingPlan]);
+
+    useEffect(() => {
         // Global auth error handler (e.g., company suspended => 403)
         setAuthErrorHandler(async ({ status, message, data } = {}) => {
             if (!isLoggedIn) return;
-            if (status !== 401 && status !== 403) return;
+            if (status !== 401 && status !== 402 && status !== 403) return;
 
             const code = data?.code;
             const text = String(message || "");
+            if (status === 402 || code === "NO_ACTIVE_PLAN" || code === "FEATURE_DISABLED") {
+                await refreshBillingPlan().catch(() => {});
+                setBillingPrompt({
+                    visible: true,
+                    title: code === "FEATURE_DISABLED" ? "Upgrade required" : "Plan expired",
+                    message:
+                        text ||
+                        (code === "FEATURE_DISABLED"
+                            ? "This feature is not available in your current plan."
+                            : "Your current plan has expired. Please upgrade to continue."),
+                });
+                return;
+            }
             if (
                 code === "COMPANY_NOT_ACTIVE" ||
                 code === "COMPANY_NOT_FOUND" ||
@@ -153,36 +332,32 @@ export const AuthProvider = ({ children }) => {
         return () => {
             clearAuthErrorHandler();
         };
-    }, [isLoggedIn, user]);
-
-    const refreshBillingPlan = async () => {
-        try {
-            setBillingLoading(true);
-            const res = await getEffectivePlan();
-            const nextPlan = res?.plan || null;
-            setBillingPlan(nextPlan);
-            if (nextPlan) {
-                await AsyncStorage.setItem("billingPlan", JSON.stringify(nextPlan));
-            } else {
-                await AsyncStorage.removeItem("billingPlan");
-            }
-        } catch (e) {
-            const status = e?.response?.status;
-            // 404/402 => no active plan (trial expired or not purchased)
-            if (status === 404 || status === 402 || status === 403) {
-                setBillingPlan(null);
-                await AsyncStorage.removeItem("billingPlan");
-            }
-        } finally {
-            setBillingLoading(false);
-        }
-    };
+    }, [isLoggedIn, refreshBillingPlan, user]);
 
     useEffect(() => {
         if (isLoggedIn) {
             refreshBillingPlan().catch(() => {});
         }
-    }, [isLoggedIn]);
+    }, [isLoggedIn, refreshBillingPlan]);
+
+    useEffect(() => {
+        if (!isLoggedIn) return undefined;
+
+        const appStateSub = AppState.addEventListener("change", (state) => {
+            if (state === "active") {
+                refreshBillingPlan().catch(() => {});
+            }
+        });
+
+        const intervalId = setInterval(() => {
+            refreshBillingPlan().catch(() => {});
+        }, 60000);
+
+        return () => {
+            appStateSub?.remove?.();
+            clearInterval(intervalId);
+        };
+    }, [isLoggedIn, refreshBillingPlan]);
 
     // Poll user status periodically while logged in (every 60s)
     useEffect(() => {
@@ -190,7 +365,7 @@ export const AuthProvider = ({ children }) => {
         if (isLoggedIn && user && user.id) {
             const poll = async () => {
                 try {
-                    const token = await AsyncStorage.getItem("token");
+                    const token = await getAuthToken();
                     if (!token) return;
                     const res = await fetch(`${API_URL}/staff/${user.id}`, {
                         headers: { Authorization: `Bearer ${token}` },
@@ -224,16 +399,11 @@ export const AuthProvider = ({ children }) => {
     }, [isLoggedIn, user, userStatus]);
 
     const login = async (token, userObj) => {
-        if (token) await AsyncStorage.setItem("token", token);
+        if (token) await setAuthToken(token);
         if (userObj) {
             await AsyncStorage.setItem("user", JSON.stringify(userObj));
             setUser(userObj);
             setUserStatus(userObj.status || "Active");
-            try {
-                startCallMonitoring(userObj).catch(() => {});
-            } catch (e) {
-                // ignore if native modules are not present (Expo Go)
-            }
         }
         setIsLoggedIn(true);
         refreshBillingPlan().catch(() => {});
@@ -248,13 +418,23 @@ export const AuthProvider = ({ children }) => {
 
     // internal logout used by polling
     const doLogout = async () => {
-        await AsyncStorage.removeItem("token");
+        await deleteAuthToken();
         await AsyncStorage.removeItem("user");
         await AsyncStorage.removeItem("billingPlan");
+        await AsyncStorage.removeItem(BILLING_INFO_KEY);
         clearApiClient();
         setUser(null);
         setUserStatus("Active");
         setBillingPlan(null);
+        setBillingInfo({
+            plan: null,
+            subscription: null,
+            hasActivePlan: false,
+            reason: "",
+            expiry: null,
+        });
+        setBillingAlert(null);
+        setBillingPrompt({ visible: false, title: "", message: "" });
         setIsLoggedIn(false);
         try {
             stopCallMonitoring();
@@ -339,7 +519,7 @@ export const AuthProvider = ({ children }) => {
 
     const logout = async () => {
         try {
-            const token = await AsyncStorage.getItem("token");
+            const token = await getAuthToken();
             if (token && token !== "demo-token-123") {
                 try {
                     await fetch(`${API_URL}/auth/logout`, {
@@ -360,9 +540,25 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
+    const localLogout = async () => {
+        await doLogout();
+    };
+
     const completeOnboarding = async () => {
         await AsyncStorage.setItem("onboardingCompleted", "true");
         setOnboardingCompleted(true);
+    };
+
+    const dismissBillingPrompt = () => {
+        setBillingPrompt((prev) => ({ ...prev, visible: false }));
+    };
+
+    const showUpgradePrompt = (message = "Please upgrade your current plan to continue.") => {
+        setBillingPrompt({
+            visible: true,
+            title: "Upgrade required",
+            message,
+        });
     };
 
     return (
@@ -374,12 +570,18 @@ export const AuthProvider = ({ children }) => {
                 user,
                 userStatus,
                 billingPlan,
+                billingInfo,
                 billingLoading,
+                billingAlert,
+                billingPrompt,
                 suspensionInfo,
                 login,
                 logout,
+                localLogout,
                 updateUser,
                 refreshBillingPlan,
+                dismissBillingPrompt,
+                showUpgradePrompt,
                 completeOnboarding,
                 clearSuspension,
                 submitSuspensionReport,

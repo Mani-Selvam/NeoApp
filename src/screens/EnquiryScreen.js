@@ -1,3070 +1,1099 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { MotiView } from "moti";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    AppState,
-    DeviceEventEmitter,
-    Dimensions,
-    Easing,
-    FlatList,
-    Image,
-    Linking,
-    Modal,
-    PermissionsAndroid,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    UIManager,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  AppState,
+  BackHandler,
+  DeviceEventEmitter,
+  Dimensions,
+  Easing,
+  FlatList,
+  Image,
+  Linking,
+  Modal,
+  PanResponder,
+  PermissionsAndroid,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  UIManager,
+  View,
 } from "react-native";
 import RNImmediatePhoneCall from "react-native-immediate-phone-call";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { PostCallModal } from "../components/PostCallModal";
+import AppSideMenu from "../components/AppSideMenu";
+import { EnquirySkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
-import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import { API_URL as GLOBAL_API_URL } from "../services/apiConfig";
 import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
+import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
 import { getImageUrl } from "../utils/imageHelper";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-// --- CONFIGURATION ---
+
 const API_URL = `${GLOBAL_API_URL}/enquiries`;
-const { width, height } = Dimensions.get("window");
+const { width: SW, height: SH } = Dimensions.get("window");
 
-// --- PREMIUM iOS LIGHT THEME ---
-const COLORS = {
-    // Base surfaces
-    bgApp: "#F2F4F8",
-    bgCard: "#FFFFFF",
-    bgCardAlt: "#FAFBFF",
-
-    // Primary — rich cobalt blue (iOS-style)
-    primary: "#1A6BFF",
-    primaryDark: "#0055E5",
-    primaryLight: "#EBF2FF",
-    primaryMid: "#C2D9FF",
-
-    // Accents
-    secondary: "#FF3B5C", // vivid rose
-    accent: "#7B61FF", // soft purple
-    teal: "#00C6A2", // mint
-
-    // Text
-    textMain: "#0A0F1E",
-    textSub: "#3A4060",
-    textMuted: "#7C85A3",
-    textLight: "#B0BAD3",
-
-    // UI
-    border: "#E8ECF4",
-    divider: "#F0F2F8",
-    shadow: "#1A2560",
-
-    // Semantic
-    success: "#00C48C",
-    whatsapp: "#25D366",
-    danger: "#FF3B5C",
-    warning: "#FF9500",
-    info: "#1A6BFF",
-
-    // Gradients
-    gradients: {
-        header: ["#FFFFFF", "#F2F4F8"],
-        primary: ["#1A6BFF", "#7B61FF"],
-        success: ["#00C48C", "#00A67A"],
-        danger: ["#FF3B5C", "#E02040"],
-        info: ["#1A6BFF", "#0055E5"],
-        card: ["#FFFFFF", "#F7F9FF"],
-        teal: ["#00C6A2", "#00A685"],
-        warm: ["#FF9500", "#FF6B00"],
-    },
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg:          "#F1F5F9",
+  card:        "#FFFFFF",
+  cardAlt:     "#F8FAFF",
+  primary:     "#2563EB",
+  primaryDark: "#1D4ED8",
+  primarySoft: "#EFF6FF",
+  primaryMid:  "#BFDBFE",
+  accent:      "#7C3AED",
+  success:     "#059669",
+  whatsapp:    "#25D366",
+  danger:      "#DC2626",
+  warning:     "#D97706",
+  info:        "#0891B2",
+  text:        "#0F172A",
+  textSub:     "#334155",
+  textMuted:   "#64748B",
+  textLight:   "#94A3B8",
+  border:      "#E2E8F0",
+  divider:     "#F1F5F9",
+  shadow:      "#1E293B",
 };
 
-// --- ANIMATION HOOK (unchanged) ---
-const useFadeIn = (delay = 0) => {
-    const opacity = useRef(new Animated.Value(0)).current;
-    const translateY = useRef(new Animated.Value(20)).current;
-    useEffect(() => {
-        Animated.parallel([
-            Animated.timing(opacity, {
-                toValue: 1,
-                duration: 600,
-                delay,
-                useNativeDriver: true,
-            }),
-            Animated.timing(translateY, {
-                toValue: 0,
-                duration: 600,
-                delay,
-                useNativeDriver: true,
-                easing: Easing.out(Easing.cubic),
-            }),
-        ]).start();
-    }, []);
-    return { opacity, translateY };
+const GRAD = {
+  primary: [C.primary, C.accent],
+  success: [C.success, "#047857"],
+  danger:  [C.danger, "#991B1B"],
+  warm:    [C.warning, "#B45309"],
+  teal:    [C.info, "#0E7490"],
 };
 
-const safeLocaleDateString = (raw, options) => {
-    if (!raw) return "-";
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleDateString(undefined, options);
-};
-
-const safeLocaleString = (raw) => {
-    if (!raw) return "-";
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleString();
-};
-
-// Helper: format a Date or date-string to local YYYY-MM-DD
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 const toLocalIso = (d) => {
-    const date = d ? new Date(d) : new Date();
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
+  const date = d ? new Date(d) : new Date();
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+};
+const safeDate = (raw, opts) => {
+  if (!raw) return "-";
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? "-" : d.toLocaleDateString(undefined, opts);
+};
+const safeDateTime = (raw) => {
+  if (!raw) return "-";
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? "-" : d.toLocaleString();
+};
+const fmtDur = (s) => {
+  if (!s) return "0s";
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s/60)}m ${s%60}s`;
+};
+const getInitials = (name = "") => name.substring(0,2).toUpperCase() || "NA";
+const avatarColors = (name="") => {
+  const h = name ? (name.charCodeAt(0)*23 + (name.charCodeAt(1)||0)*7) % 360 : 220;
+  return [`hsl(${h},65%,52%)`, `hsl(${(h+30)%360},70%,42%)`];
+};
+const priorityCfg = (type) => {
+  const t = (type||"").toLowerCase();
+  if (t.includes("hot")||t.includes("high")) return { color: C.danger,   bg:"#FEF2F2", label:"Hot" };
+  if (t.includes("warm")||t.includes("med"))  return { color: C.warning,  bg:"#FFFBEB", label:"Warm" };
+  return { color: C.primary, bg: C.primarySoft, label: type||"Normal" };
+};
+const displayStatusLabel = (status) => {
+  if (status === "Converted") return "Sales";
+  if (status === "Closed") return "Drop";
+  return status || "New";
 };
 
-// --- PREMIUM CARD COMPONENT ---
-const ModernCard = React.memo(
-	    ({
-	        item,
-	        index,
-	        onShowDetails,
-	        onEdit,
-	        onDelete,
-	        onFollowUp,
-	        onCall,
-	        onWhatsApp,
-	        onEmail,
-	    }) => {
-        const scaleValue = useRef(new Animated.Value(1)).current;
+const getAssignedUserLabel = (assignedTo) => {
+  if (!assignedTo) return "-";
+  if (typeof assignedTo === "string") return assignedTo;
+  return assignedTo?.name || assignedTo?.email || assignedTo?.mobile || "-";
+};
 
-        const handlePressIn = () =>
-            Animated.spring(scaleValue, {
-                toValue: 0.975,
-                useNativeDriver: true,
-            }).start();
-        const handlePressOut = () =>
-            Animated.spring(scaleValue, {
-                toValue: 1,
-                useNativeDriver: true,
-            }).start();
+// ─── Compact enquiry card ─────────────────────────────────────────────────────
+const EnquiryCard = React.memo(function EnquiryCard({
+  item, index,
+  onPress, onSwipe,
+  onCall, onWhatsApp,
+}) {
+  const scale  = useRef(new Animated.Value(1)).current;
+  const translateX = useRef(new Animated.Value(0)).current;
+  const pCfg   = priorityCfg(item.enqType);
+  const colors = avatarColors(item.name);
+  const swipeOpacity = translateX.interpolate({
+    inputRange: [0, SW * 0.35, SW],
+    outputRange: [1, 0.92, 0.78],
+    extrapolate: "clamp",
+  });
 
-        const initials = item.name
-            ? item.name.substring(0, 2).toUpperCase()
-            : "NA";
-
-        const getItemDate = (it) => {
-            if (!it) return null;
-            if (it.createdAt) return toLocalIso(it.createdAt);
-            if (it.date) return toLocalIso(it.date);
-            if (it.enqDate) return toLocalIso(it.enqDate);
-            if (it._id && it._id.length >= 8) {
-                try {
-                    const hex = it._id.substring(0, 8);
-                    const ts = parseInt(hex, 16) * 1000;
-                    return toLocalIso(new Date(ts));
-                } catch (e) {
-                    return null;
-                }
-            }
-            return null;
-        };
-
-        const rawDate = getItemDate(item);
-        const dateLabel = rawDate
-            ? new Date(rawDate).toLocaleDateString(undefined, {
-                  day: "numeric",
-                  month: "short",
-              })
-            : "";
-
-        const getPriorityConfig = (type) => {
-            const t = (type || "").toLowerCase();
-            if (t.includes("hot") || t.includes("high"))
-                return { color: COLORS.danger, bg: "#FFF0F3", label: "Hot" };
-            if (t.includes("warm") || t.includes("medium"))
-                return { color: COLORS.warning, bg: "#FFF5E6", label: "Warm" };
-            return {
-                color: COLORS.info,
-                bg: COLORS.primaryLight,
-                label: type || "Normal",
-            };
-        };
-
-        const pCfg = getPriorityConfig(item.enqType);
-
-        // Avatar color — derived from name for consistency
-        const avatarHue = item.name
-            ? (item.name.charCodeAt(0) * 23 +
-                  item.name.charCodeAt(1 % item.name.length) * 7) %
-              360
-            : 220;
-        const avatarColors = [
-            `hsl(${avatarHue},70%,55%)`,
-            `hsl(${(avatarHue + 30) % 360},75%,45%)`,
-        ];
-
-        return (
-            <MotiView
-                from={{ opacity: 0, translateY: 16 }}
-                animate={{ opacity: 1, translateY: 0 }}
-                transition={{
-                    type: "timing",
-                    duration: 300,
-                    delay: index < 6 ? index * 50 : 0,
-                }}
-                style={styles.cardWrapper}>
-                <TouchableOpacity
-                    activeOpacity={1}
-                    onPressIn={handlePressIn}
-                    onPressOut={handlePressOut}
-                    onPress={() => onShowDetails(item)}>
-                    <Animated.View
-                        style={[
-                            styles.cardContainer,
-                            { transform: [{ scale: scaleValue }] },
-                        ]}>
-                        {/* Priority accent stripe */}
-                        <View
-                            style={[
-                                styles.cardStripe,
-                                { backgroundColor: pCfg.color },
-                            ]}
-                        />
-
-                        {/* ── Top Row: Avatar + Info ── */}
-                        <View style={styles.cardHeader}>
-                            <View
-                                style={[
-                                    styles.avatarContainer,
-                                    item.image && {
-                                        backgroundColor: "transparent",
-                                        overflow: "hidden",
-                                    },
-                                ]}>
-                                {item.image ? (
-                                    <Image
-                                        source={{
-                                            uri: getImageUrl(item.image),
-                                        }}
-                                        style={styles.avatarImg}
-                                        resizeMode="cover"
-                                    />
-                                ) : (
-                                    <LinearGradient
-                                        colors={avatarColors}
-                                        style={styles.avatarGradient}>
-                                        <Text style={styles.avatarText}>
-                                            {initials}
-                                        </Text>
-                                    </LinearGradient>
-                                )}
-                                {/* Online-style dot for priority */}
-                                <View
-                                    style={[
-                                        styles.avatarDot,
-                                        { backgroundColor: pCfg.color },
-                                    ]}
-                                />
-                            </View>
-
-                            <View style={styles.cardInfo}>
-                                <View style={styles.nameRow}>
-                                    <Text
-                                        style={styles.cardName}
-                                        numberOfLines={1}>
-                                        {item.name}
-                                    </Text>
-                                    <View style={styles.cardBadges}>
-                                        {item.enqNo ? (
-                                            <View style={styles.enqNoBadge}>
-                                                <Text style={styles.enqNoText}>
-                                                    #{item.enqNo}
-                                                </Text>
-                                            </View>
-                                        ) : null}
-                                        {dateLabel && (
-                                            <View style={styles.dateBadge}>
-                                                <Ionicons
-                                                    name="calendar-outline"
-                                                    size={9}
-                                                    color={COLORS.textMuted}
-                                                    style={{ marginRight: 3 }}
-                                                />
-                                                <Text style={styles.dateText}>
-                                                    {dateLabel}
-                                                </Text>
-                                            </View>
-                                        )}
-                                    </View>
-                                </View>
-
-                                <View style={styles.subInfoRow}>
-                                    <View style={styles.subInfoChip}>
-                                        <Ionicons
-                                            name="call-outline"
-                                            size={11}
-                                            color={COLORS.primary}
-                                        />
-                                        <Text style={styles.cardSubtext}>
-                                            {item.mobile}
-                                        </Text>
-                                    </View>
-                                    <View style={styles.subInfoChip}>
-                                        <Ionicons
-                                            name="time-outline"
-                                            size={11}
-                                            color={
-                                                item.lastContactedAt
-                                                    ? COLORS.teal
-                                                    : COLORS.textLight
-                                            }
-                                        />
-                                        <Text
-                                            style={[
-                                                styles.cardSubtext,
-                                                {
-                                                    color: item.lastContactedAt
-                                                        ? COLORS.teal
-                                                        : COLORS.textLight,
-                                                },
-                                            ]}>
-                                            {item.lastContactedAt
-                                                ? new Date(
-                                                      item.lastContactedAt,
-                                                  ).toLocaleDateString([], {
-                                                      month: "short",
-                                                      day: "numeric",
-                                                  })
-                                                : "Not contacted"}
-                                        </Text>
-                                    </View>
-                                </View>
-
-	                                {item.email ? (
-	                                    <TouchableOpacity
-	                                        onPress={() => onEmail?.(item)}
-	                                        style={styles.emailRow}>
-	                                        <Ionicons
-	                                            name="mail-outline"
-	                                            size={11}
-                                            color={COLORS.textLight}
-                                        />
-                                        <Text
-                                            style={styles.emailText}
-                                            numberOfLines={1}>
-                                            {item.email}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ) : null}
-                            </View>
-                        </View>
-
-                        {/* ── Product + Priority Row ── */}
-                        <View style={styles.productSection}>
-                            <View style={styles.productTag}>
-                                <Ionicons
-                                    name="briefcase-outline"
-                                    size={13}
-                                    color={COLORS.primary}
-                                />
-                                <Text
-                                    style={styles.productText}
-                                    numberOfLines={1}>
-                                    {item.product || "General Enquiry"}
-                                </Text>
-                            </View>
-                            {item.enqType && (
-                                <View
-                                    style={[
-                                        styles.priorityBadge,
-                                        { backgroundColor: pCfg.bg },
-                                    ]}>
-                                    <View
-                                        style={[
-                                            styles.priorityDot,
-                                            { backgroundColor: pCfg.color },
-                                        ]}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.priorityText,
-                                            { color: pCfg.color },
-                                        ]}>
-                                        {item.enqType}
-                                    </Text>
-                                </View>
-                            )}
-                        </View>
-
-                        {/* ── Meta Info ── */}
-                        <View style={styles.metaRow}>
-                            <View style={styles.metaChip}>
-                                <Ionicons
-                                    name="person-outline"
-                                    size={11}
-                                    color={COLORS.textMuted}
-                                />
-                                <Text style={styles.metaChipText}>
-                                    {item.assignedTo?.name || "Unassigned"}
-                                </Text>
-                            </View>
-                            <View style={styles.metaChip}>
-                                <Ionicons
-                                    name="pricetag-outline"
-                                    size={11}
-                                    color={COLORS.textMuted}
-                                />
-                                <Text style={styles.metaChipText}>
-                                    ₹{item.cost || 0}
-                                </Text>
-                            </View>
-                            <View style={styles.metaChip}>
-                                <Ionicons
-                                    name="time-outline"
-                                    size={11}
-                                    color={COLORS.textMuted}
-                                />
-                                <Text style={styles.metaChipText}>
-                                    {(item.enquiryDateTime || item.createdAt)
-                                        ? safeLocaleDateString(
-                                              item.enquiryDateTime ||
-                                                  item.createdAt,
-                                              {
-                                                  month: "short",
-                                                  day: "numeric",
-                                              },
-                                          )
-                                        : "-"}
-                                </Text>
-                            </View>
-                        </View>
-
-                        {/* ── Divider ── */}
-                        <View style={styles.cardDivider} />
-
-                        {/* ── Action Bar ── */}
-                        <View style={styles.actionBar}>
-                            <TouchableOpacity
-                                style={[
-                                    styles.actionBtnPrimary,
-                                    { backgroundColor: COLORS.success + "18" },
-                                ]}
-                                onPress={() => onCall(item)}>
-                                <Ionicons
-                                    name="call"
-                                    size={16}
-                                    color={COLORS.success}
-                                />
-                                <Text
-                                    style={[
-                                        styles.actionBtnLabel,
-                                        { color: COLORS.success },
-                                    ]}>
-                                    Call
-                                </Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={[
-                                    styles.actionBtnPrimary,
-                                    { backgroundColor: COLORS.whatsapp + "18" },
-                                ]}
-                                onPress={() => onWhatsApp(item)}>
-                                <Ionicons
-                                    name="logo-whatsapp"
-                                    size={16}
-                                    color={COLORS.whatsapp}
-                                />
-                                <Text
-                                    style={[
-                                        styles.actionBtnLabel,
-                                        { color: COLORS.whatsapp },
-                                    ]}>
-                                    WhatsApp
-                                </Text>
-                            </TouchableOpacity>
-
-	                            <View style={styles.actionRight}>
-	                                <TouchableOpacity
-	                                    style={[
-	                                        styles.actionIconBtn,
-	                                        {
-                                            backgroundColor:
-                                                COLORS.primary + "12",
-                                        },
-                                    ]}
-                                    onPress={() => onEdit(item)}>
-                                    <Ionicons
-                                        name="create-outline"
-                                        size={17}
-                                        color={COLORS.primary}
-                                    />
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[
-                                        styles.actionIconBtn,
-                                        {
-                                            backgroundColor:
-                                                COLORS.danger + "12",
-                                        },
-                                    ]}
-                                    onPress={() => onDelete(item._id)}>
-                                    <Ionicons
-                                        name="trash-outline"
-                                        size={17}
-                                        color={COLORS.danger}
-                                    />
-                                </TouchableOpacity>
-	                            </View>
-	                        </View>
-
-	                        <View style={styles.actionBarSecondary}>
-	                            <TouchableOpacity
-	                                style={[
-	                                    styles.actionBtnPrimary,
-	                                    {
-	                                        backgroundColor: "#2563EB" + "18",
-	                                        opacity: item.email ? 1 : 0.55,
-	                                    },
-	                                ]}
-	                                disabled={!item.email}
-	                                onPress={() => onEmail?.(item)}>
-	                                <Ionicons
-	                                    name="mail-outline"
-	                                    size={16}
-	                                    color={"#2563EB"}
-	                                />
-	                                <Text
-	                                    style={[
-	                                        styles.actionBtnLabel,
-	                                        { color: "#2563EB" },
-	                                    ]}>
-	                                    Email
-	                                </Text>
-	                            </TouchableOpacity>
-
-	                            <TouchableOpacity
-	                                style={[
-	                                    styles.actionBtnPrimary,
-	                                    {
-	                                        backgroundColor: COLORS.primary + "18",
-	                                    },
-	                                ]}
-	                                onPress={() => onFollowUp?.(item)}>
-	                                <Ionicons
-	                                    name="calendar-outline"
-	                                    size={16}
-	                                    color={COLORS.primary}
-	                                />
-	                                <Text
-	                                    style={[
-	                                        styles.actionBtnLabel,
-	                                        { color: COLORS.primary },
-	                                    ]}>
-	                                    Follow up
-	                                </Text>
-	                            </TouchableOpacity>
-	                        </View>
-	                    </Animated.View>
-	                </TouchableOpacity>
-            </MotiView>
-        );
-    },
-);
-
-// --- MAIN SCREEN ---
-export default function EnquiryListScreen({ navigation, route }) {
-    const insets = useSafeAreaInsets();
-    const swipeHandlers = useSwipeNavigation("Enquiry", navigation);
-    const [enquiries, setEnquiries] = useState([]);
-    const [searchQuery, setSearchQuery] = useState("");
-    const [isLoading, setIsLoading] = useState(true);
-    const [detailsModal, setDetailsModal] = useState(false);
-    const [selectedEnquiry, setSelectedEnquiry] = useState(null);
-    const [selectedDate, setSelectedDate] = useState(null);
-    const [datePickerVisible, setDatePickerVisible] = useState(false);
-    const [calendarMonth, setCalendarMonth] = useState(new Date());
-    const [enquiryCallLogs, setEnquiryCallLogs] = useState([]);
-    const [logsLoading, setLogsLoading] = useState(false);
-
-    const [callModalVisible, setCallModalVisible] = useState(false);
-    const [callEnquiry, setCallEnquiry] = useState(null);
-    const [callStartTime, setCallStartTime] = useState(null);
-    const [callStarted, setCallStarted] = useState(false);
-    const [autoDuration, setAutoDuration] = useState(0);
-    const [autoCallData, setAutoCallData] = useState(null);
-
-    const { user, logout } = useAuth();
-    const [menuVisible, setMenuVisible] = useState(false);
-    const [showLogoutModal, setShowLogoutModal] = useState(false);
-
-    const handleLogout = () => {
-        setMenuVisible(false);
-        setShowLogoutModal(true);
-    };
-    const confirmLogout = async () => {
-        setShowLogoutModal(false);
-        await logout();
-    };
-
-    const fabScale = useRef(new Animated.Value(1)).current;
-    const animateFab = () => {
-        Animated.sequence([
-            Animated.timing(fabScale, {
-                toValue: 0.85,
-                duration: 100,
-                useNativeDriver: true,
-            }),
-            Animated.spring(fabScale, { toValue: 1, useNativeDriver: true }),
-        ]).start();
-    };
-
-    useEffect(() => {
-        const isNewArchitectureEnabled =
-            global.nativeFabricUIManager != null;
-        if (Platform.OS === "android" && !isNewArchitectureEnabled) {
-            if (UIManager.setLayoutAnimationEnabledExperimental) {
-                UIManager.setLayoutAnimationEnabledExperimental(true);
-            }
-        }
-    }, [route.params?.filter]);
-
-	    const [page, setPage] = useState(1);
-	    const [hasMore, setHasMore] = useState(true);
-	    const [isLoadingMore, setIsLoadingMore] = useState(false);
-	    const isInitialMount = useRef(true);
-	    const skipNextSearchFetchRef = useRef(false);
-
-    useEffect(() => {
-        fetchEnquiries(true);
-    }, []);
-
-	    useEffect(() => {
-	        if (isInitialMount.current) return;
-	        if (skipNextSearchFetchRef.current) {
-	            skipNextSearchFetchRef.current = false;
-	            return;
-	        }
-	        const timer = setTimeout(() => {
-	            fetchEnquiries(true);
-	        }, 500);
-	        return () => clearTimeout(timer);
-	    }, [searchQuery]);
-
-    useEffect(() => {
-        const callEndedSub = DeviceEventEmitter.addListener(
-            "CALL_ENDED",
-            (data) => {
-                if (callStarted && callEnquiry) {
-                    global.__callClaimedByScreen = true;
-                    const fullCallData = {
-                        phoneNumber: data.phoneNumber,
-                        callType: data.callType,
-                        duration: data.duration,
-                        note: data.note || "Auto-logged from Enquiry Screen",
-                        callTime: data.callTime || new Date(),
-                        enquiryId: callEnquiry._id,
-                        contactName: callEnquiry.name,
-                    };
-                    handleSaveCallLog(fullCallData);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                }
-            },
-        );
-        return () => callEndedSub.remove();
-    }, [callStarted, callEnquiry]);
-
-    useEffect(() => {
-        const subscription = AppState.addEventListener(
-            "change",
-            async (nextAppState) => {
-                if (
-                    nextAppState === "active" &&
-                    callStarted &&
-                    callStartTime &&
-                    callEnquiry
-                ) {
-                    if (autoCallData) return;
-                    const endTime = Date.now();
-                    const durationSeconds = Math.floor(
-                        (endTime - callStartTime) / 1000,
-                    );
-                    const realDuration = Math.max(0, durationSeconds - 5);
-                    const fullCallData = {
-                        phoneNumber: callEnquiry.mobile,
-                        callType: "Outgoing",
-                        duration: realDuration,
-                        note: `Auto-logged (AppState fallback). Duration: ${realDuration}s`,
-                        callTime: new Date(),
-                        enquiryId: callEnquiry._id,
-                        contactName: callEnquiry.name,
-                    };
-                    handleSaveCallLog(fullCallData);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                }
-            },
-        );
-        return () => subscription.remove();
-    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
-
-    useEffect(() => {
-        if (isInitialMount.current) {
-            isInitialMount.current = false;
-            return;
-        }
-        fetchEnquiries(true);
-    }, [selectedDate]);
-
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-            fetchEnquiries(true);
-        });
-        return () => sub.remove();
-    }, []);
-
-	    const fetchEnquiries = async (refresh = false) => {
-        if (refresh) {
-            setIsLoading(true);
-            setPage(1);
-            setHasMore(true);
+  // horizontal swipe RIGHT to open detail page
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > 10 && Math.abs(g.dy) < 15 && g.dx > 0,
+      onPanResponderGrant: () => {
+        translateX.setValue(0);
+      },
+      onPanResponderMove: (_, g) => {
+        if (g.dx > 0) translateX.setValue(g.dx);
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dx > 60) {
+          Animated.timing(translateX, {
+            toValue: SW,
+            duration: 240,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start(() => {
+            translateX.setValue(0);
+            onSwipe?.(item);
+          });
         } else {
-            if (!hasMore || isLoadingMore) return;
-            setIsLoadingMore(true);
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 80,
+            friction: 10,
+          }).start();
         }
-        try {
-            const currentPage = refresh ? 1 : page;
-            const currentLimit = 20;
-            const response = await enquiryService.getAllEnquiries(
-                currentPage,
-                currentLimit,
-                searchQuery,
-                "",
-                selectedDate,
-            );
-            let newData = [];
-            let totalPages = 1;
-            if (Array.isArray(response)) {
-                newData = response;
-                setHasMore(false);
-            } else if (response && response.data) {
-                newData = response.data;
-                totalPages = response.pagination?.pages || 1;
-                setHasMore(currentPage < totalPages);
-            }
-            if (refresh) {
-                setEnquiries(newData);
-            } else {
-                setEnquiries((prev) => [...prev, ...newData]);
-            }
-            if (!refresh) {
-                setPage((prev) => prev + 1);
-            } else if (newData.length > 0 && currentPage < totalPages) {
-                setPage(2);
-            }
-        } catch (error) {
-            console.error("Error fetching data:", error);
-        } finally {
-            setIsLoading(false);
-            setIsLoadingMore(false);
-	        }
-	    };
+      },
+    })
+  ).current;
 
-	    const fetchEnquiriesRef = useRef(fetchEnquiries);
-	    useEffect(() => {
-	        fetchEnquiriesRef.current = fetchEnquiries;
-	    }, [fetchEnquiries]);
-
-    const handleLoadMore = () => {
-        if (!isLoading && !isLoadingMore && hasMore) fetchEnquiries(false);
-    };
-
-	    const handleDelete = useCallback((id) => {
-	        Alert.alert(
-	            "Delete Enquiry",
-	            "Are you sure you want to delete this enquiry?",
-	            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Delete",
-                    style: "destructive",
-                    onPress: async () => {
-                        try {
-                            await enquiryService.deleteEnquiry(id);
-                            setEnquiries((prev) =>
-                                prev.filter((e) => e._id !== id),
-                            );
-                            Alert.alert(
-                                "Success",
-                                "Enquiry deleted successfully",
-                            );
-                        } catch (err) {
-                            const errorMsg =
-                                err.response?.data?.message ||
-                                err.message ||
-                                "Failed to delete enquiry.";
-                            Alert.alert("Delete Failed", errorMsg);
-                        }
-                    },
-                },
-	            ],
-	        );
-	    }, []);
-
-	    const fetchEnquiryLogs = useCallback(async (enquiryId) => {
-	        setLogsLoading(true);
-	        try {
-	            const res = await callLogService.getCallLogs({ enquiryId });
-	            setEnquiryCallLogs(res.data || res);
-	        } catch (e) {
-	            console.error("Failed to fetch enquiry logs", e);
-	        } finally {
-	            setLogsLoading(false);
-	        }
-	    }, []);
-
-	    const handleShowDetails = useCallback(
-	        async (enquiry) => {
-	            if (!enquiry) return;
-	            setEnquiryCallLogs([]);
-	            setSelectedEnquiry(enquiry);
-	            setDetailsModal(true);
-	            try {
-	                const data = await enquiryService.getEnquiryById(enquiry._id);
-	                setSelectedEnquiry(data || enquiry);
-	            } catch (err) {
-	                setSelectedEnquiry(enquiry);
-	            }
-	            fetchEnquiryLogs(enquiry._id);
-	        },
-	        [fetchEnquiryLogs],
-	    );
-
-	    const navigateToFollowUp = useCallback(
-	        (enquiry) => {
-	            if (!enquiry) return;
-	            const enquiryContext = {
-	                _id: enquiry._id,
-	                enqNo: enquiry.enqNo,
-	                name: enquiry.name,
-	                mobile: enquiry.mobile,
-	                product: enquiry.product,
-	                image: enquiry.image,
-	                status: enquiry.status,
-	                source: enquiry.source,
-	                address: enquiry.address,
-	                requirements: enquiry.requirements,
-	                assignedTo: enquiry.assignedTo,
-	            };
-	            navigation.navigate("FollowUp", {
-	                openComposer: true,
-	                composerToken: Date.now(),
-	                enquiry: enquiryContext,
-	            });
-	        },
-	        [navigation],
-	    );
-
-	    const formatLogDuration = (seconds) => {
-	        if (!seconds || seconds === 0) return "0s";
-	        if (seconds < 60) return `${seconds}s`;
-	        const mins = Math.floor(seconds / 60);
-	        const secs = seconds % 60;
-	        return `${mins}m ${secs}s`;
-	    };
-
-	    const handleCall = useCallback(async (enquiry) => {
-	        if (!enquiry || !enquiry.mobile) return;
-	        try {
-	            const raw = String(enquiry.mobile).replace(/\D/g, "");
-	            if (!raw) {
-	                Alert.alert(
-	                    "No phone number",
-	                    "This contact has no valid phone number.",
-	                );
-	                return;
-	            }
-	            if (Platform.OS === "android") {
-	                try {
-	                    await PermissionsAndroid.request(
-	                        PermissionsAndroid.PERMISSIONS.CALL_PHONE,
-	                    );
-	                } catch (err) {}
-	            }
-	            let callTriggered = false;
-	            try {
-	                if (
-	                    RNImmediatePhoneCall &&
-	                    typeof RNImmediatePhoneCall.immediatePhoneCall ===
-	                        "function"
-	                ) {
-	                    RNImmediatePhoneCall.immediatePhoneCall(raw);
-	                    callTriggered = true;
-	                }
-	            } catch (e) {}
-	            if (!callTriggered) {
-	                const telUrl = `tel:${raw}`;
-	                const can = await Linking.canOpenURL(telUrl);
-	                if (can) {
-	                    await Linking.openURL(telUrl);
-	                } else {
-	                    Alert.alert(
-	                        "Unsupported",
-	                        "Calling is not supported on this device.",
-	                    );
-	                    return;
-	                }
-	            }
-	            setCallEnquiry(enquiry);
-	            setCallStartTime(Date.now());
-	            setCallStarted(true);
-	        } catch (err) {
-	            Alert.alert(
-	                "Error",
-	                "Unable to start call. Please try manually.",
-	            );
-	        }
-	    }, []);
-
-    const handleSaveCallLog = async (callData) => {
-        try {
-            const savedLog = await callLogService.createCallLog(callData);
-            if (!savedLog?._id) {
-                console.log("Call log was not created:", savedLog);
-                return;
-            }
-            setCallModalVisible(false);
-            setCallEnquiry(null);
-            setAutoCallData(null);
-            DeviceEventEmitter.emit("CALL_LOG_CREATED", savedLog);
-            fetchEnquiries(true);
-        } catch (error) {
-            console.error("Error logging call:", error);
-        }
-    };
-
-		    const handleWhatsApp = useCallback(
-		        (enquiry) => {
-		            if (!enquiry || !enquiry.mobile) return;
-		            navigation.navigate("WhatsAppChat", { enquiry });
-		        },
-		        [navigation],
-		    );
-
-		    const handleEmail = useCallback(
-		        (enquiry) => {
-		            if (!enquiry?.email) {
-		                Alert.alert("Email", "No email address found for this lead.");
-		                return;
-		            }
-		            navigation.navigate("EmailScreen", {
-		                toEmail: enquiry.email,
-		                enquiryId: enquiry._id,
-		                leadName: enquiry.name,
-		            });
-		        },
-		        [navigation],
-		    );
-
-		    const handleEnquirySaved = useCallback((...args) => {
-		        fetchEnquiriesRef.current?.(...args);
-		    }, []);
-
-	    const handleEdit = useCallback(
-	        (enquiry) => {
-	            try {
-	                navigation.navigate("AddEnquiry", {
-	                    enquiry,
-	                    onEnquirySaved: handleEnquirySaved,
-	                });
-	            } catch (e) {
-	                navigation.navigate("Enquiry", {
-	                    screen: "AddEnquiry",
-	                    params: { enquiry, onEnquirySaved: handleEnquirySaved },
-	                });
-	            }
-	        },
-	        [handleEnquirySaved, navigation],
-	    );
-
-	    const handleFollowUp = useCallback(
-	        (enquiry) => {
-	            setDetailsModal(false);
-	            navigateToFollowUp(enquiry);
-	        },
-	        [navigateToFollowUp],
-	    );
-
-	    const keyExtractor = useCallback(
-	        (item) => item._id?.toString() || item.id?.toString(),
-	        [],
-	    );
-
-		    const renderEnquiryItem = useCallback(
-		        ({ item, index }) => (
-		            <ModernCard
-		                item={item}
-		                index={index}
-		                onShowDetails={handleShowDetails}
-		                onEdit={handleEdit}
-		                onDelete={handleDelete}
-		                onFollowUp={handleFollowUp}
-		                onCall={handleCall}
-		                onWhatsApp={handleWhatsApp}
-		                onEmail={handleEmail}
-		            />
-		        ),
-		        [
-		            handleCall,
-		            handleDelete,
-		            handleEdit,
-		            handleEmail,
-		            handleFollowUp,
-		            handleShowDetails,
-		            handleWhatsApp,
-	        ],
-	    );
-
-    // --- SIDE MENU ---
-    const SideMenu = () => (
-        <Modal
-            animationType="slide"
-            transparent={true}
-            visible={menuVisible}
-            onRequestClose={() => setMenuVisible(false)}>
-            <TouchableOpacity
-                style={menuStyles.menuOverlay}
-                activeOpacity={1}
-                onPress={() => setMenuVisible(false)}>
-                <View style={menuStyles.menuContent}>
-                    {/* Menu header — premium frosted feel */}
-                    <LinearGradient
-                        colors={["#1A6BFF", "#7B61FF"]}
-                        style={menuStyles.menuHeader}>
-                        <View style={menuStyles.profileCircle}>
-                            {user?.logo ? (
-                                <Image
-                                    source={{ uri: getImageUrl(user.logo) }}
-                                    style={{
-                                        width: "100%",
-                                        height: "100%",
-                                        borderRadius: 35,
-                                    }}
-                                />
-                            ) : (
-                                <Ionicons
-                                    name="person"
-                                    size={38}
-                                    color="#fff"
-                                />
-                            )}
-                        </View>
-                        <Text style={menuStyles.profileName}>
-                            {user?.name || "User"}
-                        </Text>
-                        <View style={menuStyles.rolePill}>
-                            <Text style={menuStyles.profileRole}>
-                                {user?.role || "Staff Member"}
-                            </Text>
-                        </View>
-                    </LinearGradient>
-
-                    <ScrollView
-                        style={menuStyles.menuList}
-                        showsVerticalScrollIndicator={false}>
-                        <MenuItem
-                            icon="home-outline"
-                            label="Dashboard"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                if (navigation.canGoBack()) navigation.goBack();
-                                else navigation.navigate("Home");
-                            }}
-                        />
-                        <MenuItem
-                            icon="people-outline"
-                            label="Enquiries"
-                            onPress={() => setMenuVisible(false)}
-                            active
-                        />
-	                        <MenuItem
-	                            icon="call-outline"
-	                            label="Follow-ups"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("FollowUp");
-	                            }}
-	                        />
-	                        <MenuItem
-	                            icon="mail-outline"
-	                            label="Email"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("EmailScreen");
-	                            }}
-	                        />
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="link-outline"
-                                label="Lead Sources"
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    navigation.navigate("LeadSourceScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="people-circle-outline"
-                                label="Staff Management"
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    navigation.navigate("StaffScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="flag-outline"
-                                label="Targets"
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    navigation.navigate("TargetsScreen");
-                                }}
-                            />
-                        )}
-                        <MenuItem
-                            icon="bar-chart-outline"
-                            label="Reports"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                navigation.navigate("Report");
-                            }}
-                        />
-                        <MenuItem
-                            icon="list-outline"
-                            label="Call Logs"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                navigation.navigate("CallLog");
-                            }}
-                        />
-	                        <MenuItem
-	                            icon="settings-outline"
-	                            label="WhatsApp Settings"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("WhatsAppSettings");
-	                            }}
-	                        />
-	                        <MenuItem
-	                            icon="mail-open-outline"
-	                            label="Email Settings"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("EmailSettingsScreen");
-	                            }}
-	                        />
-                        <MenuItem
-                            icon="log-out-outline"
-                            label="Logout"
-                            color={COLORS.danger}
-                            onPress={handleLogout}
-                        />
-
-                        <View style={menuStyles.logoSection}>
-                            <View style={menuStyles.logoContainer}>
-                                {true ? (
-                                    <Image
-                                        source={require("../assets/logo.png")}
-                                        style={menuStyles.logoImage}
-                                        resizeMode="contain"
-                                    />
-                                ) : (
-                                    <View style={menuStyles.logoIconCircle}>
-                                        <Ionicons
-                                            name="business"
-                                            size={26}
-                                            color="#fff"
-                                        />
-                                    </View>
-                                )}
-                                <Text style={menuStyles.logoText}>
-                                    Neophorn Technologies
-                                </Text>
-                                <Text style={menuStyles.logoSubtext}>
-                                    CRM System
-                                </Text>
-                            </View>
-                            <Text style={menuStyles.versionText}>v1.0.0</Text>
-                        </View>
-                    </ScrollView>
-                </View>
-            </TouchableOpacity>
-        </Modal>
-    );
-
-    const LogoutConfirmModal = ({ visible, onClose, onConfirm }) => (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onClose}>
-            <TouchableOpacity
-                style={{
-                    flex: 1,
-                    backgroundColor: "rgba(10,15,30,0.45)",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    padding: 24,
-                }}
-                activeOpacity={1}
-                onPress={onClose}>
-                <MotiView
-                    from={{ opacity: 0, scale: 0.88, translateY: 24 }}
-                    animate={{ opacity: 1, scale: 1, translateY: 0 }}
-                    style={styles.logoutModalContainer}>
-                    <View style={styles.logoutIconRing}>
-                        <LinearGradient
-                            colors={[
-                                COLORS.danger + "22",
-                                COLORS.danger + "08",
-                            ]}
-                            style={styles.logoutIconGrad}>
-                            <Ionicons
-                                name="log-out-outline"
-                                size={30}
-                                color={COLORS.danger}
-                            />
-                        </LinearGradient>
-                    </View>
-                    <Text style={styles.logoutTitle}>Sign Out?</Text>
-                    <Text style={styles.logoutMessage}>
-                        You'll need to log in again to access your enquiries and
-                        data.
-                    </Text>
-                    <View style={styles.logoutActionRow}>
-                        <TouchableOpacity
-                            style={styles.logoutCancelBtn}
-                            onPress={onClose}>
-                            <Text style={styles.logoutCancelText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={onConfirm}>
-                            <LinearGradient
-                                colors={[COLORS.danger, "#C5001F"]}
-                                style={styles.logoutConfirmBtn}>
-                                <Text style={styles.logoutConfirmText}>
-                                    Sign Out
-                                </Text>
-                            </LinearGradient>
-                        </TouchableOpacity>
-                    </View>
-                </MotiView>
-            </TouchableOpacity>
-        </Modal>
-    );
-
-    const MenuItem = ({
-        icon,
-        label,
-        color = COLORS.textSub,
-        onPress,
-        active,
-    }) => (
-        <TouchableOpacity
-            style={[menuStyles.menuItem, active && menuStyles.menuItemActive]}
-            onPress={onPress}
-            activeOpacity={0.7}>
-            <View
-                style={[
-                    menuStyles.menuIconWrap,
-                    active && { backgroundColor: COLORS.primary + "18" },
-                ]}>
-                <Ionicons
-                    name={icon}
-                    size={21}
-                    color={active ? COLORS.primary : color}
-                />
-            </View>
-            <Text
-                style={[
-                    menuStyles.menuItemText,
-                    { color: active ? COLORS.primary : color },
-                    active && { fontWeight: "700" },
-                ]}>
-                {label}
-            </Text>
-            {active && <View style={menuStyles.menuActiveIndicator} />}
-        </TouchableOpacity>
-    );
-
-    return (
-        <SafeAreaView style={styles.container} {...swipeHandlers}>
-            <StatusBar barStyle="dark-content" backgroundColor={COLORS.bgApp} />
-
-            <LogoutConfirmModal
-                visible={showLogoutModal}
-                onClose={() => setShowLogoutModal(false)}
-                onConfirm={confirmLogout}
-            />
-            <PostCallModal
-                visible={callModalVisible}
-                enquiry={callEnquiry}
-                onSave={handleSaveCallLog}
-                initialDuration={autoDuration}
-                autoCallData={autoCallData}
-                onCancel={() => {
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setCallStarted(false);
-                    setAutoCallData(null);
-                }}
-            />
-            <SideMenu />
-
-            {/* ── DETAILS MODAL ── */}
-            <Modal
-                visible={detailsModal}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setDetailsModal(false)}>
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContainer}>
-                        {/* Drag handle */}
-                        <View style={styles.modalDragHandle} />
-
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>
-                                Enquiry Details
-                            </Text>
-                            <TouchableOpacity
-                                onPress={() => setDetailsModal(false)}
-                                style={styles.closeBtn}>
-                                <Ionicons
-                                    name="close"
-                                    size={20}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        {selectedEnquiry && (
-                            <ScrollView
-                                contentContainerStyle={styles.modalContent}
-                                showsVerticalScrollIndicator={false}>
-                                {/* Hero */}
-                                <View style={styles.modalHero}>
-                                    <View
-                                        style={[
-                                            styles.modalImageContainer,
-                                            selectedEnquiry.image && {
-                                                backgroundColor: "transparent",
-                                                overflow: "hidden",
-                                            },
-                                        ]}>
-                                        {selectedEnquiry.image ? (
-                                            <Image
-                                                source={{
-                                                    uri: getImageUrl(
-                                                        selectedEnquiry.image,
-                                                    ),
-                                                }}
-                                                style={styles.modalImage}
-                                                resizeMode="cover"
-                                            />
-                                        ) : (
-                                            <LinearGradient
-                                                colors={
-                                                    COLORS.gradients.primary
-                                                }
-                                                style={
-                                                    styles.modalAvatarGradient
-                                                }>
-                                                <Text
-                                                    style={
-                                                        styles.modalAvatarText
-                                                    }>
-                                                    {selectedEnquiry.name
-                                                        ?.substring(0, 2)
-                                                        .toUpperCase()}
-                                                </Text>
-                                            </LinearGradient>
-                                        )}
-                                    </View>
-                                    <Text style={styles.modalHeroName}>
-                                        {selectedEnquiry.name}
-                                    </Text>
-                                    <Text style={styles.modalHeroSub}>
-                                        {selectedEnquiry.mobile}
-                                    </Text>
-	                                    {selectedEnquiry.enqType && (
-	                                        <View
-	                                            style={[
-	                                                styles.heroPriorityBadge,
-                                                {
-                                                    backgroundColor:
-                                                        COLORS.primary + "15",
-                                                },
-                                            ]}>
-                                            <Text
-                                                style={[
-                                                    styles.heroPriorityText,
-                                                    { color: COLORS.primary },
-                                                ]}>
-	                                                {selectedEnquiry.enqType}
-	                                            </Text>
-	                                        </View>
-	                                    )}
-	                                    <View style={styles.heroChipsRow}>
-	                                        {selectedEnquiry.status ? (
-	                                            <View style={styles.heroChip}>
-	                                                <Ionicons
-	                                                    name="radio-button-on-outline"
-	                                                    size={13}
-	                                                    color={COLORS.textSub}
-	                                                />
-	                                                <Text
-	                                                    style={
-	                                                        styles.heroChipText
-	                                                    }>
-	                                                    {selectedEnquiry.status}
-	                                                </Text>
-	                                            </View>
-	                                        ) : null}
-	                                        {selectedEnquiry.assignedTo?.name ? (
-	                                            <View style={styles.heroChip}>
-	                                                <Ionicons
-	                                                    name="person-circle-outline"
-	                                                    size={13}
-	                                                    color={COLORS.textSub}
-	                                                />
-	                                                <Text
-	                                                    style={
-	                                                        styles.heroChipText
-	                                                    }>
-	                                                    {selectedEnquiry.assignedTo
-	                                                        ?.name}
-	                                                </Text>
-	                                            </View>
-	                                        ) : null}
-	                                        {selectedEnquiry.source ? (
-	                                            <View style={styles.heroChip}>
-	                                                <Ionicons
-	                                                    name="git-branch-outline"
-	                                                    size={13}
-	                                                    color={COLORS.textSub}
-	                                                />
-	                                                <Text
-	                                                    style={
-	                                                        styles.heroChipText
-	                                                    }>
-	                                                    {selectedEnquiry.source}
-	                                                </Text>
-	                                            </View>
-	                                        ) : null}
-	                                    </View>
-	                                </View>
-
-	                                {/* Details */}
-	                                <View style={styles.sectionBlock}>
-	                                    <View style={styles.sectionHeaderRow}>
-	                                        <View
-	                                            style={
-	                                                styles.sectionHeaderIcon
-	                                            }>
-	                                            <Ionicons
-	                                                name="information-circle-outline"
-	                                                size={15}
-	                                                color={COLORS.primary}
-	                                            />
-	                                        </View>
-	                                        <Text
-	                                            style={styles.sectionHeaderTitle}>
-	                                            Details
-	                                        </Text>
-	                                    </View>
-	                                    <View style={styles.sectionCard}>
-	                                    <DetailRow
-	                                        label="Name"
-	                                        value={selectedEnquiry.name}
-	                                        icon="person-outline"
-	                                    />
-                                    <DetailRow
-                                        label="Mobile"
-                                        value={selectedEnquiry.mobile}
-                                        icon="call-outline"
-                                    />
-                                    {selectedEnquiry.email && (
-                                        <DetailRow
-                                            label="Email"
-                                            value={selectedEnquiry.email}
-                                            icon="mail-outline"
-                                        />
-                                    )}
-                                    <DetailRow
-                                        label="Enquiry No"
-                                        value={selectedEnquiry.enqNo || "-"}
-                                        icon="document-text-outline"
-                                    />
-                                    <DetailRow
-                                        label="Product"
-                                        value={selectedEnquiry.product}
-                                        icon="briefcase-outline"
-                                    />
-                                    {selectedEnquiry.cost && (
-                                        <DetailRow
-                                            label="Estimated Cost"
-                                            value={`₹${selectedEnquiry.cost}`}
-                                            icon="pricetag-outline"
-                                        />
-                                    )}
-                                    <DetailRow
-                                        label="Address"
-                                        value={selectedEnquiry.address || "-"}
-                                        icon="location-outline"
-                                    />
-                                    <DetailRow
-                                        label="Assigned Staff"
-                                        value={
-                                            selectedEnquiry.assignedTo?.name ||
-                                            "-"
-                                        }
-                                        icon="people-outline"
-                                    />
-                                    <DetailRow
-                                        label="Enquiry Date Time"
-                                        icon="time-outline"
-                                        value={
-                                            selectedEnquiry.enquiryDateTime
-                                                ? safeLocaleString(
-                                                      selectedEnquiry.enquiryDateTime,
-                                                  )
-                                                : safeLocaleString(
-                                                      selectedEnquiry.createdAt,
-                                                  )
-                                        }
-                                    />
-                                    <DetailRow
-                                        label="Priority"
-                                        value={
-                                            selectedEnquiry.enqType || "Normal"
-                                        }
-                                        icon="flag-outline"
-                                    />
-	                                    <DetailRow
-	                                        label="Source"
-	                                        value={selectedEnquiry.source || "-"}
-	                                        icon="git-branch-outline"
-	                                    />
-	                                    </View>
-	                                </View>
-
-	                                {/* Call History */}
-	                                <View style={styles.sectionBlock}>
-	                                    <View style={styles.sectionHeaderRow}>
-	                                        <View
-	                                            style={
-	                                                styles.sectionHeaderIcon
-	                                            }>
-	                                            <Ionicons
-	                                                name="call-outline"
-	                                                size={15}
-	                                                color={COLORS.primary}
-	                                            />
-	                                        </View>
-	                                        <Text
-	                                            style={styles.sectionHeaderTitle}>
-	                                            Call History
-	                                        </Text>
-	                                        <View style={{ flex: 1 }} />
-	                                        <Text style={styles.logCount}>
-	                                            {enquiryCallLogs.length} calls
-	                                        </Text>
-	                                    </View>
-
-	                                    <View style={styles.sectionCard}>
-	                                        {logsLoading ? (
-	                                            <ActivityIndicator
-	                                                size="small"
-	                                                color={COLORS.primary}
-	                                                style={{
-	                                                    marginVertical: 24,
-	                                                }}
-	                                            />
-	                                        ) : enquiryCallLogs.length > 0 ? (
-	                                            enquiryCallLogs.map(
-	                                                (log, idx) => (
-	                                                    <View
-	                                                        key={
-	                                                            log._id || idx
-	                                                        }
-	                                                        style={
-	                                                            styles.logItem
-	                                                        }>
-	                                            <View
-	                                                style={[
-	                                                    styles.logIconContainer,
-                                                    {
-                                                        backgroundColor:
-                                                            log.callType ===
-                                                            "Incoming"
-                                                                ? COLORS.success +
-                                                                  "18"
-                                                                : log.callType ===
-                                                                    "Outgoing"
-                                                                  ? COLORS.primary +
-                                                                    "18"
-                                                                  : COLORS.danger +
-                                                                    "18",
-                                                    },
-                                                ]}>
-                                                <Ionicons
-                                                    name={
-                                                        log.callType ===
-                                                        "Incoming"
-                                                            ? "arrow-down-outline"
-                                                            : log.callType ===
-                                                                "Outgoing"
-                                                              ? "arrow-up-outline"
-                                                              : "close-outline"
-                                                    }
-                                                    size={14}
-                                                    color={
-                                                        log.callType ===
-                                                        "Incoming"
-                                                            ? COLORS.success
-                                                            : log.callType ===
-                                                                "Outgoing"
-                                                              ? COLORS.primary
-                                                              : COLORS.danger
-                                                    }
-                                                />
-                                            </View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text
-                                                    style={styles.logTypeText}>
-                                                    {log.callType}
-                                                </Text>
-                                                <Text
-                                                    style={styles.logDateText}>
-                                                    {new Date(
-                                                        log.callTime,
-                                                    ).toLocaleDateString([], {
-                                                        month: "short",
-                                                        day: "numeric",
-                                                    })}{" "}
-                                                    at{" "}
-                                                    {new Date(
-                                                        log.callTime,
-                                                    ).toLocaleTimeString([], {
-                                                        hour: "2-digit",
-                                                        minute: "2-digit",
-                                                    })}
-                                                </Text>
-                                            </View>
-                                            <View style={styles.logRight}>
-                                                <Text
-                                                    style={
-                                                        styles.logDurationText
-                                                    }>
-                                                    {formatLogDuration(
-                                                        log.duration,
-                                                    )}
-                                                </Text>
-                                                <Text
-                                                    style={
-                                                        styles.logStatusLabel
-                                                    }>
-                                                    Duration
-                                                </Text>
-                                            </View>
-	                                                    </View>
-	                                                ),
-	                                            )
-	                                        ) : (
-	                                            <View style={styles.emptyLogs}>
-	                                                <Ionicons
-	                                                    name="call-outline"
-	                                                    size={28}
-	                                                    color={
-	                                                        COLORS.textLight
-	                                                    }
-	                                                />
-	                                                <Text
-	                                                    style={
-	                                                        styles.emptyLogsText
-	                                                    }>
-	                                                    No calls recorded yet
-	                                                </Text>
-	                                            </View>
-	                                        )}
-	                                    </View>
-	                                </View>
-                            </ScrollView>
-                        )}
-
-                        {/* Footer actions */}
-                        <View style={styles.modalFooter}>
-                            <TouchableOpacity
-                                style={[
-                                    styles.modalBtn,
-                                    { backgroundColor: COLORS.success },
-                                ]}
-                                onPress={() => handleCall(selectedEnquiry)}>
-                                <Ionicons name="call" color="#fff" size={18} />
-                                <Text style={styles.modalBtnText}>Call</Text>
-                            </TouchableOpacity>
-	                            <TouchableOpacity
-	                                style={[
-	                                    styles.modalBtn,
-	                                    { backgroundColor: COLORS.whatsapp },
-	                                ]}
-	                                onPress={() => handleWhatsApp(selectedEnquiry)}>
-                                <Ionicons
-                                    name="logo-whatsapp"
-                                    color="#fff"
-                                    size={18}
-                                />
-	                                <Text style={styles.modalBtnText}>
-	                                    WhatsApp
-	                                </Text>
-	                            </TouchableOpacity>
-	                            {selectedEnquiry?.email ? (
-	                                <TouchableOpacity
-	                                    style={[
-	                                        styles.modalBtn,
-	                                        { backgroundColor: "#2563EB" },
-	                                    ]}
-	                                    onPress={() => handleEmail(selectedEnquiry)}>
-	                                    <Ionicons
-	                                        name="mail-outline"
-	                                        color="#fff"
-	                                        size={18}
-	                                    />
-	                                    <Text style={styles.modalBtnText}>
-	                                        Email
-	                                    </Text>
-	                                </TouchableOpacity>
-	                            ) : null}
-	                            <TouchableOpacity
-	                                onPress={() => handleFollowUp(selectedEnquiry)}
-	                                style={{ flex: 1 }}>
-                                <LinearGradient
-                                    colors={COLORS.gradients.primary}
-                                    style={styles.modalBtnGrad}>
-                                    <Ionicons
-                                        name="add-circle-outline"
-                                        color="#fff"
-                                        size={18}
-                                    />
-                                    <Text style={styles.modalBtnText}>
-                                        Follow Up
-                                    </Text>
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
-
-            {/* ── HEADER ── */}
-            <View
-                style={[styles.headerWrapper, { paddingTop: insets.top + -30 }]}>
-                <View style={styles.headerTop}>
-                    <TouchableOpacity
-                        onPress={() => setMenuVisible(true)}
-                        style={styles.menuIconContainer}>
-                        <Ionicons
-                            name="menu"
-                            size={22}
-                            color={COLORS.textSub}
-                        />
-                    </TouchableOpacity>
-
-                    <View style={styles.headerCenter}>
-                        <Text style={styles.greetingHeader}>Enquiry List</Text>
-                        <Text style={styles.userNameHeader}>
-                            {user?.name || "User"}
-                        </Text>
-                    </View>
-
-                    <View style={styles.headerRight}>
-                        <TouchableOpacity style={styles.notifContainer}>
-                            <Ionicons
-                                name="notifications-outline"
-                                size={22}
-                                color={COLORS.textSub}
-                            />
-                            <View style={styles.notifBadge} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={() => navigation.navigate("ProfileScreen")}
-                            activeOpacity={0.85}
-                            style={styles.profileBtn}>
-                            {user?.logo ? (
-                                <Image
-                                    source={{ uri: getImageUrl(user.logo) }}
-                                    style={styles.profileAvatar}
-                                />
-                            ) : (
-                                <View style={styles.profileFallback}>
-                                    <Text style={styles.profileFallbackText}>
-                                        {user?.name?.[0]?.toUpperCase?.() ||
-                                            "U"}
-                                    </Text>
-                                </View>
-                            )}
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                {/* Search bar */}
-                <View style={styles.searchContainer}>
-                    <Ionicons
-                        name="search-outline"
-                        size={18}
-                        color={COLORS.textMuted}
-                        style={{ marginLeft: 14 }}
-                    />
-                    <TextInput
-                        style={styles.searchInput}
-                        placeholder="Search name, phone..."
-                        placeholderTextColor={COLORS.textLight}
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                    />
-                    <TouchableOpacity
-                        onPress={() => setDatePickerVisible(true)}
-                        style={styles.calendarTrigger}>
-                        <Ionicons
-                            name="calendar-outline"
-                            size={18}
-                            color={COLORS.primary}
-                        />
-                    </TouchableOpacity>
-                </View>
-
-                {/* Info row */}
-                <View style={styles.headerInfoRow}>
-                    <Text style={styles.headerInfoText}>
-                        {enquiries.length} enqu
-                        {enquiries.length === 1 ? "iry" : "iries"}
-                    </Text>
-                    {selectedDate ? (
-                        <TouchableOpacity
-                            style={styles.activeDatePill}
-                            onPress={() => setSelectedDate(null)}>
-                            <Ionicons
-                                name="close-circle"
-                                size={13}
-                                color={COLORS.primary}
-                            />
-                            <Text style={styles.activeDateText}>
-                                {selectedDate}
-                            </Text>
-                        </TouchableOpacity>
-                    ) : null}
-                </View>
-            </View>
-
-            {/* ── LIST ── */}
-	            <FlatList
-	                data={enquiries}
-	                keyExtractor={keyExtractor}
-	                renderItem={renderEnquiryItem}
-	                contentContainerStyle={[
-	                    styles.listContent,
-	                    enquiries.length === 0 && { flex: 1 },
-	                ]}
-                refreshing={isLoading && enquiries.length > 0}
-                onRefresh={() => fetchEnquiries(true)}
-                onEndReached={handleLoadMore}
-                onEndReachedThreshold={0.5}
-                initialNumToRender={8}
-                maxToRenderPerBatch={10}
-                windowSize={11}
-                removeClippedSubviews={true}
-                updateCellsBatchingPeriod={30}
-                ListFooterComponent={
-                    isLoadingMore ? (
-                        <View style={{ paddingVertical: 20 }}>
-                            <ActivityIndicator
-                                size="small"
-                                color={COLORS.primary}
-                            />
-                        </View>
-                    ) : null
-                }
-                ListEmptyComponent={
-                    isLoading ? (
-                        <View style={styles.emptyContainer}>
-                            <ActivityIndicator
-                                size="large"
-                                color={COLORS.primary}
-                            />
-                            <Text style={[styles.emptyText, { marginTop: 16 }]}>
-                                Loading enquiries...
-                            </Text>
-                        </View>
-                    ) : (
-                        <View style={styles.emptyContainer}>
-                            <View style={styles.emptyIconWrap}>
-                                <Ionicons
-                                    name="document-text-outline"
-                                    size={40}
-                                    color={COLORS.primary}
-                                />
-                            </View>
-                            <Text style={styles.emptyTitle}>
-                                No enquiries found
-                            </Text>
-                            <Text style={styles.emptySubtext}>
-                                Try adjusting your search or date filter
-                            </Text>
-                        </View>
-                    )
-                }
-                showsVerticalScrollIndicator={false}
-            />
-
-            {/* ── FAB ── */}
-            {user?.role !== "Staff" && (
-                <Animated.View
-                    style={[
-                        styles.fabContainer,
-                        { transform: [{ scale: fabScale }] },
-                    ]}>
-                    <TouchableOpacity
-                        onPress={() => {
-                            animateFab();
-                            try {
-                                navigation.navigate("AddEnquiry", {
-                                    onEnquirySaved: fetchEnquiries,
-                                });
-                            } catch (e) {
-                                navigation.navigate("Enquiry", {
-                                    screen: "AddEnquiry",
-                                    params: { onEnquirySaved: fetchEnquiries },
-                                });
-                            }
-                        }}
-                        activeOpacity={0.85}>
-                        <LinearGradient
-                            colors={COLORS.gradients.primary}
-                            style={styles.fab}>
-                            <Ionicons name="add" size={26} color="#FFF" />
-                        </LinearGradient>
-                    </TouchableOpacity>
-                </Animated.View>
-            )}
-
-            {/* ── DATE PICKER MODAL ── */}
-            <Modal
-                visible={datePickerVisible}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setDatePickerVisible(false)}>
-                <View style={styles.modalOverlay}>
-                    <View style={styles.datePickerCard}>
-                        <View style={styles.modalDragHandle} />
-                        <View style={styles.dateHeader}>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    const y = calendarMonth.getFullYear();
-                                    const m = calendarMonth.getMonth();
-                                    setCalendarMonth(new Date(y, m - 1, 1));
-                                }}
-                                style={styles.calNavBtn}>
-                                <Ionicons
-                                    name="chevron-back"
-                                    size={22}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                            <Text style={styles.dateTitle}>
-                                {calendarMonth.toLocaleString(undefined, {
-                                    month: "long",
-                                    year: "numeric",
-                                })}
-                            </Text>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    const y = calendarMonth.getFullYear();
-                                    const m = calendarMonth.getMonth();
-                                    setCalendarMonth(new Date(y, m + 1, 1));
-                                }}
-                                style={styles.calNavBtn}>
-                                <Ionicons
-                                    name="chevron-forward"
-                                    size={22}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        <View
-                            style={{
-                                paddingHorizontal: 16,
-                                paddingBottom: 24,
-                                width: "100%",
-                                alignItems: "center",
-                            }}>
-                            <TouchableOpacity
-                                style={styles.clearDateBtn}
-                                onPress={() => {
-                                    setSelectedDate(null);
-                                    setDatePickerVisible(false);
-                                }}>
-                                <Text style={styles.clearDateText}>
-                                    Show All Dates
-                                </Text>
-                            </TouchableOpacity>
-
-                            <View style={styles.weekHeader}>
-                                {[
-                                    "Mon",
-                                    "Tue",
-                                    "Wed",
-                                    "Thu",
-                                    "Fri",
-                                    "Sat",
-                                    "Sun",
-                                ].map((d, i) => (
-                                    <Text key={i} style={styles.weekDay}>
-                                        {d}
-                                    </Text>
-                                ))}
-                            </View>
-
-                            <View style={styles.calendarGrid}>
-                                {(() => {
-                                    const y = calendarMonth.getFullYear();
-                                    const m = calendarMonth.getMonth();
-                                    const firstDay = new Date(
-                                        y,
-                                        m,
-                                        1,
-                                        12,
-                                    ).getDay();
-                                    const firstDayIndex = (firstDay + 6) % 7;
-                                    const daysInMonth = new Date(
-                                        y,
-                                        m + 1,
-                                        0,
-                                    ).getDate();
-                                    const cells = [];
-                                    for (let i = 0; i < firstDayIndex; i++)
-                                        cells.push(
-                                            <View
-                                                key={`e-${i}`}
-                                                style={styles.dayCell}
-                                            />,
-                                        );
-                                    for (let d = 1; d <= daysInMonth; d++) {
-                                        const cellDate = new Date(y, m, d);
-                                        const iso = toLocalIso(cellDate);
-                                        const isSelected = selectedDate === iso;
-                                        const isToday =
-                                            toLocalIso(new Date()) === iso;
-                                        cells.push(
-                                            <TouchableOpacity
-                                                key={d}
-                                                onPress={() => {
-                                                    setSelectedDate(iso);
-                                                    setDatePickerVisible(false);
-                                                }}
-                                                style={[
-                                                    styles.dayCell,
-                                                    isSelected &&
-                                                        styles.daySelected,
-                                                    isToday &&
-                                                        !isSelected &&
-                                                        styles.dayToday,
-                                                ]}>
-                                                {isSelected ? (
-                                                    <LinearGradient
-                                                        colors={
-                                                            COLORS.gradients
-                                                                .primary
-                                                        }
-                                                        style={
-                                                            styles.daySelectedGrad
-                                                        }>
-                                                        <Text
-                                                            style={[
-                                                                styles.dayText,
-                                                                styles.dayTextSelected,
-                                                            ]}>
-                                                            {d}
-                                                        </Text>
-                                                    </LinearGradient>
-                                                ) : (
-                                                    <Text
-                                                        style={[
-                                                            styles.dayText,
-                                                            isToday &&
-                                                                !isSelected &&
-                                                                styles.dayTextToday,
-                                                        ]}>
-                                                        {d}
-                                                    </Text>
-                                                )}
-                                            </TouchableOpacity>,
-                                        );
-                                    }
-                                    return cells;
-                                })()}
-                            </View>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
-        </SafeAreaView>
-    );
-}
-
-// ── HELPER COMPONENTS ─────────────────────────────────────────────────────
-const DetailRow = ({ label, value, icon }) => (
-    <View style={styles.detailRow}>
-        <View style={styles.detailIconWrap}>
-            <Ionicons
-                name={icon || "information-circle-outline"}
-                size={15}
-                color={COLORS.primary}
-            />
-        </View>
-        <View style={{ flex: 1 }}>
-            <Text style={styles.detailLabel}>{label}</Text>
-            <Text style={styles.detailValue}>{value}</Text>
-        </View>
-    </View>
-);
-
-const StatCard = ({ label, value, icon, gradient }) => (
+  return (
     <MotiView
-        from={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        style={styles.statCardWrapper}>
-        <LinearGradient colors={gradient} style={styles.statCard}>
-            <View style={styles.statIconCircle}>
-                <Ionicons name={icon} size={15} color="#FFF" />
+      from={{ opacity: 0, translateX: 24 }}
+      animate={{ opacity: 1, translateX: 0 }}
+      transition={{ type:"timing", duration:280, delay: index < 8 ? index*40 : 0 }}
+      style={S.cardWrap}
+    >
+      <Animated.View style={{ transform:[{ translateX }], opacity: swipeOpacity }} {...pan.panHandlers}>
+        <TouchableOpacity
+          activeOpacity={1}
+          onPressIn={() => Animated.spring(scale,{toValue:0.98,useNativeDriver:true}).start()}
+          onPressOut={() => Animated.spring(scale,{toValue:1,useNativeDriver:true}).start()}
+          onPress={() => onPress(item)}
+        >
+          <Animated.View style={[S.card, {transform:[{scale}]}]}>
+            {/* Left priority stripe */}
+            <View style={[S.stripe, {backgroundColor: pCfg.color}]} />
+
+            <View style={S.cardBody}>
+              {/* Top row */}
+              <View style={S.cardRow}>
+                {/* Avatar */}
+                <View style={S.avatarBox}>
+                  {item.image ? (
+                    <Image source={{uri:getImageUrl(item.image)}} style={S.avatarImg} />
+                  ) : (
+                    <LinearGradient colors={colors} style={S.avatarGrad}>
+                      <Text style={S.avatarText}>{getInitials(item.name)}</Text>
+                    </LinearGradient>
+                  )}
+                  <View style={[S.avatarDot,{backgroundColor:pCfg.color}]} />
+                </View>
+
+                {/* Info */}
+                <View style={S.cardMid}>
+                  <View style={S.cardRowBetween}>
+                    <Text style={S.cardName} numberOfLines={1}>{item.name}</Text>
+                    <Text style={S.cardDate}>
+                      {safeDate(item.enquiryDateTime||item.createdAt,{month:"short",day:"numeric"})}
+                    </Text>
+                  </View>
+                  <View style={S.cardRowBetween}>
+                    <View style={S.productPill}>
+                      <Ionicons name="briefcase-outline" size={11} color={C.primary} />
+                      <Text style={S.productPillText} numberOfLines={1}>{item.product||"General"}</Text>
+                    </View>
+                    <View style={[S.priorityPill,{backgroundColor:pCfg.bg}]}>
+                      <View style={[S.priorityDot,{backgroundColor:pCfg.color}]} />
+                      <Text style={[S.priorityPillText,{color:pCfg.color}]}>{pCfg.label}</Text>
+                    </View>
+                  </View>
+                  {/* Mobile + status */}
+                  <View style={S.cardRowBetween}>
+                    <Text style={S.cardMobile}>{item.mobile}</Text>
+                    <Text style={S.cardStatus}>{displayStatusLabel(item.status)}</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Action bar */}
+              <View style={S.cardActions}>
+                <TouchableOpacity style={[S.actionChip,{backgroundColor:C.success+"18"}]} onPress={()=>onCall(item)}>
+                  <Ionicons name="call" size={15} color={C.success} />
+                </TouchableOpacity>
+                <TouchableOpacity style={[S.actionChip,{backgroundColor:C.whatsapp+"18"}]} onPress={()=>onWhatsApp(item)}>
+                  <Ionicons name="logo-whatsapp" size={15} color={C.whatsapp} />
+                </TouchableOpacity>
+                <View style={{flex:1}} />
+                {item.enqNo && (
+                  <View style={S.enqNoBadge}>
+                    <Text style={S.enqNoText}>#{item.enqNo}</Text>
+                  </View>
+                )}
+                <View style={S.swipeHint}>
+                  <Ionicons name="chevron-forward" size={13} color={C.textLight} />
+                  <Text style={S.swipeHintText}>Details</Text>
+                </View>
+              </View>
             </View>
-            <View>
-                <Text style={styles.statValue}>{value}</Text>
-                <Text style={styles.statLabel}>{label}</Text>
-            </View>
-        </LinearGradient>
+          </Animated.View>
+        </TouchableOpacity>
+      </Animated.View>
     </MotiView>
-);
-
-// ── STYLES ────────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.bgApp },
-
-    // ── Header ──
-    headerWrapper: {
-        backgroundColor: COLORS.bgCard,
-        paddingHorizontal: 18,
-        paddingBottom: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
-        elevation: 3,
-    },
-    headerTop: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-    headerCenter: { flex: 1, marginLeft: 12 },
-    headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
-    menuIconContainer: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    menuIconInner: { gap: 4, alignItems: "flex-end" },
-    hamburgerLine: {
-        height: 2,
-        width: 18,
-        backgroundColor: COLORS.textSub,
-        borderRadius: 2,
-    },
-    greetingHeader: {
-        fontSize: 12,
-        color: COLORS.textMuted,
-        fontWeight: "500",
-        letterSpacing: 0.3,
-    },
-    userNameHeader: {
-        fontSize: 18,
-        color: COLORS.textMain,
-        fontWeight: "700",
-        letterSpacing: -0.3,
-    },
-    notifContainer: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    notifBadge: {
-        position: "absolute",
-        top: 10,
-        right: 10,
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: COLORS.secondary,
-        borderWidth: 1.5,
-        borderColor: COLORS.bgCard,
-    },
-    profileBtn: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        overflow: "hidden",
-    },
-    profileAvatar: { width: "100%", height: "100%", borderRadius: 14 },
-    profileFallback: {
-        width: "100%",
-        height: "100%",
-        justifyContent: "center",
-        alignItems: "center",
-        backgroundColor: COLORS.primaryLight,
-    },
-    profileFallbackText: {
-        color: COLORS.primaryDark,
-        fontWeight: "900",
-        fontSize: 16,
-    },
-
-    // Search
-    searchContainer: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: COLORS.bgApp,
-        borderRadius: 14,
-        height: 48,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-        marginBottom: 10,
-    },
-    searchInput: {
-        flex: 1,
-        marginLeft: 8,
-        fontSize: 15,
-        color: COLORS.textMain,
-        fontWeight: "400",
-    },
-    calendarTrigger: {
-        width: 40,
-        height: 36,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 6,
-        borderRadius: 10,
-        backgroundColor: COLORS.primaryLight,
-    },
-    headerInfoRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginTop: 2,
-    },
-    headerInfoText: {
-        fontSize: 12,
-        color: COLORS.textMuted,
-        fontWeight: "600",
-    },
-    activeDatePill: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        backgroundColor: COLORS.primaryLight,
-        borderRadius: 20,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-    },
-    activeDateText: { fontSize: 12, color: COLORS.primary, fontWeight: "700" },
-
-    // ── Cards ──
-    listContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 100 },
-    cardWrapper: { marginBottom: 14 },
-    cardContainer: {
-        backgroundColor: COLORS.bgCard,
-        borderRadius: 20,
-        padding: 16,
-        paddingLeft: 20,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.07,
-        shadowRadius: 16,
-        elevation: 3,
-        overflow: "hidden",
-    },
-    cardStripe: {
-        position: "absolute",
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: 4,
-        borderTopLeftRadius: 20,
-        borderBottomLeftRadius: 20,
-    },
-
-    cardHeader: {
-        flexDirection: "row",
-        alignItems: "flex-start",
-        marginBottom: 12,
-    },
-    avatarContainer: {
-        width: 50,
-        height: 50,
-        borderRadius: 15,
-        marginRight: 12,
-        flexShrink: 0,
-    },
-    avatarImg: { width: "100%", height: "100%", borderRadius: 15 },
-    avatarGradient: {
-        width: "100%",
-        height: "100%",
-        borderRadius: 15,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    avatarText: {
-        color: "#FFF",
-        fontSize: 17,
-        fontWeight: "800",
-        letterSpacing: 0.5,
-    },
-    avatarDot: {
-        position: "absolute",
-        bottom: 1,
-        right: 1,
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        borderWidth: 2,
-        borderColor: COLORS.bgCard,
-    },
-
-    cardInfo: { flex: 1 },
-    nameRow: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
-    cardName: {
-        fontSize: 16,
-        fontWeight: "700",
-        color: COLORS.textMain,
-        flex: 1,
-        letterSpacing: -0.2,
-    },
-    cardBadges: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        marginLeft: 6,
-    },
-    enqNoBadge: {
-        backgroundColor: COLORS.primaryLight,
-        paddingHorizontal: 7,
-        paddingVertical: 3,
-        borderRadius: 7,
-        borderWidth: 1,
-        borderColor: COLORS.primaryMid,
-    },
-    enqNoText: { fontSize: 10, fontWeight: "800", color: COLORS.primary },
-    dateBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: COLORS.bgApp,
-        paddingHorizontal: 7,
-        paddingVertical: 3,
-        borderRadius: 7,
-    },
-    dateText: { fontSize: 10, fontWeight: "700", color: COLORS.textMuted },
-
-    subInfoRow: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 6,
-        marginBottom: 4,
-    },
-    subInfoChip: { flexDirection: "row", alignItems: "center", gap: 4 },
-    cardSubtext: { fontSize: 12, color: COLORS.textMuted, fontWeight: "500" },
-    emailRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 4,
-        marginTop: 2,
-    },
-    emailText: {
-        fontSize: 11,
-        color: COLORS.textLight,
-        fontWeight: "500",
-        flex: 1,
-    },
-
-    productSection: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingTop: 12,
-        marginBottom: 10,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.divider,
-    },
-    productTag: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        backgroundColor: COLORS.primaryLight,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-        borderRadius: 9,
-        flex: 1,
-        marginRight: 8,
-    },
-    productText: {
-        fontSize: 12,
-        color: COLORS.primaryDark,
-        fontWeight: "700",
-        flex: 1,
-    },
-    priorityBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        paddingHorizontal: 9,
-        paddingVertical: 5,
-        borderRadius: 9,
-    },
-    priorityDot: { width: 6, height: 6, borderRadius: 3 },
-    priorityText: {
-        fontSize: 11,
-        fontWeight: "800",
-        textTransform: "uppercase",
-        letterSpacing: 0.3,
-    },
-
-    metaRow: {
-        flexDirection: "row",
-        gap: 8,
-        marginBottom: 12,
-        flexWrap: "wrap",
-    },
-    metaChip: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 4,
-        backgroundColor: COLORS.bgApp,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 7,
-    },
-    metaChipText: { fontSize: 11, color: COLORS.textMuted, fontWeight: "600" },
-
-    cardDivider: {
-        height: 1,
-        backgroundColor: COLORS.divider,
-        marginBottom: 12,
-    },
-	    actionBar: { flexDirection: "row", alignItems: "center", gap: 8 },
-	    actionBarSecondary: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
-	    actionBtnPrimary: {
-	        flex: 1,
-	        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-        paddingVertical: 9,
-        borderRadius: 11,
-    },
-    actionBtnLabel: { fontSize: 13, fontWeight: "700" },
-    actionRight: { flexDirection: "row", gap: 6 },
-    actionIconBtn: {
-        width: 38,
-        height: 38,
-        borderRadius: 11,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-
-    // ── FAB ──
-    fabContainer: { position: "absolute", bottom: 32, right: 22 },
-    fab: {
-        width: 58,
-        height: 58,
-        borderRadius: 29,
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.35,
-        shadowRadius: 16,
-        elevation: 8,
-    },
-
-    // ── Modals ──
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: "rgba(10,15,30,0.5)",
-        justifyContent: "flex-end",
-    },
-    modalContainer: {
-        backgroundColor: COLORS.bgCard,
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
-        maxHeight: "90%",
-        overflow: "hidden",
-    },
-    modalDragHandle: {
-        width: 38,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: COLORS.border,
-        alignSelf: "center",
-        marginTop: 10,
-    },
-    modalHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.divider,
-    },
-    modalTitle: {
-        fontSize: 17,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        letterSpacing: -0.2,
-    },
-    closeBtn: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-
-    modalContent: { padding: 20 },
-
-    modalHero: { alignItems: "center", marginBottom: 24 },
-    modalImageContainer: {
-        width: 90,
-        height: 90,
-        borderRadius: 28,
-        marginBottom: 14,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.12,
-        shadowRadius: 12,
-        elevation: 5,
-        backgroundColor: COLORS.bgApp,
-    },
-    modalImage: { width: "100%", height: "100%", borderRadius: 28 },
-    modalAvatarGradient: {
-        width: "100%",
-        height: "100%",
-        borderRadius: 28,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    modalAvatarText: { fontSize: 30, fontWeight: "800", color: "#FFF" },
-    modalHeroName: {
-        fontSize: 22,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        marginBottom: 4,
-        letterSpacing: -0.4,
-    },
-    modalHeroSub: {
-        fontSize: 14,
-        color: COLORS.textMuted,
-        fontWeight: "500",
-        marginBottom: 10,
-    },
-	    heroPriorityBadge: {
-	        paddingHorizontal: 12,
-	        paddingVertical: 5,
-	        borderRadius: 20,
-	    },
-	    heroPriorityText: { fontSize: 12, fontWeight: "700" },
-	    heroChipsRow: {
-	        flexDirection: "row",
-	        flexWrap: "wrap",
-	        justifyContent: "center",
-	        gap: 8,
-	        marginTop: 12,
-	    },
-	    heroChip: {
-	        flexDirection: "row",
-	        alignItems: "center",
-	        gap: 6,
-	        paddingHorizontal: 10,
-	        paddingVertical: 6,
-	        borderRadius: 999,
-	        backgroundColor: COLORS.bgApp,
-	        borderWidth: 1,
-	        borderColor: COLORS.border,
-	    },
-	    heroChipText: {
-	        fontSize: 12,
-	        color: COLORS.textSub,
-	        fontWeight: "700",
-	    },
-
-	    sectionBlock: { marginBottom: 16 },
-	    sectionHeaderRow: {
-	        flexDirection: "row",
-	        alignItems: "center",
-	        gap: 10,
-	        marginBottom: 10,
-	    },
-	    sectionHeaderIcon: {
-	        width: 28,
-	        height: 28,
-	        borderRadius: 9,
-	        backgroundColor: COLORS.primaryLight,
-	        justifyContent: "center",
-	        alignItems: "center",
-	    },
-	    sectionHeaderTitle: {
-	        fontSize: 14,
-	        fontWeight: "900",
-	        color: COLORS.textMain,
-	        letterSpacing: -0.1,
-	    },
-	    sectionCard: {
-	        backgroundColor: COLORS.bgCardAlt,
-	        borderRadius: 18,
-	        borderWidth: 1,
-	        borderColor: COLORS.border,
-	        paddingHorizontal: 14,
-	        paddingVertical: 4,
-	        overflow: "hidden",
-	    },
-
-	    detailsGrid: { gap: 4, marginBottom: 8 },
-    detailRow: {
-        flexDirection: "row",
-        alignItems: "flex-start",
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.divider,
-    },
-    detailIconWrap: {
-        width: 32,
-        height: 32,
-        borderRadius: 10,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 12,
-        flexShrink: 0,
-    },
-    detailLabel: {
-        fontSize: 11,
-        color: COLORS.textLight,
-        fontWeight: "600",
-        textTransform: "uppercase",
-        letterSpacing: 0.5,
-        marginBottom: 2,
-    },
-    detailValue: { fontSize: 14, color: COLORS.textMain, fontWeight: "600" },
-
-    logHeaderRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginTop: 20,
-        marginBottom: 12,
-    },
-    logHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-    logHeaderIcon: {
-        width: 28,
-        height: 28,
-        borderRadius: 8,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    logSectionTitle: {
-        fontSize: 14,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        letterSpacing: -0.1,
-    },
-    logCount: {
-        fontSize: 12,
-        color: COLORS.textMuted,
-        fontWeight: "600",
-        backgroundColor: COLORS.bgApp,
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 8,
-    },
-
-	    logItem: {
-	        flexDirection: "row",
-	        alignItems: "center",
-	        paddingVertical: 12,
-	        borderBottomWidth: 1,
-	        borderBottomColor: COLORS.divider,
-	    },
-    logIconContainer: {
-        width: 34,
-        height: 34,
-        borderRadius: 12,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 12,
-    },
-    logTypeText: { fontSize: 13, fontWeight: "700", color: COLORS.textMain },
-    logDateText: { fontSize: 11, color: COLORS.textLight, marginTop: 2 },
-    logRight: { alignItems: "flex-end" },
-    logDurationText: { fontSize: 13, fontWeight: "800", color: COLORS.primary },
-    logStatusLabel: {
-        fontSize: 9,
-        color: COLORS.textLight,
-        fontWeight: "600",
-        textTransform: "uppercase",
-        marginTop: 2,
-    },
-
-    emptyLogs: { padding: 32, alignItems: "center", gap: 8 },
-    emptyLogsText: { color: COLORS.textLight, fontSize: 13, fontWeight: "500" },
-
-    modalFooter: {
-        flexDirection: "row",
-        padding: 16,
-        gap: 10,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.divider,
-    },
-    modalBtn: {
-        flex: 1,
-        flexDirection: "row",
-        justifyContent: "center",
-        alignItems: "center",
-        paddingVertical: 14,
-        borderRadius: 14,
-        gap: 6,
-    },
-    modalBtnGrad: {
-        flex: 1,
-        flexDirection: "row",
-        justifyContent: "center",
-        alignItems: "center",
-        paddingVertical: 14,
-        borderRadius: 14,
-        gap: 6,
-    },
-    modalBtnText: { color: "#FFF", fontWeight: "700", fontSize: 14 },
-
-    // Date Picker
-    datePickerCard: {
-        backgroundColor: COLORS.bgCard,
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
-        paddingBottom: 24,
-        alignItems: "center",
-    },
-    dateHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: 20,
-        width: "100%",
-    },
-    calNavBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    dateTitle: { fontSize: 16, fontWeight: "800", color: COLORS.textMain },
-    clearDateBtn: {
-        paddingVertical: 11,
-        paddingHorizontal: 20,
-        borderRadius: 14,
-        backgroundColor: COLORS.primaryLight,
-        marginBottom: 16,
-        alignSelf: "stretch",
-        alignItems: "center",
-        borderWidth: 1.5,
-        borderColor: COLORS.primaryMid,
-    },
-    clearDateText: { fontSize: 14, fontWeight: "700", color: COLORS.primary },
-    weekHeader: { flexDirection: "row", width: 308, marginBottom: 6 },
-    weekDay: {
-        width: 44,
-        textAlign: "center",
-        fontSize: 11,
-        fontWeight: "700",
-        color: COLORS.textLight,
-        paddingVertical: 6,
-    },
-    calendarGrid: { flexDirection: "row", flexWrap: "wrap", width: 308 },
-    dayCell: {
-        width: 44,
-        height: 40,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    daySelected: { borderRadius: 12 },
-    daySelectedGrad: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    dayToday: {
-        borderWidth: 1.5,
-        borderColor: COLORS.primary,
-        borderRadius: 12,
-    },
-    dayText: { fontSize: 14, color: COLORS.textMain, fontWeight: "600" },
-    dayTextSelected: { color: "#FFF", fontWeight: "800" },
-    dayTextToday: { color: COLORS.primary, fontWeight: "800" },
-
-    // Empty State
-    emptyContainer: { alignItems: "center", marginTop: 70, gap: 10 },
-    emptyIconWrap: {
-        width: 72,
-        height: 72,
-        borderRadius: 22,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 4,
-    },
-    emptyTitle: { fontSize: 17, color: COLORS.textSub, fontWeight: "700" },
-    emptyText: { fontSize: 14, color: COLORS.textLight, fontWeight: "500" },
-    emptySubtext: { fontSize: 13, color: COLORS.textLight, fontWeight: "400" },
-
-    // Stats (kept for StatCard component)
-    statCardWrapper: { width: 110, marginRight: 10 },
-    statCard: {
-        padding: 12,
-        borderRadius: 16,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-    },
-    statIconCircle: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: "rgba(255,255,255,0.2)",
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    statValue: { color: "#FFF", fontSize: 16, fontWeight: "800" },
-    statLabel: {
-        color: "rgba(255,255,255,0.8)",
-        fontSize: 10,
-        fontWeight: "600",
-        textTransform: "uppercase",
-    },
-
-    // Logout
-    logoutModalContainer: {
-        backgroundColor: COLORS.bgCard,
-        borderRadius: 28,
-        padding: 28,
-        width: "100%",
-        maxWidth: 340,
-        alignItems: "center",
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 16 },
-        shadowOpacity: 0.12,
-        shadowRadius: 32,
-        elevation: 12,
-    },
-    logoutIconRing: { marginBottom: 18 },
-    logoutIconGrad: {
-        width: 68,
-        height: 68,
-        borderRadius: 22,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    logoutTitle: {
-        fontSize: 21,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        marginBottom: 8,
-        letterSpacing: -0.3,
-    },
-    logoutMessage: {
-        fontSize: 14,
-        color: COLORS.textMuted,
-        textAlign: "center",
-        lineHeight: 21,
-        marginBottom: 26,
-    },
-    logoutActionRow: { flexDirection: "row", gap: 12, width: "100%" },
-    logoutCancelBtn: {
-        flex: 1,
-        height: 50,
-        borderRadius: 14,
-        justifyContent: "center",
-        alignItems: "center",
-        backgroundColor: COLORS.bgApp,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-    },
-    logoutConfirmBtn: {
-        flex: 1,
-        height: 50,
-        borderRadius: 14,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    logoutCancelText: {
-        fontSize: 15,
-        fontWeight: "700",
-        color: COLORS.textMuted,
-    },
-    logoutConfirmText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  );
 });
 
-const menuStyles = StyleSheet.create({
-    menuOverlay: { flex: 1, backgroundColor: "rgba(10,15,30,0.45)" },
-    menuContent: {
-        width: "78%",
-        backgroundColor: COLORS.bgCard,
-        height: "100%",
-        borderTopRightRadius: 32,
-        borderBottomRightRadius: 32,
-        overflow: "hidden",
-    },
-    menuHeader: {
-        paddingTop:
-            Platform.OS === "android"
-                ? (StatusBar.currentHeight || 0) + 24
-                : 54,
-        paddingBottom: 28,
-        alignItems: "center",
-    },
-    profileCircle: {
-        width: 72,
-        height: 72,
-        borderRadius: 24,
-        backgroundColor: "rgba(255,255,255,0.2)",
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 12,
-        borderWidth: 2,
-        borderColor: "rgba(255,255,255,0.35)",
-    },
-    profileName: {
-        color: "#fff",
-        fontSize: 18,
-        fontWeight: "800",
-        letterSpacing: -0.3,
-    },
-    rolePill: {
-        marginTop: 6,
-        backgroundColor: "rgba(255,255,255,0.2)",
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 20,
-    },
-    profileRole: {
-        color: "rgba(255,255,255,0.9)",
-        fontSize: 12,
-        fontWeight: "600",
-    },
-    menuList: { padding: 14 },
-    menuItem: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingVertical: 11,
-        paddingHorizontal: 10,
-        borderRadius: 14,
-        marginBottom: 3,
-    },
-    menuItemActive: { backgroundColor: COLORS.primaryLight },
-    menuIconWrap: {
-        width: 36,
-        height: 36,
-        borderRadius: 11,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 12,
-    },
-    menuItemText: { fontSize: 15, fontWeight: "600", flex: 1 },
-    menuActiveIndicator: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: COLORS.primary,
-    },
+// ─── Detail page (slides in from right) ──────────────────────────────────────
+const DETAIL_TABS = ["Details","Calls"];
 
-    logoSection: {
-        marginTop: 20,
-        paddingTop: 20,
-        paddingBottom: 30,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.border,
-        alignItems: "center",
-    },
-    logoContainer: { alignItems: "center", marginBottom: 10 },
-    logoImage: { width: 120, height: 38 },
-    logoIconCircle: {
-        width: 50,
-        height: 50,
-        borderRadius: 16,
-        backgroundColor: COLORS.primary,
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    logoText: {
-        fontSize: 15,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        marginTop: 8,
-    },
-    logoSubtext: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
-    versionText: { fontSize: 11, color: COLORS.textLight, fontWeight: "500" },
+const EnquiryDetailPage = ({ enquiry, callLogs, logsLoading, onClose, onEdit }) => {
+  const insets = useSafeAreaInsets();
+  const slideX = useRef(new Animated.Value(SW)).current;
+  const [tab, setTab] = useState(0);
+  const tabSlideX = useRef(new Animated.Value(0)).current;
+  const lastTabRef = useRef(0);
+  const pCfg   = priorityCfg(enquiry?.enqType);
+  const colors = avatarColors(enquiry?.name);
+
+  useEffect(() => {
+    Animated.timing(slideX, { toValue: 0, duration: 300, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [slideX]);
+
+  useEffect(() => {
+    const direction = tab >= lastTabRef.current ? 1 : -1;
+    tabSlideX.setValue(direction * 26);
+    Animated.timing(tabSlideX, {
+      toValue: 0,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+    lastTabRef.current = tab;
+  }, [tab, tabSlideX]);
+
+  useEffect(() => {
+    const handleHardwareBack = () => {
+      if (tab > 0) {
+        setTab((currentTab) => Math.max(0, currentTab - 1));
+        return true;
+      }
+      handleClose();
+      return true;
+    };
+
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      handleHardwareBack,
+    );
+
+    return () => subscription.remove();
+  }, [tab]);
+
+  const handleClose = () => {
+    Animated.timing(slideX, { toValue: SW, duration: 260, useNativeDriver: true }).start(onClose);
+  };
+
+  if (!enquiry) return null;
+
+  return (
+    <Animated.View style={[SD.root, { transform:[{ translateX: slideX }] }]}>
+      <StatusBar barStyle="dark-content" />
+
+      {/* ── Top card: white bg, decorative circles, circle avatar ── */}
+      <View style={[SD.topCard, { paddingTop: insets.top + 54 }]}>
+
+        {/* Decorative background circles */}
+        <View style={SD.deco1} />
+        <View style={SD.deco2} />
+        <View style={SD.deco3} />
+
+        {/* Back button */}
+        <TouchableOpacity onPress={handleClose} style={[SD.backBtn, { top: insets.top + 8 }]}>
+          <Ionicons name="arrow-back" size={19} color={C.textSub} />
+        </TouchableOpacity>
+
+        {/* Edit button top-right */}
+        <TouchableOpacity onPress={() => onEdit(enquiry)} style={[SD.editBtn, { top: insets.top + 8 }]}>
+          <Ionicons name="create-outline" size={19} color={C.textSub} />
+        </TouchableOpacity>
+
+        {/* Avatar — large circle */}
+        <View style={SD.avatarRing}>
+          <View style={SD.avatarOuter}>
+            {enquiry.image ? (
+              <Image source={{ uri: getImageUrl(enquiry.image) }} style={SD.avatarImg} />
+            ) : (
+              <LinearGradient colors={colors} style={SD.avatarGrad}>
+                <Text style={SD.avatarText}>{getInitials(enquiry.name)}</Text>
+              </LinearGradient>
+            )}
+          </View>
+          {/* Priority dot */}
+          <View style={[SD.priDot, { backgroundColor: pCfg.color }]} />
+        </View>
+
+        {/* Name & mobile */}
+        <Text style={SD.heroName}>{enquiry.name}</Text>
+        <Text style={SD.heroMobile}>{enquiry.mobile}</Text>
+
+        {/* Info chips */}
+        <View style={SD.chipsRow}>
+          <View style={[SD.chip, { backgroundColor: pCfg.bg }]}>
+            <View style={[SD.chipDot, { backgroundColor: pCfg.color }]} />
+            <Text style={[SD.chipText, { color: pCfg.color }]}>{enquiry.enqType || "Normal"}</Text>
+          </View>
+          {enquiry.status ? (
+            <View style={SD.chip}>
+              <Ionicons name="radio-button-on" size={9} color={C.textMuted} />
+              <Text style={SD.chipText}>{displayStatusLabel(enquiry.status)}</Text>
+            </View>
+          ) : null}
+          {enquiry.source ? (
+            <View style={SD.chip}>
+              <Ionicons name="git-branch-outline" size={9} color={C.textMuted} />
+              <Text style={SD.chipText}>{enquiry.source}</Text>
+            </View>
+          ) : null}
+          {enquiry.product ? (
+            <View style={SD.chip}>
+              <Ionicons name="briefcase-outline" size={9} color={C.textMuted} />
+              <Text style={SD.chipText} numberOfLines={1}>{enquiry.product}</Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      {/* ── Tabs ── */}
+      <View style={SD.tabBar}>
+        {DETAIL_TABS.map((t, i) => (
+          <TouchableOpacity key={t} onPress={() => setTab(i)} style={[SD.tab, tab === i && SD.tabActive]}>
+            <Text style={[SD.tabText, tab === i && SD.tabTextActive]}>{t}</Text>
+            {tab === i && <View style={SD.tabLine} />}
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* ── Tab content — swipeable ── */}
+      {(() => {
+        const tabPan = PanResponder.create({
+          onStartShouldSetPanResponder: () => false,
+          onMoveShouldSetPanResponder: (_, g) =>
+            Math.abs(g.dx) > 12 && Math.abs(g.dy) < 20,
+          onPanResponderRelease: (_, g) => {
+            if (g.dx < -40 && tab < DETAIL_TABS.length - 1) setTab(t => t + 1);
+            if (g.dx > 40 && tab > 0) setTab(t => t - 1);
+            if (g.dx > 60 && tab === 0) handleClose();
+          },
+        });
+        return (
+          <Animated.View
+            style={{ flex: 1, transform: [{ translateX: tabSlideX }] }}
+            {...tabPan.panHandlers}
+          >
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: 14, paddingBottom: 110 }}
+            showsVerticalScrollIndicator={false}
+          >
+        {tab === 0 && (
+          <View style={{ gap: 8 }}>
+            {[
+              { label: "Enquiry No",  value: enquiry.enqNo || "-",                                    icon: "document-text-outline" },
+              { label: "Product",     value: enquiry.product || "-",                                   icon: "briefcase-outline" },
+              { label: "Cost",        value: enquiry.cost ? `₹${enquiry.cost}` : "-",                 icon: "pricetag-outline" },
+              { label: "Email",       value: enquiry.email || "-",                                     icon: "mail-outline" },
+              { label: "Address",     value: enquiry.address || "-",                                   icon: "location-outline" },
+              { label: "Assigned To", value: getAssignedUserLabel(enquiry.assignedTo),                 icon: "person-circle-outline" },
+              { label: "Date & Time", value: safeDateTime(enquiry.enquiryDateTime || enquiry.createdAt), icon: "time-outline" },
+              { label: "Lead Source", value: enquiry.source || "-",                                    icon: "git-branch-outline" },
+            ].map(row => (
+              <View key={row.label} style={SD.detailRow}>
+                <View style={SD.detailIconBox}>
+                  <Ionicons name={row.icon} size={14} color={C.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={SD.detailLabel}>{row.label}</Text>
+                  <Text style={SD.detailValue}>{row.value}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {tab === 1 && (
+          logsLoading ? (
+            <ActivityIndicator color={C.primary} style={{ marginTop: 40 }} />
+          ) : callLogs.length === 0 ? (
+            <View style={SD.emptyWrap}>
+              <View style={SD.emptyIconBox}><Ionicons name="call-outline" size={26} color={C.textLight} /></View>
+              <Text style={SD.emptyText}>No calls recorded yet</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {callLogs.map((log, i) => {
+                const isIn  = log.callType === "Incoming";
+                const isOut = log.callType === "Outgoing";
+                const col   = isIn ? C.success : isOut ? C.primary : C.danger;
+                return (
+                  <View key={log._id || i} style={SD.logItem}>
+                    <View style={[SD.logIconBox, { backgroundColor: col + "18" }]}>
+                      <Ionicons name={isIn ? "arrow-down-outline" : isOut ? "arrow-up-outline" : "close-outline"} size={14} color={col} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={SD.logType}>{log.callType}</Text>
+                      <Text style={SD.logDate}>
+                        {new Date(log.callTime).toLocaleDateString([], { month: "short", day: "numeric" })} at {new Date(log.callTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text style={[SD.logDur, { color: col }]}>{fmtDur(log.duration)}</Text>
+                      <Text style={SD.logDurLabel}>duration</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )
+        )}
+      </ScrollView>
+          </Animated.View>
+        );
+      })()}
+
+    </Animated.View>
+  );
+};
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
+export default function EnquiryListScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
+  const { user, logout } = useAuth();
+
+  const [enquiries,    setEnquiries]    = useState([]);
+  const [searchQuery,  setSearchQuery]  = useState("");
+  const [isLoading,    setIsLoading]    = useState(true);
+  const [isLoadingMore,setIsLoadingMore]= useState(false);
+  const [page,         setPage]         = useState(1);
+  const [hasMore,      setHasMore]      = useState(true);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [calendarMonth,setCalendarMonth]= useState(new Date());
+  const [datePickerVisible,setDatePickerVisible] = useState(false);
+
+  // Detail page
+  const [detailEnquiry,  setDetailEnquiry]  = useState(null);
+  const [detailCallLogs, setDetailCallLogs] = useState([]);
+  const [logsLoading,    setLogsLoading]    = useState(false);
+
+  // Call state
+  const [callEnquiry,    setCallEnquiry]    = useState(null);
+  const [callStartTime,  setCallStartTime]  = useState(null);
+  const [callStarted,    setCallStarted]    = useState(false);
+  const [callModalVisible,setCallModalVisible]=useState(false);
+  const [autoDuration,   setAutoDuration]   = useState(0);
+  const [autoCallData,   setAutoCallData]   = useState(null);
+
+  const [menuVisible,    setMenuVisible]    = useState(false);
+  const [showLogoutModal,setShowLogoutModal]= useState(false);
+
+  const fabScale         = useRef(new Animated.Value(1)).current;
+  const isInitialMount   = useRef(true);
+  const skipNextSearch   = useRef(false);
+  const fetchRef         = useRef(null);
+
+  // ── Data fetching ──────────────────────────────────────────────────────────
+  const fetchEnquiries = useCallback(async (refresh=false) => {
+    if (refresh) { setIsLoading(true); setPage(1); setHasMore(true); }
+    else { if (!hasMore||isLoadingMore) return; setIsLoadingMore(true); }
+    try {
+      const pg = refresh ? 1 : page;
+      const res = await enquiryService.getAllEnquiries(pg, 20, searchQuery, "", selectedDate);
+      let data=[], totalPages=1;
+      if (Array.isArray(res)) { data=res; setHasMore(false); }
+      else if (res?.data) { data=res.data; totalPages=res.pagination?.pages||1; setHasMore(pg<totalPages); }
+      refresh ? setEnquiries(data) : setEnquiries(p=>[...p,...data]);
+      if (!refresh) setPage(p=>p+1);
+      else if (data.length>0 && pg<totalPages) setPage(2);
+    } catch(e) { console.error(e); }
+    finally { setIsLoading(false); setIsLoadingMore(false); }
+  }, [hasMore, isLoadingMore, page, searchQuery, selectedDate]);
+
+  useEffect(() => { fetchRef.current = fetchEnquiries; }, [fetchEnquiries]);
+  useEffect(() => { fetchEnquiries(true); }, []);
+  useEffect(() => {
+    if (isInitialMount.current) { isInitialMount.current=false; return; }
+    fetchEnquiries(true);
+  }, [selectedDate]);
+  useEffect(() => {
+    if (isInitialMount.current) return;
+    if (skipNextSearch.current) { skipNextSearch.current=false; return; }
+    const t = setTimeout(()=>fetchEnquiries(true), 500);
+    return ()=>clearTimeout(t);
+  }, [searchQuery]);
+
+  // ── Call listeners ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
+      if (callStarted && callEnquiry) {
+        global.__callClaimedByScreen = true;
+        handleSaveCallLog({ phoneNumber:data.phoneNumber, callType:data.callType, duration:data.duration, note:"Auto-logged from Enquiry Screen", callTime:data.callTime||new Date(), enquiryId:callEnquiry._id, contactName:callEnquiry.name });
+        setCallStarted(false); setCallStartTime(null);
+      }
+    });
+    return ()=>sub.remove();
+  }, [callStarted, callEnquiry]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async(next) => {
+      if (next==="active" && callStarted && callStartTime && callEnquiry && !autoCallData) {
+        const dur = Math.max(0, Math.floor((Date.now()-callStartTime)/1000)-5);
+        handleSaveCallLog({ phoneNumber:callEnquiry.mobile, callType:"Outgoing", duration:dur, note:`AppState fallback. Duration: ${dur}s`, callTime:new Date(), enquiryId:callEnquiry._id, contactName:callEnquiry.name });
+        setCallStarted(false); setCallStartTime(null);
+      }
+    });
+    return ()=>sub.remove();
+  }, [callStarted, callStartTime, callEnquiry, autoCallData]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", ()=>fetchEnquiries(true));
+    return ()=>sub.remove();
+  }, []);
+
+  useEffect(() => {
+    const isNew = global.nativeFabricUIManager != null;
+    if (Platform.OS==="android" && !isNew && UIManager.setLayoutAnimationEnabledExperimental)
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("blur", () => {
+      setDetailEnquiry(null);
+      setDetailCallLogs([]);
+      setLogsLoading(false);
+    });
+    return unsubscribe;
+  }, [navigation]);
+
+  // ── Action handlers ────────────────────────────────────────────────────────
+  const openDetail = useCallback(async (enquiry) => {
+    setDetailCallLogs([]);
+    setDetailEnquiry(enquiry);
+    setLogsLoading(true);
+    try {
+      const full = await enquiryService.getEnquiryById(enquiry._id);
+      setDetailEnquiry(full||enquiry);
+    } catch { setDetailEnquiry(enquiry); }
+    try {
+      const res = await callLogService.getCallLogs({enquiryId:enquiry._id});
+      setDetailCallLogs(res.data||res);
+    } catch { setDetailCallLogs([]); }
+    finally { setLogsLoading(false); }
+  }, []);
+
+  const handleCall = useCallback(async (enquiry) => {
+    if (!enquiry?.mobile) return;
+    const raw = String(enquiry.mobile).replace(/\D/g,"");
+    if (!raw) { Alert.alert("No phone","No valid phone number."); return; }
+    setCallEnquiry(enquiry);
+    setAutoCallData(null);
+    setAutoDuration(0);
+    setCallStarted(true);
+    setCallStartTime(Date.now());
+    try {
+      if (Platform.OS === "android" && RNImmediatePhoneCall?.immediatePhoneCall) {
+        RNImmediatePhoneCall.immediatePhoneCall(raw);
+        return;
+      }
+      await Linking.openURL(`tel:${raw}`);
+    } catch (error) {
+      setCallStarted(false);
+      setCallStartTime(null);
+      setCallEnquiry(null);
+      Alert.alert("Call failed", getUserFacingError(error, "Could not start the phone call."));
+    }
+  }, []);
+
+  const handleSaveCallLog = async (data) => {
+    try {
+      const saved = await callLogService.createCallLog(data);
+      if (!saved?._id) return;
+      setCallModalVisible(false); setCallEnquiry(null); setAutoCallData(null);
+      DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+      fetchEnquiries(true);
+    } catch(e) { console.error(e); }
+  };
+
+  const handleWhatsApp = useCallback((enquiry) => {
+    if (!enquiry?.mobile) return;
+    navigation.navigate("WhatsAppChat", {enquiry});
+  }, [navigation]);
+
+  const handleEdit = useCallback((enquiry) => {
+    setDetailEnquiry(null);
+    navigation.navigate("AddEnquiry",{enquiry, onEnquirySaved:()=>fetchRef.current?.(true)});
+  }, [navigation]);
+
+  const handleDelete = useCallback((id) => {
+    Alert.alert("Delete","Are you sure you want to delete this enquiry?",[
+      {text:"Cancel",style:"cancel"},
+      {text:"Delete",style:"destructive", onPress:async()=>{
+        try { await enquiryService.deleteEnquiry(id); setEnquiries(p=>p.filter(e=>e._id!==id)); }
+        catch(e) { Alert.alert("Failed",getUserFacingError(e, "Failed to delete.")); }
+      }},
+    ]);
+  }, []);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  const renderItem = useCallback(({item,index}) => (
+    <EnquiryCard
+      item={item} index={index}
+      onPress={openDetail}
+      onSwipe={openDetail}
+      onCall={handleCall}
+      onWhatsApp={handleWhatsApp}
+    />
+  ), [openDetail, handleCall, handleWhatsApp]);
+
+  const keyExtractor = useCallback((item)=>item._id?.toString()||item.id?.toString(),[]);
+
+  return (
+    <SafeAreaView style={S.root} edges={["top"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+
+      <PostCallModal visible={callModalVisible} enquiry={callEnquiry} onSave={handleSaveCallLog} initialDuration={autoDuration} autoCallData={autoCallData}
+        onCancel={()=>{setCallModalVisible(false);setCallEnquiry(null);setCallStarted(false);setAutoCallData(null);}} />
+
+      <AppSideMenu visible={menuVisible} onClose={()=>setMenuVisible(false)} navigation={navigation} user={user} onLogout={()=>{setMenuVisible(false);setShowLogoutModal(true);}} activeRouteName="Enquiry" resolveImageUrl={getImageUrl} />
+
+      {/* Logout modal */}
+      <Modal visible={showLogoutModal} transparent animationType="fade" onRequestClose={()=>setShowLogoutModal(false)}>
+        <View style={S.modalBg}>
+          <MotiView from={{opacity:0,scale:0.88}} animate={{opacity:1,scale:1}} style={S.logoutBox}>
+            <View style={S.logoutIconWrap}>
+              <Ionicons name="log-out-outline" size={28} color={C.danger} />
+            </View>
+            <Text style={S.logoutTitle}>Sign Out?</Text>
+            <Text style={S.logoutSub}>You&apos;ll need to log in again to access your data.</Text>
+            <View style={S.logoutBtns}>
+              <TouchableOpacity style={S.logoutCancel} onPress={()=>setShowLogoutModal(false)}>
+                <Text style={S.logoutCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={async()=>{setShowLogoutModal(false);await logout();}}>
+                <LinearGradient colors={GRAD.danger} style={S.logoutConfirm}>
+                  <Text style={S.logoutConfirmText}>Sign Out</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </MotiView>
+        </View>
+      </Modal>
+
+      {/* ── Header ── */}
+      <View style={S.header}>
+        <View style={S.headerTop}>
+          <TouchableOpacity style={S.headerBtn} onPress={()=>setMenuVisible(true)}>
+            <Ionicons name="menu" size={21} color={C.textSub} />
+          </TouchableOpacity>
+          <View style={{flex:1, marginLeft:10}}>
+            <Text style={S.headerLabel}>Enquiry List</Text>
+            <Text style={S.headerName}>{user?.name||"User"}</Text>
+          </View>
+          <View style={S.headerRight}>
+            <TouchableOpacity style={S.profileBtn} onPress={()=>navigation.navigate("ProfileScreen")}>
+              {user?.logo ? (
+                <Image source={{uri:getImageUrl(user.logo)}} style={S.profileImg} />
+              ) : (
+                <View style={S.profileFallback}>
+                  <Text style={S.profileFallbackText}>{user?.name?.[0]?.toUpperCase()||"U"}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Search */}
+        <View style={S.searchBar}>
+          <Ionicons name="search-outline" size={17} color={C.textMuted} style={{marginLeft:12}} />
+          <TextInput style={S.searchInput} placeholder="Search name, phone…" placeholderTextColor={C.textLight} value={searchQuery} onChangeText={setSearchQuery} />
+          <TouchableOpacity onPress={()=>setDatePickerVisible(true)} style={S.calBtn}>
+            <Ionicons name="calendar-outline" size={17} color={C.primary} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={S.headerMeta}>
+          <Text style={S.headerMetaText}>{enquiries.length} {enquiries.length===1?"enquiry":"enquiries"}</Text>
+          {selectedDate && (
+            <TouchableOpacity onPress={()=>setSelectedDate(null)} style={S.datePill}>
+              <Ionicons name="close-circle" size={12} color={C.primary} />
+              <Text style={S.datePillText}>{selectedDate}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* ── List ── */}
+      <FlatList
+        data={enquiries}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        contentContainerStyle={[S.list, enquiries.length===0&&{flex:1}]}
+        refreshing={isLoading && enquiries.length>0}
+        onRefresh={()=>fetchEnquiries(true)}
+        onEndReached={()=>{ if (!isLoading&&!isLoadingMore&&hasMore) fetchEnquiries(false); }}
+        onEndReachedThreshold={0.5}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={11}
+        removeClippedSubviews
+        ListFooterComponent={isLoadingMore ? <ActivityIndicator size="small" color={C.primary} style={{marginVertical:16}} /> : null}
+        ListEmptyComponent={
+          isLoading ? <EnquirySkeleton /> : (
+            <View style={S.emptyWrap}>
+              <View style={S.emptyIcon}><Ionicons name="document-text-outline" size={36} color={C.primary} /></View>
+              <Text style={S.emptyTitle}>No enquiries found</Text>
+              <Text style={S.emptySubtext}>Try adjusting your search or date filter</Text>
+            </View>
+          )
+        }
+        showsVerticalScrollIndicator={false}
+      />
+
+      {/* ── FAB ── */}
+      {user?.role !== "Staff" && (
+        <Animated.View style={[S.fab, {transform:[{scale:fabScale}]}]}>
+          <TouchableOpacity onPress={()=>{
+            Animated.sequence([
+              Animated.timing(fabScale,{toValue:0.85,duration:100,useNativeDriver:true}),
+              Animated.spring(fabScale,{toValue:1,useNativeDriver:true}),
+            ]).start();
+            navigation.navigate("AddEnquiry",{onEnquirySaved:()=>fetchEnquiries(true)});
+          }} activeOpacity={0.85}>
+            <LinearGradient colors={GRAD.primary} style={S.fabInner}>
+              <Ionicons name="add" size={24} color="#fff" />
+            </LinearGradient>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      {/* ── Date picker ── */}
+      <Modal visible={datePickerVisible} transparent animationType="slide" onRequestClose={()=>setDatePickerVisible(false)}>
+        <View style={S.modalBg}>
+          <View style={S.datePicker}>
+            <View style={S.dragHandle} />
+            <View style={S.datePickerHeader}>
+              <TouchableOpacity onPress={()=>{const y=calendarMonth.getFullYear(),m=calendarMonth.getMonth();setCalendarMonth(new Date(y,m-1,1));}} style={S.calNavBtn}>
+                <Ionicons name="chevron-back" size={20} color={C.textSub} />
+              </TouchableOpacity>
+              <Text style={S.datePickerTitle}>{calendarMonth.toLocaleString(undefined,{month:"long",year:"numeric"})}</Text>
+              <TouchableOpacity onPress={()=>{const y=calendarMonth.getFullYear(),m=calendarMonth.getMonth();setCalendarMonth(new Date(y,m+1,1));}} style={S.calNavBtn}>
+                <Ionicons name="chevron-forward" size={20} color={C.textSub} />
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity style={S.clearDateBtn} onPress={()=>{setSelectedDate(null);setDatePickerVisible(false);}}>
+              <Text style={S.clearDateText}>Show All Dates</Text>
+            </TouchableOpacity>
+            <View style={S.weekRow}>
+              {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d=>(
+                <Text key={d} style={S.weekDay}>{d}</Text>
+              ))}
+            </View>
+            <View style={S.calGrid}>
+              {(()=>{
+                const y=calendarMonth.getFullYear(),m=calendarMonth.getMonth();
+                const first=(new Date(y,m,1,12).getDay()+6)%7;
+                const days=new Date(y,m+1,0).getDate();
+                const cells=[];
+                for(let i=0;i<first;i++) cells.push(<View key={`e${i}`} style={S.dayCell}/>);
+                for(let d=1;d<=days;d++){
+                  const iso=toLocalIso(new Date(y,m,d));
+                  const sel=selectedDate===iso;
+                  const tod=toLocalIso(new Date())===iso;
+                  cells.push(
+                    <TouchableOpacity key={d} onPress={()=>{setSelectedDate(iso);setDatePickerVisible(false);}} style={[S.dayCell,sel&&S.daySel,tod&&!sel&&S.dayTod]}>
+                      {sel ? (
+                        <LinearGradient colors={GRAD.primary} style={S.daySelGrad}>
+                          <Text style={[S.dayText,{color:"#fff",fontWeight:"800"}]}>{d}</Text>
+                        </LinearGradient>
+                      ) : (
+                        <Text style={[S.dayText,tod&&{color:C.primary,fontWeight:"800"}]}>{d}</Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                }
+                return cells;
+              })()}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Detail page overlay ── */}
+      {detailEnquiry && (
+        <View style={StyleSheet.absoluteFill}>
+          <EnquiryDetailPage
+            enquiry={detailEnquiry}
+            callLogs={detailCallLogs}
+            logsLoading={logsLoading}
+            onClose={()=>setDetailEnquiry(null)}
+            onEdit={handleEdit}
+          />
+        </View>
+      )}
+    </SafeAreaView>
+  );
+}
+
+// ─── Main screen styles ───────────────────────────────────────────────────────
+const S = StyleSheet.create({
+  root:    { flex:1, backgroundColor:C.bg },
+  list:    { paddingHorizontal:14, paddingTop:12, paddingBottom:90 },
+  modalBg: { flex:1, backgroundColor:"rgba(15,23,42,0.5)", justifyContent:"flex-end" },
+
+  // Header
+  header:     { backgroundColor:C.card, paddingHorizontal:16, paddingBottom:12, borderBottomWidth:1, borderBottomColor:C.border, shadowColor:C.shadow, shadowOffset:{width:0,height:2}, shadowOpacity:0.05, shadowRadius:8, elevation:3 },
+  headerTop:  { flexDirection:"row", alignItems:"center", paddingTop:8, marginBottom:12 },
+  headerRight:{ flexDirection:"row", alignItems:"center", gap:8 },
+  headerBtn:  { width:38, height:38, borderRadius:12, backgroundColor:C.bg, justifyContent:"center", alignItems:"center", borderWidth:1, borderColor:C.border },
+  headerLabel:{ fontSize:11, color:C.textMuted, fontWeight:"600", letterSpacing:0.3 },
+  headerName: { fontSize:17, color:C.text, fontWeight:"800", letterSpacing:-0.3 },
+  profileBtn: { width:38, height:38, borderRadius:12, backgroundColor:C.bg, overflow:"hidden", borderWidth:1, borderColor:C.border },
+  profileImg: { width:"100%", height:"100%" },
+  profileFallback: { flex:1, backgroundColor:C.primarySoft, justifyContent:"center", alignItems:"center" },
+  profileFallbackText: { color:C.primaryDark, fontWeight:"900", fontSize:15 },
+  notifDot: { position:"absolute", top:8, right:8, width:7, height:7, borderRadius:4, backgroundColor:C.danger, borderWidth:1.5, borderColor:C.card },
+
+  searchBar:   { flexDirection:"row", alignItems:"center", backgroundColor:C.bg, borderRadius:12, height:44, borderWidth:1, borderColor:C.border, marginBottom:8 },
+  searchInput: { flex:1, marginLeft:8, fontSize:14, color:C.text },
+  calBtn:      { width:38, height:36, justifyContent:"center", alignItems:"center", marginRight:4, borderRadius:10, backgroundColor:C.primarySoft },
+  headerMeta:  { flexDirection:"row", alignItems:"center", justifyContent:"space-between" },
+  headerMetaText: { fontSize:12, color:C.textMuted, fontWeight:"600" },
+  datePill:    { flexDirection:"row", alignItems:"center", gap:4, backgroundColor:C.primarySoft, borderRadius:20, paddingHorizontal:10, paddingVertical:4 },
+  datePillText:{ fontSize:12, color:C.primary, fontWeight:"700" },
+
+  // Cards
+  cardWrap:   { marginBottom:10 },
+  card:       { backgroundColor:C.card, borderRadius:16, marginHorizontal:0, overflow:"hidden", shadowColor:C.shadow, shadowOffset:{width:0,height:3}, shadowOpacity:0.06, shadowRadius:10, elevation:3 },
+  stripe:     { position:"absolute", left:0, top:0, bottom:0, width:3, borderTopLeftRadius:16, borderBottomLeftRadius:16 },
+  cardBody:   { paddingLeft:16, paddingRight:12, paddingTop:11, paddingBottom:9 },
+  cardRow:    { flexDirection:"row", alignItems:"flex-start", marginBottom:8 },
+  cardMid:    { flex:1, gap:4 },
+  cardRowBetween: { flexDirection:"row", alignItems:"center", justifyContent:"space-between" },
+  cardName:   { fontSize:14, fontWeight:"700", color:C.text, flex:1, letterSpacing:-0.2 },
+  cardDate:   { fontSize:11, color:C.textMuted, fontWeight:"600" },
+  cardMobile: { fontSize:12, color:C.textMuted, fontWeight:"500" },
+  cardStatus: { fontSize:11, color:C.textLight, fontWeight:"600" },
+
+  avatarBox:  { width:44, height:44, borderRadius:13, marginRight:10, flexShrink:0 },
+  avatarImg:  { width:"100%", height:"100%", borderRadius:13 },
+  avatarGrad: { width:"100%", height:"100%", borderRadius:13, justifyContent:"center", alignItems:"center" },
+  avatarText: { color:"#fff", fontSize:15, fontWeight:"800" },
+  avatarDot:  { position:"absolute", bottom:1, right:1, width:10, height:10, borderRadius:5, borderWidth:2, borderColor:C.card },
+
+  productPill: { flexDirection:"row", alignItems:"center", gap:5, backgroundColor:C.primarySoft, paddingHorizontal:8, paddingVertical:4, borderRadius:7 },
+  productPillText: { fontSize:11, color:C.primaryDark, fontWeight:"700", maxWidth:SW*0.3 },
+  priorityPill:    { flexDirection:"row", alignItems:"center", gap:4, paddingHorizontal:8, paddingVertical:4, borderRadius:7 },
+  priorityDot:     { width:5, height:5, borderRadius:3 },
+  priorityPillText:{ fontSize:10, fontWeight:"800", textTransform:"uppercase", letterSpacing:0.2 },
+
+  cardActions: { flexDirection:"row", alignItems:"center", gap:7, marginTop:2 },
+  actionChip:  { width:34, height:34, borderRadius:10, alignItems:"center", justifyContent:"center" },
+  enqNoBadge:  { backgroundColor:C.primarySoft, paddingHorizontal:7, paddingVertical:3, borderRadius:7, borderWidth:1, borderColor:C.primaryMid },
+  enqNoText:   { fontSize:10, fontWeight:"800", color:C.primary },
+  swipeHint:   { flexDirection:"row", alignItems:"center", gap:2, opacity:0.55 },
+  swipeHintText:{ fontSize:10, color:C.textLight, fontWeight:"600" },
+
+  // FAB
+  fab:     { position:"absolute", bottom:28, right:18 },
+  fabInner:{ width:54, height:54, borderRadius:27, justifyContent:"center", alignItems:"center", shadowColor:C.primary, shadowOffset:{width:0,height:8}, shadowOpacity:0.35, shadowRadius:14, elevation:8 },
+
+  // Logout modal
+  logoutBox:     { backgroundColor:C.card, borderRadius:24, padding:24, width:"90%", maxWidth:340, alignItems:"center", alignSelf:"center", marginBottom:200, shadowColor:C.shadow, shadowOffset:{width:0,height:12}, shadowOpacity:0.12, shadowRadius:24, elevation:10 },
+  logoutIconWrap:{ width:60, height:60, borderRadius:20, backgroundColor:C.danger+"15", alignItems:"center", justifyContent:"center", marginBottom:14 },
+  logoutTitle:   { fontSize:19, fontWeight:"800", color:C.text, marginBottom:6, letterSpacing:-0.3 },
+  logoutSub:     { fontSize:13, color:C.textMuted, textAlign:"center", lineHeight:20, marginBottom:22 },
+  logoutBtns:    { flexDirection:"row", gap:10, width:"100%" },
+  logoutCancel:  { flex:1, height:46, borderRadius:12, justifyContent:"center", alignItems:"center", backgroundColor:C.bg, borderWidth:1.5, borderColor:C.border },
+  logoutCancelText: { fontSize:14, fontWeight:"700", color:C.textMuted },
+  logoutConfirm:    { flex:1, height:46, borderRadius:12, justifyContent:"center", alignItems:"center" },
+  logoutConfirmText:{ fontSize:14, fontWeight:"700", color:"#fff" },
+
+  // Date picker
+  dragHandle:       { width:36, height:4, borderRadius:2, backgroundColor:C.border, alignSelf:"center", marginTop:10, marginBottom:8 },
+  datePicker:       { backgroundColor:C.card, borderTopLeftRadius:24, borderTopRightRadius:24, paddingBottom:28 },
+  datePickerHeader: { flexDirection:"row", justifyContent:"space-between", alignItems:"center", paddingHorizontal:20, paddingVertical:14 },
+  datePickerTitle:  { fontSize:15, fontWeight:"800", color:C.text },
+  calNavBtn:        { width:34, height:34, borderRadius:10, backgroundColor:C.bg, justifyContent:"center", alignItems:"center" },
+  clearDateBtn:     { marginHorizontal:20, paddingVertical:11, borderRadius:12, backgroundColor:C.primarySoft, alignItems:"center", marginBottom:14, borderWidth:1.5, borderColor:C.primaryMid },
+  clearDateText:    { fontSize:14, fontWeight:"700", color:C.primary },
+  weekRow:  { flexDirection:"row", paddingHorizontal:8 },
+  weekDay:  { width:(SW-16)/7, textAlign:"center", fontSize:11, fontWeight:"700", color:C.textLight, paddingVertical:4 },
+  calGrid:  { flexDirection:"row", flexWrap:"wrap", paddingHorizontal:8 },
+  dayCell:  { width:(SW-16)/7, height:38, justifyContent:"center", alignItems:"center" },
+  daySel:   { borderRadius:10 },
+  dayTod:   { borderWidth:1.5, borderColor:C.primary, borderRadius:10 },
+  daySelGrad: { width:34, height:34, borderRadius:10, justifyContent:"center", alignItems:"center" },
+  dayText:  { fontSize:14, color:C.text, fontWeight:"600" },
+
+  // Empty
+  emptyWrap:   { alignItems:"center", marginTop:60, gap:8 },
+  emptyIcon:   { width:68, height:68, borderRadius:20, backgroundColor:C.primarySoft, justifyContent:"center", alignItems:"center", marginBottom:6 },
+  emptyTitle:  { fontSize:16, color:C.textSub, fontWeight:"700" },
+  emptySubtext:{ fontSize:13, color:C.textLight },
+});
+
+// ─── Detail page styles ───────────────────────────────────────────────────────
+const SD = StyleSheet.create({
+  root: { ...StyleSheet.absoluteFillObject, backgroundColor: C.bg, zIndex: 100 },
+
+  // ── Top card ──
+  topCard: {
+    backgroundColor: C.card,
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    overflow: "hidden",
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+
+  // Decorative circles (no color change — just structure)
+  deco1: {
+    position: "absolute", top: -60, right: -50,
+    width: 160, height: 160, borderRadius: 80,
+    backgroundColor: C.primarySoft,
+    opacity: 0.7,
+  },
+  deco2: {
+    position: "absolute", top: 20, right: 20,
+    width: 70, height: 70, borderRadius: 35,
+    backgroundColor: C.primaryMid,
+    opacity: 0.35,
+  },
+  deco3: {
+    position: "absolute", bottom: -30, left: -40,
+    width: 110, height: 110, borderRadius: 55,
+    backgroundColor: C.primarySoft,
+    opacity: 0.5,
+  },
+
+  // Nav buttons
+  backBtn: {
+    position: "absolute", top: 0, left: 12,
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: C.bg,
+    borderWidth: 1, borderColor: C.border,
+    justifyContent: "center", alignItems: "center",
+    zIndex: 10,
+  },
+  editBtn: {
+    position: "absolute", top: 0, right: 12,
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: C.bg,
+    borderWidth: 1, borderColor: C.border,
+    justifyContent: "center", alignItems: "center",
+    zIndex: 10,
+  },
+
+  // Circle avatar
+  avatarRing: {
+    position: "relative",
+    marginTop: 12,
+    marginBottom: 14,
+    width: 86, height: 86,
+    borderRadius: 43,
+    borderWidth: 3,
+    borderColor: C.border,
+    padding: 3,
+    backgroundColor: C.card,
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  avatarOuter: {
+    width: "100%", height: "100%",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  avatarImg:  { width: "100%", height: "100%", borderRadius: 999 },
+  avatarGrad: { width: "100%", height: "100%", borderRadius: 999, justifyContent: "center", alignItems: "center" },
+  avatarText: { color: "#fff", fontSize: 24, fontWeight: "900" },
+  priDot: {
+    position: "absolute", bottom: 2, right: 2,
+    width: 14, height: 14, borderRadius: 7,
+    borderWidth: 2.5, borderColor: C.card,
+  },
+
+  heroName:   { fontSize: 18, fontWeight: "800", color: C.text, letterSpacing: -0.3, marginBottom: 3 },
+  heroMobile: { fontSize: 13, color: C.textMuted, fontWeight: "500", marginBottom: 12 },
+
+  chipsRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
+  chip: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    backgroundColor: C.bg,
+    paddingHorizontal: 9, paddingVertical: 5,
+    borderRadius: 99, borderWidth: 1, borderColor: C.border,
+  },
+  chipDot:  { width: 6, height: 6, borderRadius: 3 },
+  chipText: { fontSize: 11, color: C.textSub, fontWeight: "700" },
+
+  // ── Tabs ──
+  tabBar: { flexDirection: "row", backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border },
+  tab:    { flex: 1, alignItems: "center", paddingVertical: 12, position: "relative" },
+  tabActive: {},
+  tabText:      { fontSize: 13, fontWeight: "600", color: C.textMuted },
+  tabTextActive:{ fontSize: 13, fontWeight: "800", color: C.primary },
+  tabLine: { position: "absolute", bottom: 0, left: "15%", right: "15%", height: 2.5, backgroundColor: C.primary, borderRadius: 2 },
+
+  // ── Details tab ──
+  detailRow: {
+    flexDirection: "row", alignItems: "flex-start",
+    backgroundColor: C.card, borderRadius: 13,
+    padding: 12, borderWidth: 1, borderColor: C.border, gap: 10,
+  },
+  detailIconBox: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: C.primarySoft,
+    justifyContent: "center", alignItems: "center", flexShrink: 0,
+  },
+  detailLabel: { fontSize: 10, color: C.textLight, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 },
+  detailValue: { fontSize: 13, color: C.text, fontWeight: "600" },
+
+  // ── Calls tab ──
+  logItem: {
+    flexDirection: "row", alignItems: "center",
+    backgroundColor: C.card, borderRadius: 13,
+    padding: 12, borderWidth: 1, borderColor: C.border, marginBottom: 8,
+  },
+  logIconBox: { width: 34, height: 34, borderRadius: 17, justifyContent: "center", alignItems: "center", marginRight: 10 },
+  logType:    { fontSize: 13, fontWeight: "700", color: C.text },
+  logDate:    { fontSize: 11, color: C.textLight, marginTop: 2 },
+  logDur:     { fontSize: 14, fontWeight: "800" },
+  logDurLabel:{ fontSize: 9, color: C.textLight, fontWeight: "600", textTransform: "uppercase" },
+
+  // ── Empty ──
+  emptyWrap:   { alignItems: "center", paddingTop: 48, gap: 8 },
+  emptyIconBox:{ width: 56, height: 56, borderRadius: 28, backgroundColor: C.primarySoft, justifyContent: "center", alignItems: "center" },
+  emptyText:   { fontSize: 13, color: C.textLight, fontWeight: "500" },
 });

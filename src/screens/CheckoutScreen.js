@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -17,6 +17,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { MotiView } from "moti";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { HeaderSkeleton, ListSkeleton, ScreenSkeleton } from "../components/skeleton/screens";
+import { SkeletonBox, SkeletonCard, SkeletonLine, SkeletonSpacer } from "../components/skeleton/Skeleton";
 import { useAuth } from "../contexts/AuthContext";
 import { createRazorpayOrder, previewPlanCheckout } from "../services/userService";
 
@@ -79,6 +81,39 @@ const DetailRow = ({ label, value, valueStyle }) => (
     </View>
 );
 
+const CounterControl = ({
+    label,
+    helper,
+    value,
+    minValue,
+    unitPrice,
+    displayCurrency,
+    usdInrRate,
+    onChange,
+}) => (
+    <View style={S.counterCard}>
+        <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={S.counterLabel}>{label}</Text>
+            <Text style={S.counterHelper}>{helper}</Text>
+            <Text style={S.counterPrice}>
+                +{formatFromUsd(unitPrice, displayCurrency, usdInrRate)} per extra
+            </Text>
+        </View>
+        <View style={S.counterStepper}>
+            <TouchableOpacity
+                style={[S.counterBtn, value <= minValue && S.counterBtnDisabled]}
+                onPress={() => onChange(-1)}
+                disabled={value <= minValue}>
+                <Ionicons name="remove" size={18} color={C.text} />
+            </TouchableOpacity>
+            <Text style={S.counterValue}>{value}</Text>
+            <TouchableOpacity style={S.counterBtn} onPress={() => onChange(1)}>
+                <Ionicons name="add" size={18} color={C.text} />
+            </TouchableOpacity>
+        </View>
+    </View>
+);
+
 export default function CheckoutScreen({ navigation, route }) {
     const insets = useSafeAreaInsets();
     const { user } = useAuth();
@@ -86,6 +121,12 @@ export default function CheckoutScreen({ navigation, route }) {
     const selectedPlan = route?.params?.plan || null;
     const displayCurrency = route?.params?.displayCurrency || "INR";
     const usdInrRate = route?.params?.usdInrRate || 83;
+    const initialAdminCount = Number(
+        route?.params?.initialAdminCount ?? selectedPlan?.maxAdmins ?? 0,
+    );
+    const initialStaffCount = Number(
+        route?.params?.initialStaffCount ?? selectedPlan?.maxStaff ?? 0,
+    );
 
     const [couponInput, setCouponInput] = useState("");
     const [appliedCoupon, setAppliedCoupon] = useState("");
@@ -95,6 +136,8 @@ export default function CheckoutScreen({ navigation, route }) {
     const [paying, setPaying] = useState(false);
     const [error, setError] = useState("");
     const [couponMessage, setCouponMessage] = useState("");
+    const [adminCount, setAdminCount] = useState(initialAdminCount);
+    const [staffCount, setStaffCount] = useState(initialStaffCount);
 
     const loadPreview = useCallback(
         async (couponCode = "") => {
@@ -107,6 +150,8 @@ export default function CheckoutScreen({ navigation, route }) {
                 const res = await previewPlanCheckout({
                     planId: selectedPlan.id,
                     couponCode,
+                    adminCount,
+                    staffCount,
                 });
 
                 if (res?.requiresContact) {
@@ -160,7 +205,14 @@ export default function CheckoutScreen({ navigation, route }) {
                 setApplying(false);
             }
         },
-        [displayCurrency, navigation, selectedPlan, usdInrRate],
+        [
+            adminCount,
+            displayCurrency,
+            navigation,
+            selectedPlan,
+            staffCount,
+            usdInrRate,
+        ],
     );
 
     useFocusEffect(
@@ -168,6 +220,13 @@ export default function CheckoutScreen({ navigation, route }) {
             loadPreview("");
         }, [loadPreview]),
     );
+
+    useEffect(() => {
+        if (!selectedPlan?.id) return;
+        loadPreview(appliedCoupon);
+        // Intentionally tied to seat selection changes for live pricing refresh.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [adminCount, staffCount]);
 
     const onApplyCoupon = () => {
         const code = couponInput.trim().toUpperCase();
@@ -187,7 +246,23 @@ export default function CheckoutScreen({ navigation, route }) {
                 checkout.pricing?.originalPrice ??
                 selectedPlan?.priceValue ??
                 0,
+            basePrice: checkout.pricing?.basePrice ?? selectedPlan?.basePriceUsd ?? 0,
+            maxAdmins: checkout.plan?.maxAdmins ?? selectedPlan?.maxAdmins ?? 0,
             maxStaff: checkout.plan?.maxStaff ?? selectedPlan?.maxStaff ?? 0,
+            includedAdmins:
+                checkout.plan?.includedAdmins ?? selectedPlan?.maxAdmins ?? 0,
+            includedStaff:
+                checkout.plan?.includedStaff ?? selectedPlan?.maxStaff ?? 0,
+            extraAdminPrice:
+                checkout.plan?.extraAdminPrice ??
+                selectedPlan?.extraAdminPriceUsd ??
+                0,
+            extraStaffPrice:
+                checkout.plan?.extraStaffPrice ??
+                selectedPlan?.extraStaffPriceUsd ??
+                0,
+            extraAdminsAmount: checkout.pricing?.extraAdminsAmount ?? 0,
+            extraStaffAmount: checkout.pricing?.extraStaffAmount ?? 0,
             billingCycle: checkout.plan?.billingCycle || "Monthly",
             discountAmount: checkout.pricing?.discountAmount ?? 0,
             finalPrice: checkout.pricing?.finalPrice ?? 0,
@@ -202,6 +277,8 @@ export default function CheckoutScreen({ navigation, route }) {
             const result = await createRazorpayOrder({
                 planId: selectedPlan.id,
                 couponCode: appliedCoupon,
+                adminCount,
+                staffCount,
             });
 
             if (!result?.requiresPayment) {
@@ -223,6 +300,8 @@ export default function CheckoutScreen({ navigation, route }) {
                 amountInr: result?.amountInr,
                 planId: selectedPlan.id,
                 couponCode: appliedCoupon,
+                adminCount,
+                staffCount,
                 displayCurrency,
                 usdInrRate,
                 prefill: {
@@ -246,11 +325,36 @@ export default function CheckoutScreen({ navigation, route }) {
         }
     };
 
+    const adjustCounter = (type, delta) => {
+        if (type === "admin") {
+            setAdminCount((prev) => Math.max(initialAdminCount, prev + delta));
+            return;
+        }
+        setStaffCount((prev) => Math.max(initialStaffCount, prev + delta));
+    };
+
     if (loading && !checkout) {
         return (
-            <View style={[S.container, S.center]}>
-                <ActivityIndicator size="large" color={C.primary} />
-            </View>
+            <ScreenSkeleton bg={C.bg}>
+                <HeaderSkeleton withAvatar={false} />
+                <View style={{ paddingHorizontal: 16, paddingTop: 6 }}>
+                    <SkeletonCard style={{ borderRadius: 20 }}>
+                        <SkeletonLine width="46%" height={14} />
+                        <SkeletonSpacer h={14} />
+                        <SkeletonBox height={56} radius={16} />
+                        <SkeletonSpacer h={12} />
+                        <SkeletonBox height={56} radius={16} />
+                        <SkeletonSpacer h={12} />
+                        <SkeletonBox height={48} radius={16} />
+                    </SkeletonCard>
+                    <SkeletonSpacer h={16} />
+                    <SkeletonCard style={{ borderRadius: 20 }}>
+                        <SkeletonLine width="38%" height={14} />
+                        <SkeletonSpacer h={14} />
+                        <ListSkeleton count={3} itemHeight={56} withAvatar={false} />
+                    </SkeletonCard>
+                </View>
+            </ScreenSkeleton>
         );
     }
 
@@ -381,6 +485,42 @@ export default function CheckoutScreen({ navigation, route }) {
 
                 <View style={S.card}>
                     <View style={S.cardHeader}>
+                        <Text style={S.cardTitle}>Team allocation</Text>
+                        <Pill
+                            icon="people-circle-outline"
+                            label={`${Number(summary?.maxAdmins || 0)} admins / ${Number(summary?.maxStaff || 0)} staff`}
+                            tone="neutral"
+                        />
+                    </View>
+                    <Text style={S.cardDesc}>
+                        Add extra admin or staff seats to this plan. Pricing updates automatically before payment.
+                    </Text>
+
+                    <CounterControl
+                        label="Admin accounts"
+                        helper={`Includes ${Number(summary?.includedAdmins || initialAdminCount)} with this plan`}
+                        value={adminCount}
+                        minValue={Number(summary?.includedAdmins || initialAdminCount)}
+                        unitPrice={Number(summary?.extraAdminPrice || 0)}
+                        displayCurrency={displayCurrency}
+                        usdInrRate={usdInrRate}
+                        onChange={(delta) => adjustCounter("admin", delta)}
+                    />
+
+                    <CounterControl
+                        label="Staff accounts"
+                        helper={`Includes ${Number(summary?.includedStaff || initialStaffCount)} with this plan`}
+                        value={staffCount}
+                        minValue={Number(summary?.includedStaff || initialStaffCount)}
+                        unitPrice={Number(summary?.extraStaffPrice || 0)}
+                        displayCurrency={displayCurrency}
+                        usdInrRate={usdInrRate}
+                        onChange={(delta) => adjustCounter("staff", delta)}
+                    />
+                </View>
+
+                <View style={S.card}>
+                    <View style={S.cardHeader}>
                         <Text style={S.cardTitle}>Billing breakdown</Text>
                         <Pill
                             icon="calendar-outline"
@@ -388,6 +528,30 @@ export default function CheckoutScreen({ navigation, route }) {
                             tone="neutral"
                         />
                     </View>
+                    <DetailRow
+                        label="Base plan"
+                        value={formatFromUsd(
+                            summary?.basePrice,
+                            displayCurrency,
+                            usdInrRate,
+                        )}
+                    />
+                    <DetailRow
+                        label="Extra admins"
+                        value={formatFromUsd(
+                            summary?.extraAdminsAmount,
+                            displayCurrency,
+                            usdInrRate,
+                        )}
+                    />
+                    <DetailRow
+                        label="Extra staff"
+                        value={formatFromUsd(
+                            summary?.extraStaffAmount,
+                            displayCurrency,
+                            usdInrRate,
+                        )}
+                    />
                     <DetailRow
                         label="Original price"
                         value={formatFromUsd(
@@ -422,11 +586,19 @@ export default function CheckoutScreen({ navigation, route }) {
                         <Text style={S.cardTitle}>Plan summary</Text>
                         <Pill
                             icon="people-outline"
-                            label={`Staff: ${Number(summary?.maxStaff || 0)}`}
+                            label={`${Number(summary?.maxAdmins || 0)} admins / ${Number(summary?.maxStaff || 0)} staff`}
                             tone="neutral"
                         />
                     </View>
                     <DetailRow label="Plan name" value={summary?.planName || "-"} />
+                    <DetailRow
+                        label="Allocated admins"
+                        value={String(Number(summary?.maxAdmins || 0))}
+                    />
+                    <DetailRow
+                        label="Allocated staff"
+                        value={String(Number(summary?.maxStaff || 0))}
+                    />
                     <DetailRow label="Renewal date" value={fmtDate(summary?.renewDate)} />
                 </View>
 
@@ -633,6 +805,45 @@ const S = StyleSheet.create({
     },
     cardTitle: { fontSize: 16, fontWeight: "900", color: C.text },
     cardDesc: { fontSize: 13, color: C.muted, lineHeight: 19 },
+    counterCard: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: 14,
+        borderRadius: 18,
+        backgroundColor: C.bg,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    counterLabel: { fontSize: 14, fontWeight: "900", color: C.text },
+    counterHelper: { marginTop: 4, fontSize: 12, color: C.muted },
+    counterPrice: { marginTop: 6, fontSize: 12, fontWeight: "800", color: C.primary },
+    counterStepper: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+    },
+    counterBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: C.surface,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    counterBtnDisabled: {
+        opacity: 0.45,
+    },
+    counterValue: {
+        minWidth: 28,
+        textAlign: "center",
+        fontSize: 16,
+        fontWeight: "900",
+        color: C.text,
+    },
 
     pill: {
         flexDirection: "row",
@@ -760,4 +971,3 @@ const S = StyleSheet.create({
     payText: { fontSize: 16, fontWeight: "900", color: "#fff" },
     btnDisabled: { opacity: 0.7 },
 });
-

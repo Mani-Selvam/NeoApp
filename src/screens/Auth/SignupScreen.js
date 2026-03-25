@@ -1,151 +1,246 @@
 import { Ionicons } from "@expo/vector-icons";
-// import auth from '@react-native-firebase/auth'; // Removed for conditional require
 import axios from "axios";
-import { BlurView } from "expo-blur";
+import Constants from "expo-constants";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Dimensions,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from "react-native";
 import Animated, {
-    Easing,
-    FadeInDown,
-    FadeInUp,
-    interpolate,
-    interpolateColor,
-    useAnimatedStyle,
-    useSharedValue,
-    withRepeat,
-    withSpring,
-    withTiming,
+  Easing,
+  FadeIn,
+  FadeInDown,
+  FadeInUp,
+  interpolate,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
 } from "react-native-reanimated";
-import InlineAlert from "../../components/InlineAlert";
-import { useAuth } from "../../contexts/AuthContext";
-import { API_URL } from "../../services/apiConfig";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import InlineAlert from "../../components/InlineAlert";
+import { API_URL } from "../../services/apiConfig";
+import { setPhoneVerificationSession } from "../../services/phoneVerificationSession";
 
-import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "../../firebaseConfig";
-
-const { width } = Dimensions.get("window");
-
-const AnimatedBlob = ({ style }) => {
-  const translateY = useSharedValue(0);
-  const scale = useSharedValue(1);
-
-  useEffect(() => {
-    translateY.value = withRepeat(
-      withTiming(-20, { duration: 4000, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-    scale.value = withRepeat(
-      withTiming(1.1, { duration: 4000, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-  }, []);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }, { scale: scale.value }],
-  }));
-
-  return <Animated.View style={[style, animatedStyle]} />;
+const getUI = (w, h, insets) => {
+  const usableHeight = h - insets.top - insets.bottom;
+  const isTablet = w >= 768;
+  const isLarge = w >= 414 && w < 768;
+  const isMedium = w >= 360 && w < 414;
+  const isSmall = w < 360;
+  const isShort = usableHeight < 760;
+  const isVeryShort = usableHeight < 700;
+  return {
+    isTablet,
+    isLarge,
+    isMedium,
+    isSmall,
+    isShort,
+    isVeryShort,
+    sidePadding: isTablet ? 80 : isLarge ? 28 : isMedium ? 22 : 18,
+    cardMaxWidth: isTablet ? 520 : 480,
+    logoSize: isTablet ? 88 : isLarge ? 76 : isMedium ? 68 : 60,
+    titleSize: isTablet ? 32 : isLarge ? 27 : isMedium ? 25 : 23,
+    subtitleSize: isTablet ? 15 : isLarge ? 13.5 : 13,
+    inputHeight: isTablet ? 64 : isLarge ? 58 : isMedium ? 54 : 52,
+    buttonHeight: isTablet ? 60 : isLarge ? 55 : isMedium ? 52 : 50,
+    fieldGap: isTablet ? 22 : isLarge ? 18 : 16,
+    formPadding: isTablet ? 40 : isVeryShort ? 18 : isLarge ? 28 : isMedium ? 24 : 20,
+    radius: isTablet ? 18 : 14,
+    topPad: isVeryShort ? Math.max(insets.top + 4, 12) : Math.max(insets.top + 8, 20),
+    botPad: isVeryShort ? Math.max(insets.bottom + 12, 18) : Math.max(insets.bottom + 12, 24),
+    minH: usableHeight,
+    centerContent: !isShort,
+  };
 };
 
-const CustomInput = ({
+const getSignupOtpError = (error, fallback) => {
+  const code = String(error?.code || "").trim();
+  const message = String(error?.message || "").trim();
+  const serverMessage = String(error?.response?.data?.message || "").trim();
+
+  if (serverMessage) return serverMessage;
+  if (code === "ERR_NETWORK") return "Network error while sending OTP. Check internet and try again.";
+  if (message) return `${fallback} ${message}`;
+  return fallback;
+};
+
+const Orb = ({ color, size, top, left, right, bottom, opacity = 0.3, delay = 0 }) => {
+  const y = useSharedValue(0);
+  const s = useSharedValue(1);
+
+  useEffect(() => {
+    y.value = withDelay(
+      delay,
+      withRepeat(
+        withSequence(
+          withTiming(-16, { duration: 3800, easing: Easing.bezier(0.45, 0, 0.55, 1) }),
+          withTiming(0, { duration: 3800, easing: Easing.bezier(0.45, 0, 0.55, 1) }),
+        ),
+        -1,
+        false,
+      ),
+    );
+    s.value = withDelay(
+      delay + 200,
+      withRepeat(
+        withSequence(
+          withTiming(1.07, { duration: 4400, easing: Easing.bezier(0.45, 0, 0.55, 1) }),
+          withTiming(1, { duration: 4400, easing: Easing.bezier(0.45, 0, 0.55, 1) }),
+        ),
+        -1,
+        false,
+      ),
+    );
+  }, [delay, s, y]);
+
+  const anim = useAnimatedStyle(() => ({
+    transform: [{ translateY: y.value }, { scale: s.value }],
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        {
+          position: "absolute",
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: color,
+          opacity,
+          top,
+          left,
+          right,
+          bottom,
+        },
+        anim,
+      ]}
+    />
+  );
+};
+
+const Field = ({
   label,
   icon,
   value,
   onChangeText,
   isPassword,
-  showPassword,
-  setShowPassword,
+  showPwd,
+  setShowPwd,
   placeholder,
-  keyboardType,
-  autoCapitalize,
+  keyboardType = "default",
+  autoCapitalize = "none",
   maxLength,
+  ui,
 }) => {
-  const isFocused = useSharedValue(0);
-  const [focused, setFocused] = useState(false);
+  const focus = useSharedValue(0);
+  const [isFocused, setIsFocused] = useState(false);
 
-  const handleFocus = () => {
-    setFocused(true);
-    isFocused.value = withTiming(1, { duration: 300 });
+  const onFocus = () => {
+    setIsFocused(true);
+    focus.value = withTiming(1, { duration: 220 });
   };
 
-  const handleBlur = () => {
-    setFocused(false);
-    isFocused.value = withTiming(0, { duration: 300 });
+  const onBlur = () => {
+    setIsFocused(false);
+    focus.value = withTiming(0, { duration: 220 });
   };
 
-  const labelStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { translateY: interpolate(isFocused.value, [0, 1], [0, -4]) },
-        { translateX: interpolate(isFocused.value, [0, 1], [0, 0]) },
-      ],
-      fontSize: interpolate(isFocused.value, [0, 1], [14, 13]),
-      color: interpolateColor(isFocused.value, [0, 1], ["#334155", "#6366f1"]),
-    };
-  });
+  const wrapStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(focus.value, [0, 1], ["rgba(203,213,225,0.8)", "#6366f1"]),
+    borderWidth: interpolate(focus.value, [0, 1], [1.5, 2]),
+    backgroundColor: interpolateColor(
+      focus.value,
+      [0, 1],
+      ["rgba(248,250,252,0.9)", "rgba(99,102,241,0.05)"],
+    ),
+    shadowOpacity: interpolate(focus.value, [0, 1], [0, 0.2]),
+    shadowRadius: interpolate(focus.value, [0, 1], [0, 16]),
+    shadowColor: "#6366f1",
+  }));
 
-  const borderStyle = useAnimatedStyle(() => {
-    return {
-      borderColor: interpolateColor(
-        isFocused.value,
-        [0, 1],
-        ["#e2e8f0", "#6366f1"],
-      ),
-      borderWidth: interpolate(isFocused.value, [0, 1], [1, 2]),
-      shadowOpacity: interpolate(isFocused.value, [0, 1], [0, 0.1]),
-      shadowRadius: interpolate(isFocused.value, [0, 1], [0, 8]),
-    };
-  });
+  const labelStyle = useAnimatedStyle(() => ({
+    color: interpolateColor(focus.value, [0, 1], ["#94a3b8", "#6366f1"]),
+    fontSize: interpolate(focus.value, [0, 1], [12.5, 11.5]),
+  }));
 
   return (
-    <View style={styles.inputWrapper}>
-      <Animated.Text style={[styles.label, labelStyle]}>{label}</Animated.Text>
-      <Animated.View style={[styles.inputContainer, borderStyle]}>
+    <View style={{ width: "100%" }}>
+      <Animated.Text
+        style={[
+          {
+            fontWeight: "700",
+            marginBottom: 8,
+            marginLeft: 2,
+            letterSpacing: 0.5,
+          },
+          labelStyle,
+        ]}
+      >
+        {label.toUpperCase()}
+      </Animated.Text>
+      <Animated.View
+        style={[
+          {
+            flexDirection: "row",
+            alignItems: "center",
+            height: ui.inputHeight,
+            borderRadius: ui.radius,
+            paddingHorizontal: 16,
+            overflow: "hidden",
+          },
+          wrapStyle,
+        ]}
+      >
         <Ionicons
           name={icon}
-          size={20}
-          color={focused ? "#6366f1" : "#64748b"}
-          style={styles.inputIcon}
+          size={19}
+          color={isFocused ? "#6366f1" : "#94a3b8"}
+          style={{ marginRight: 12 }}
         />
         <TextInput
-          style={styles.input}
+          style={{
+            flex: 1,
+            color: "#1e1b4b",
+            fontSize: 15,
+            fontWeight: "500",
+            paddingVertical: 0,
+            letterSpacing: 0.2,
+          }}
           placeholder={placeholder}
-          placeholderTextColor="#94a3b8"
+          placeholderTextColor="rgba(148,163,184,0.7)"
           value={value}
           onChangeText={onChangeText}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          secureTextEntry={isPassword && !showPassword}
-          keyboardType={keyboardType || "default"}
-          autoCapitalize={autoCapitalize || "none"}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          secureTextEntry={isPassword && !showPwd}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
           autoCorrect={false}
           maxLength={maxLength}
+          selectionColor="#6366f1"
         />
         {isPassword && (
-          <TouchableOpacity
-            style={styles.eyeIcon}
-            onPress={() => setShowPassword(!showPassword)}
-          >
+          <TouchableOpacity onPress={() => setShowPwd(!showPwd)} style={{ padding: 6 }}>
             <Ionicons
-              name={showPassword ? "eye-outline" : "eye-off-outline"}
-              size={20}
-              color="#64748b"
+              name={showPwd ? "eye-outline" : "eye-off-outline"}
+              size={19}
+              color={isFocused ? "#6366f1" : "#94a3b8"}
             />
           </TouchableOpacity>
         )}
@@ -154,46 +249,85 @@ const CustomInput = ({
   );
 };
 
-const CustomButton = ({ onPress, loading, title, icon }) => {
+const ActionButton = ({ onPress, loading, title, icon, ui }) => {
   const scale = useSharedValue(1);
+  const glow = useSharedValue(0.4);
 
-  const handlePressIn = () => {
-    scale.value = withSpring(0.95);
+  useEffect(() => {
+    glow.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 2200, easing: Easing.bezier(0.45, 0, 0.55, 1) }),
+        withTiming(0.4, { duration: 2200, easing: Easing.bezier(0.45, 0, 0.55, 1) }),
+      ),
+      -1,
+      false,
+    );
+  }, [glow]);
+
+  const handleIn = () => {
+    scale.value = withSpring(0.96, { damping: 14 });
   };
 
-  const handlePressOut = () => {
-    scale.value = withSpring(1);
+  const handleOut = () => {
+    scale.value = withSpring(1, { damping: 12 });
     onPress();
   };
 
-  const animatedStyle = useAnimatedStyle(() => ({
+  const btnStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
+    shadowOpacity: glow.value,
+    shadowRadius: interpolate(glow.value, [0.4, 1], [14, 24]),
   }));
 
   return (
     <TouchableOpacity
       activeOpacity={1}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
+      onPressIn={handleIn}
+      onPressOut={handleOut}
       disabled={loading}
+      style={{ width: "100%" }}
     >
-      <Animated.View style={[styles.signupButton, animatedStyle]}>
+      <Animated.View
+        style={[
+          {
+            height: ui.buttonHeight,
+            borderRadius: ui.radius,
+            overflow: "hidden",
+            shadowColor: "#6366f1",
+            shadowOffset: { width: 0, height: 8 },
+            elevation: 12,
+            marginTop: 4,
+          },
+          btnStyle,
+        ]}
+      >
         <LinearGradient
-          colors={
-            icon === "checkmark-circle-outline"
-              ? ["#10b981", "#34d399"]
-              : ["#6366f1", "#8b5cf6"]
-          }
+          colors={["#6366f1", "#818cf8", "#a5b4fc"]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
-          style={styles.gradientButton}
+          style={{
+            flex: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+          }}
         >
           {loading ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color="#fff" size="small" />
           ) : (
             <>
-              <Text style={styles.signupButtonText}>{title}</Text>
-              <Ionicons name={icon || "arrow-forward"} size={20} color="#fff" />
+              <Text
+                style={{
+                  color: "#fff",
+                  fontWeight: "900",
+                  fontSize: ui.isTablet ? 16 : 15,
+                  letterSpacing: 1.4,
+                }}
+              >
+                {title}
+              </Text>
+              <Ionicons name={icon || "arrow-forward"} size={17} color="#fff" />
             </>
           )}
         </LinearGradient>
@@ -202,10 +336,39 @@ const CustomButton = ({ onPress, loading, title, icon }) => {
   );
 };
 
+const PwChecklist = ({ checks }) => {
+  const items = [
+    { key: "length", label: "At least 8 characters" },
+    { key: "upper", label: "1 uppercase letter" },
+    { key: "lower", label: "1 lowercase letter" },
+    { key: "number", label: "1 number" },
+    { key: "special", label: "1 special character" },
+  ];
+
+  return (
+    <View style={S.pwChecklist}>
+      {items.map(({ key, label }) => (
+        <View key={key} style={S.pwRow}>
+          <Ionicons
+            name={checks[key] ? "checkmark-circle" : "close-circle"}
+            size={15}
+            color={checks[key] ? "#10b981" : "#f87171"}
+            style={{ marginRight: 8 }}
+          />
+          <Text style={[S.pwText, { color: checks[key] ? "#10b981" : "#94a3b8" }]}>
+            {label}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+};
+
 const SignupScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const { login } = useAuth();
-  const [step, setStep] = useState(1); // 1: Details, 2: OTP
+  const { width, height } = useWindowDimensions();
+  const ui = useMemo(() => getUI(width, height, insets), [width, height, insets]);
+
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
@@ -214,65 +377,9 @@ const SignupScreen = ({ navigation }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
   const [alertType, setAlertType] = useState("error");
-
-  const showInline = (m, type = "error") => {
-    const msg = (m || "").toString().replace(/\s+/g, " ").trim();
-    setAlertType(type);
-    setAlertMsg(msg);
-    if (msg) setTimeout(() => setAlertMsg(""), 4000);
-  };
-
-  // OTP State
-  const [otp, setOtp] = useState("");
-  const [confirm, setConfirm] = useState(null);
-  // const recaptchaVerifier = useRef(null); // Removed recaptcha verifier
-
-  // Enable Auto-Verification Listener
-  useEffect(() => {
-    if (Platform.OS === "web") return;
-    if (!auth) {
-      console.warn(
-        "Firebase auth not initialized; skipping auto-verification listener.",
-      );
-      return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user && step === 2) {
-        console.log(
-          "[Auto-Verify] User authenticated via Firebase:",
-          user.phoneNumber,
-        );
-        try {
-          const idToken = await user.getIdToken();
-          await handleFirebaseLogin(idToken);
-        } catch (e) {
-          console.error("Auto-login error:", e);
-        }
-      }
-    });
-    return unsubscribe;
-  }, [step]);
-
-  const handleFirebaseLogin = async (idToken) => {
-    setLoading(true);
-    try {
-      const loginResponse = await axios.post(`${API_URL}/auth/login-phone`, {
-        idToken,
-      });
-      await login(loginResponse.data.token, loginResponse.data.user);
-      showInline("Verified automatically & logged in!", "info");
-    } catch (error) {
-      console.error("Firebase Backend Login Error:", error);
-      showInline("Failed to login with verified phone.", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Password strength live checks
   const [pwChecks, setPwChecks] = useState({
     length: false,
     upper: false,
@@ -280,457 +387,323 @@ const SignupScreen = ({ navigation }) => {
     number: false,
     special: false,
   });
+  const privacyPolicyUrl = String(
+    Constants.expoConfig?.extra?.privacyPolicyUrl || "https://neophrondev.in/privacy/",
+  ).trim();
 
-  const evaluatePassword = (pw) => {
-    const length = pw.length >= 8;
-    const upper = /[A-Z]/.test(pw);
-    const lower = /[a-z]/.test(pw);
-    const number = /[0-9]/.test(pw);
-    const special = /[^A-Za-z0-9]/.test(pw);
-    return { length, upper, lower, number, special };
+  const formatSignupMobile = useCallback((value) => {
+    const digits = String(value || "").replace(/\D/g, "");
+    if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+    if (digits.length === 10) return `+91${digits}`;
+    return digits ? `+${digits}` : "";
+  }, []);
+
+  const showInline = (m, type = "error") => {
+    const msg = String(m || "").replace(/\s+/g, " ").trim();
+    setAlertType(type);
+    setAlertMsg(msg);
+    if (msg) setTimeout(() => setAlertMsg(""), 4000);
   };
 
-  // Update checks whenever password changes
+  const evaluatePassword = (pw) => ({
+    length: pw.length >= 8,
+    upper: /[A-Z]/.test(pw),
+    lower: /[a-z]/.test(pw),
+    number: /[0-9]/.test(pw),
+    special: /[^A-Za-z0-9]/.test(pw),
+  });
+
   useEffect(() => {
     setPwChecks(evaluatePassword(password));
   }, [password]);
 
-  // Step 1: Validate & Send OTP (Via Backend & Firebase)
   const handleSendOTP = async () => {
     if (!fullName || !email || !mobile || !password || !confirmPassword) {
       showInline("Please fill in all fields", "error");
       return;
     }
-
+    if (!privacyAccepted) {
+      showInline("Please accept the Privacy Policy to continue.", "error");
+      return;
+    }
     if (password !== confirmPassword) {
       showInline("Passwords do not match", "error");
       return;
     }
 
-    // Enforce stronger password rules
-    const currentChecks = evaluatePassword(password);
-    const allGood = Object.values(currentChecks).every(Boolean);
-    if (!allGood) {
+    const checks = evaluatePassword(password);
+    if (!Object.values(checks).every(Boolean)) {
       const missing = [];
-      if (!currentChecks.length) missing.push("8 characters");
-      if (!currentChecks.upper) missing.push("an uppercase letter");
-      if (!currentChecks.lower) missing.push("a lowercase letter");
-      if (!currentChecks.number) missing.push("a number");
-      if (!currentChecks.special) missing.push("a special character");
+      if (!checks.length) missing.push("8 characters");
+      if (!checks.upper) missing.push("an uppercase letter");
+      if (!checks.lower) missing.push("a lowercase letter");
+      if (!checks.number) missing.push("a number");
+      if (!checks.special) missing.push("a special character");
       showInline(`Password must contain ${missing.join(", ")}.`, "error");
       return;
     }
 
-    // Basic Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       showInline("Invalid email address", "error");
       return;
     }
 
-    const formattedMobile = mobile.startsWith("+") ? mobile : `+91${mobile}`; // Default to India if no code
+    const formattedMobile = formatSignupMobile(mobile);
+    if (!formattedMobile || formattedMobile.replace(/\D/g, "").length < 12) {
+      showInline("Enter a valid 10-digit mobile number", "error");
+      return;
+    }
 
     setLoading(true);
     try {
-      const preferredMethod = Platform.OS === "web" ? "email" : "sms";
+      await axios.post(`${API_URL}/auth/check-user`, {
+        email: email.trim().toLowerCase(),
+        mobile: formattedMobile,
+      });
 
-      // 1. Send Email OTP (Both Web & Native)
-      // User requested option: Auto-get Mobile OTP OR enter Email OTP manually.
-      // So we send the Email OTP in parallel.
-      const backendResponse = await axios.post(`${API_URL}/auth/send-otp`, {
-        email,
+      await axios.post(`${API_URL}/auth/send-otp`, {
+        email: email.trim().toLowerCase(),
         mobile: formattedMobile,
         type: "signup",
-        method: preferredMethod,
+        method: "whatsapp",
       });
 
-      if (!backendResponse.data.success) {
-        setLoading(false);
-        showInline(
-          backendResponse.data.message || "User check failed.",
-          "error",
-        );
-        return;
-      }
-
-      // 2. Call Firebase for Mobile OTP
-      // 2. Call Firebase for Mobile OTP
-      if (Platform.OS === "web") {
-        // Web Logic (Email Only)
-        setLoading(false);
-        setStep(2);
-        showInline("Sent email OTP. Mobile SMS skipped.", "info");
-        setConfirm({
-          verificationId: "web-mock-id",
-          confirm: async () => true,
-        });
-      } else {
-        // Native/Expo Logic: Use backend OTP (no recaptcha)
-        // Backend already sent OTP above (email + optional SMS). We'll rely on
-        // backend verification flow instead of Firebase Recaptcha for native.
-        setConfirm({ type: "backend-verify" });
-        showInline("We have sent a verification code via SMS.", "info");
-        setLoading(false);
-        setStep(2);
-      }
-    } catch (error) {
-      setLoading(false);
-      console.error("Setup Error:", error);
-      showInline(
-        error.response?.data?.message || "Failed to initialize signup.",
-        "error",
-      );
-    }
-  };
-
-  // Step 2: Verify & Signup (Via Backend)
-  const handleVerifyAndSignup = async () => {
-    if (!otp) {
-      showInline("Please enter the OTP", "error");
-      return;
-    }
-
-    if (!confirm) {
-      showInline("Session expired. Please resend OTP.", "error");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // If we're using backend verification (default now)
-      if (Platform.OS === "web" || confirm.type === "backend-verify") {
-        const formattedMobile = mobile.startsWith("+") ? mobile : `+91${mobile}`;
-        const verifyPayload =
-          Platform.OS === "web"
-            ? { email, otp }
-            : { mobile: formattedMobile, otp };
-
-        const verifyResponse = await axios.post(
-          `${API_URL}/auth/verify-otp`,
-          verifyPayload,
-        );
-        if (!verifyResponse.data.success) {
-          throw new Error("Invalid OTP (Backend Verification)");
-        }
-        console.log("Backend OTP Verification Successful");
-      } else {
-        // If confirm is a Firebase confirmation (unlikely in current flow)
-        await confirm.confirm(otp);
-        console.log("Firebase Phone Auth Successful");
-      }
-
-      // Proceed to Signup on Backend
-      const signupResponse = await axios.post(`${API_URL}/auth/signup`, {
-        name: fullName,
-        email,
-        password,
-        confirmPassword,
-        mobile, // Passed for record
+      setPhoneVerificationSession({
+        signupData: {
+          name: fullName.trim(),
+          email: email.trim().toLowerCase(),
+          password,
+          confirmPassword,
+          mobile: formattedMobile,
+          privacyPolicyAccepted: true,
+          privacyPolicyUrl,
+        },
       });
 
-      await login(signupResponse.data.token, signupResponse.data.user);
-      showInline("Account verified and created successfully!", "info");
-      // Auto navigation managed by AuthContext
-    } catch (error) {
-      console.error(error);
-      const msg =
-        error.response?.data?.message ||
-        error.message ||
-        "Signup failed or Invalid OTP";
-      showInline(msg, "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResendOTP = async () => {
-    setLoading(true);
-    try {
-      const formattedMobile = mobile.startsWith("+") ? mobile : `+91${mobile}`;
-
-      if (Platform.OS === "web") {
-        showInline("Resent email OTP.", "info");
-        await axios.post(`${API_URL}/auth/send-otp`, {
-          email,
-          mobile: formattedMobile,
-          method: "email",
-        });
-      } else {
-        // Resend via backend (email + SMS if configured)
-        const backendResponse = await axios.post(`${API_URL}/auth/send-otp`, {
-          email,
-          mobile: formattedMobile,
-          method: "sms",
-        });
-        if (!backendResponse.data.success) {
-          throw new Error(
-            backendResponse.data.message || "Failed to resend OTP",
-          );
-        }
-        setConfirm({ type: "backend-verify" });
-        showInline("Verification code resent via SMS.", "info");
-      }
-    } catch (error) {
-      console.error(error);
-      showInline("Failed to resend OTP. Please try again.", "error");
+      navigation.navigate("OtpVerification", {
+        phoneNumber: formattedMobile,
+      });
+    } catch (e) {
+      showInline(getSignupOtpError(e, "Failed to send OTP."), "error");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
-      {/* Recaptcha removed — using backend OTP instead */}
-      {/* Abstract Background Elements - Enhanced */}
-      <AnimatedBlob style={styles.blobTopLeft} />
-      <AnimatedBlob style={styles.blobBottomRight} />
-      <AnimatedBlob style={styles.blobCenter} />
+    <View style={S.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#f0f4ff" translucent />
 
-      <LinearGradient
-        colors={["rgba(255,255,255,0.4)", "rgba(255,255,255,0.7)"]}
-        style={StyleSheet.absoluteFill}
+      <LinearGradient colors={["#f0f4ff", "#fafbff", "#eef2ff"]} style={StyleSheet.absoluteFill} />
+
+      <Orb color="#a5b4fc" size={420} top={-160} left={-160} opacity={0.45} delay={0} />
+      <Orb color="#c4b5fd" size={340} bottom={-130} right={-130} opacity={0.35} delay={700} />
+      <Orb color="#93c5fd" size={200} top="40%" left={-70} opacity={0.28} delay={350} />
+
+      <View style={[S.ring, { width: 560, height: 560, top: -230, left: -210, borderRadius: 280 }]} />
+      <View
+        style={[
+          S.ring,
+          { width: 380, height: 380, bottom: -150, right: -150, borderRadius: 190 },
+        ]}
       />
+
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.keyboardView}
+        keyboardVerticalOffset={Platform.OS === "android" ? StatusBar.currentHeight || 0 : 0}
+        style={{ flex: 1 }}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContainer}
+          contentContainerStyle={[
+            {
+              flexGrow: 1,
+              justifyContent: ui.centerContent ? "center" : "flex-start",
+              minHeight: ui.minH,
+              paddingHorizontal: ui.sidePadding,
+              paddingTop: ui.topPad,
+              paddingBottom: ui.botPad,
+            },
+          ]}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+          overScrollMode="never"
         >
-          <Animated.View entering={FadeInUp.delay(100)} style={styles.header}>
-            <View style={styles.logoCircle}>
-              <Ionicons name="person-add" size={32} color="#6366f1" />
+          <Animated.View
+            entering={FadeInDown.delay(80).duration(650).springify()}
+            style={[S.header, { marginBottom: ui.isTablet ? 44 : ui.isVeryShort ? 22 : 34 }]}
+          >
+            <View
+              style={[
+                S.logoRing,
+                {
+                  width: ui.logoSize + 28,
+                  height: ui.logoSize + 28,
+                  borderRadius: (ui.logoSize + 28) / 2,
+                  marginBottom: 20,
+                },
+              ]}
+            >
+              <View
+                style={[
+                  S.logoCircle,
+                  {
+                    width: ui.logoSize,
+                    height: ui.logoSize,
+                    borderRadius: ui.logoSize / 2,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="person-add-outline"
+                  size={Math.round(ui.logoSize * 0.42)}
+                  color="#6366f1"
+                />
+              </View>
             </View>
-            <Text style={styles.title}>Create Account</Text>
-            <Text style={styles.subtitle}>
-              {step === 1
-                ? "Start your journey with us"
-                : "Verify your contact details"}
-            </Text>
+            <Text style={[S.title, { fontSize: ui.titleSize }]}>CREATE ACCOUNT</Text>
+            <View style={S.accentLine} />
           </Animated.View>
 
           <Animated.View
-            entering={FadeInUp.delay(200)}
-            style={styles.formWrapper}
+            entering={FadeInUp.delay(220).duration(680).springify()}
+            style={[
+              S.card,
+              {
+                maxWidth: ui.cardMaxWidth,
+                alignSelf: "center",
+                width: "100%",
+                borderRadius: ui.radius + 10,
+              },
+            ]}
           >
-            <BlurView intensity={20} tint="light" style={styles.blurContainer}>
-              <View style={styles.formContent}>
-                <InlineAlert
-                  message={alertMsg}
-                  type={alertType}
-                  onClose={() => setAlertMsg("")}
+            <LinearGradient
+              colors={["rgba(99,102,241,0.07)", "transparent"]}
+              style={[
+                S.cardTopGlow,
+                {
+                  borderTopLeftRadius: ui.radius + 10,
+                  borderTopRightRadius: ui.radius + 10,
+                },
+              ]}
+            />
+
+            <View style={[S.cardInner, { padding: ui.formPadding }]}>
+              <InlineAlert message={alertMsg} type={alertType} onClose={() => setAlertMsg("")} />
+
+              <Animated.View entering={FadeInDown.duration(400)}>
+                <View style={{ marginBottom: ui.fieldGap }}>
+                  <Field
+                    label="Full Name"
+                    icon="person-outline"
+                    value={fullName}
+                    onChangeText={setFullName}
+                    placeholder="Enter your full name"
+                    autoCapitalize="words"
+                    ui={ui}
+                  />
+                </View>
+
+                <View style={{ marginBottom: ui.fieldGap }}>
+                  <Field
+                    label="Email Address"
+                    icon="mail-outline"
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="you@example.com"
+                    keyboardType="email-address"
+                    ui={ui}
+                  />
+                </View>
+
+                <View style={{ marginBottom: ui.fieldGap }}>
+                  <Field
+                    label="Mobile Number"
+                    icon="call-outline"
+                    value={mobile}
+                    onChangeText={(t) => setMobile(t.replace(/[^0-9]/g, ""))}
+                    placeholder="Enter 10-digit number"
+                    keyboardType="numeric"
+                    maxLength={10}
+                    ui={ui}
+                  />
+                </View>
+
+                <View style={{ marginBottom: 4 }}>
+                  <Field
+                    label="Password"
+                    icon="lock-closed-outline"
+                    value={password}
+                    onChangeText={setPassword}
+                    isPassword
+                    showPwd={showPassword}
+                    setShowPwd={setShowPassword}
+                    placeholder="Create a strong password"
+                    ui={ui}
+                  />
+                </View>
+
+                {password.length > 0 && <PwChecklist checks={pwChecks} />}
+
+                <View style={{ marginBottom: ui.fieldGap, marginTop: password.length > 0 ? 8 : 0 }}>
+                  <Field
+                    label="Confirm Password"
+                    icon="lock-closed-outline"
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    isPassword
+                    showPwd={showConfirmPassword}
+                    setShowPwd={setShowConfirmPassword}
+                    placeholder="Repeat your password"
+                    ui={ui}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={S.privacyRow}
+                  activeOpacity={0.85}
+                  onPress={() => setPrivacyAccepted((prev) => !prev)}
+                >
+                  <View style={[S.checkbox, privacyAccepted && S.checkboxChecked]}>
+                    {privacyAccepted ? (
+                      <Ionicons name="checkmark" size={14} color="#fff" />
+                    ) : null}
+                  </View>
+                  <Text style={S.privacyText}>
+                    I agree to the{" "}
+                    <Text
+                      style={S.privacyLink}
+                      onPress={async () => {
+                        try {
+                          await Linking.openURL(privacyPolicyUrl);
+                        } catch (_error) {
+                          showInline("Unable to open Privacy Policy right now.", "error");
+                        }
+                      }}
+                    >
+                      Privacy Policy
+                    </Text>
+                  </Text>
+                </TouchableOpacity>
+
+                <ActionButton
+                  onPress={handleSendOTP}
+                  loading={loading}
+                  title="SEND OTP"
+                  icon="arrow-forward"
+                  ui={ui}
                 />
-                {step === 1 && (
-                  <Animated.View entering={FadeInDown}>
-                    <CustomInput
-                      label="Full Name"
-                      icon="person-outline"
-                      value={fullName}
-                      onChangeText={setFullName}
-                      placeholder="Enter full name"
-                      autoCapitalize="words"
-                    />
-                    <CustomInput
-                      label="Email Address"
-                      icon="mail-outline"
-                      value={email}
-                      onChangeText={setEmail}
-                      placeholder="Enter your email"
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-                    <CustomInput
-                      label="Mobile Number"
-                      icon="call-outline"
-                      value={mobile}
-                      onChangeText={(text) =>
-                        setMobile(text.replace(/[^0-9]/g, ""))
-                      }
-                      placeholder="Enter 10-digit mobile number"
-                      keyboardType="numeric"
-                      maxLength={10}
-                    />
-                    <CustomInput
-                      label="Password"
-                      icon="lock-closed-outline"
-                      value={password}
-                      onChangeText={setPassword}
-                      isPassword
-                      showPassword={showPassword}
-                      setShowPassword={setShowPassword}
-                      placeholder="Create password"
-                    />
-                    {/* Password strength checklist */}
-                    {password.length > 0 && (
-                      <View style={styles.pwChecklist}>
-                        <View style={styles.pwRow}>
-                          <Ionicons
-                            name={
-                              pwChecks.length
-                                ? "checkmark-circle"
-                                : "close-circle"
-                            }
-                            size={16}
-                            color={pwChecks.length ? "#10B981" : "#EF4444"}
-                            style={{ marginRight: 8 }}
-                          />
-                          <Text style={styles.pwText}>
-                            At least 8 characters
-                          </Text>
-                        </View>
-                        <View style={styles.pwRow}>
-                          <Ionicons
-                            name={
-                              pwChecks.upper
-                                ? "checkmark-circle"
-                                : "close-circle"
-                            }
-                            size={16}
-                            color={pwChecks.upper ? "#10B981" : "#EF4444"}
-                            style={{ marginRight: 8 }}
-                          />
-                          <Text style={styles.pwText}>1 uppercase letter</Text>
-                        </View>
-                        <View style={styles.pwRow}>
-                          <Ionicons
-                            name={
-                              pwChecks.lower
-                                ? "checkmark-circle"
-                                : "close-circle"
-                            }
-                            size={16}
-                            color={pwChecks.lower ? "#10B981" : "#EF4444"}
-                            style={{ marginRight: 8 }}
-                          />
-                          <Text style={styles.pwText}>1 lowercase letter</Text>
-                        </View>
-                        <View style={styles.pwRow}>
-                          <Ionicons
-                            name={
-                              pwChecks.number
-                                ? "checkmark-circle"
-                                : "close-circle"
-                            }
-                            size={16}
-                            color={pwChecks.number ? "#10B981" : "#EF4444"}
-                            style={{ marginRight: 8 }}
-                          />
-                          <Text style={styles.pwText}>1 number</Text>
-                        </View>
-                        <View style={styles.pwRow}>
-                          <Ionicons
-                            name={
-                              pwChecks.special
-                                ? "checkmark-circle"
-                                : "close-circle"
-                            }
-                            size={16}
-                            color={pwChecks.special ? "#10B981" : "#EF4444"}
-                            style={{ marginRight: 8 }}
-                          />
-                          <Text style={styles.pwText}>1 special character</Text>
-                        </View>
-                      </View>
-                    )}
-                    <CustomInput
-                      label="Confirm Password"
-                      icon="lock-closed-outline"
-                      value={confirmPassword}
-                      onChangeText={setConfirmPassword}
-                      isPassword
-                      showPassword={showConfirmPassword}
-                      setShowPassword={setShowConfirmPassword}
-                      placeholder="Confirm password"
-                    />
-
-                    <CustomButton
-                      onPress={handleSendOTP}
-                      loading={loading}
-                      title="Send OTP"
-                    />
-                  </Animated.View>
-                )}
-
-                {step === 2 && (
-                  <Animated.View entering={FadeInUp}>
-                    <View style={styles.otpInfoContainer}>
-                      <Text style={styles.otpInfoText}>
-                        We sent a code to{" "}
-                        <Text style={styles.highlight}>{mobile}</Text> and{" "}
-                        <Text style={styles.highlight}>{email}</Text>.{"\n"}If
-                        SMS auto-verifies, you'll be logged in automatically.
-                        {"\n"}Otherwise, enter the code from Email or SMS below.
-                      </Text>
-                    </View>
-
-                    <View style={styles.inputWrapper}>
-                      <View style={styles.inputContainer}>
-                        <Ionicons
-                          name="keypad-outline"
-                          size={20}
-                          color="#64748b"
-                          style={styles.inputIcon}
-                        />
-                        <TextInput
-                          style={[
-                            styles.input,
-                            {
-                              letterSpacing: 8,
-                              fontSize: 20,
-                              textAlign: "center",
-                            },
-                          ]}
-                          placeholder=" - - - - - - "
-                          placeholderTextColor="#94a3b8"
-                          value={otp}
-                          onChangeText={setOtp}
-                          keyboardType="number-pad"
-                          maxLength={6}
-                        />
-                      </View>
-                    </View>
-
-                    <CustomButton
-                      onPress={handleVerifyAndSignup}
-                      loading={loading}
-                      title="Verify & Sign Up"
-                      icon="checkmark-circle-outline"
-                    />
-
-                    <TouchableOpacity
-                      onPress={handleResendOTP}
-                      style={styles.backLink}
-                      disabled={loading}
-                    >
-                      <Text
-                        style={[
-                          styles.backLinkText,
-                          { marginBottom: 15, color: "#6366f1" },
-                        ]}
-                      >
-                        Resend OTP
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      onPress={() => setStep(1)}
-                      style={styles.backLink}
-                    >
-                      <Text style={styles.backLinkText}>Change Details</Text>
-                    </TouchableOpacity>
-                  </Animated.View>
-                )}
-              </View>
-            </BlurView>
+              </Animated.View>
+            </View>
           </Animated.View>
 
-          {/* Footer */}
-          <Animated.View entering={FadeInUp.delay(300)} style={styles.footer}>
-            <Text style={styles.footerText}>Already have an account? </Text>
+          <Animated.View
+            entering={FadeIn.delay(480).duration(550)}
+            style={[S.footer, { marginTop: ui.isTablet ? 28 : ui.isVeryShort ? 14 : 20 }]}
+          >
+            <Text style={S.footerText}>Already have an account? </Text>
             <TouchableOpacity onPress={() => navigation.navigate("Login")}>
-              <Text style={styles.footerLink}>Sign In</Text>
+              <Text style={S.footerLink}>Sign In →</Text>
             </TouchableOpacity>
           </Animated.View>
         </ScrollView>
@@ -739,215 +712,136 @@ const SignupScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#ffffff",
-  },
-  blobTopLeft: {
+const S = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#f0f4ff" },
+  ring: {
     position: "absolute",
-    top: -150,
-    left: -100,
-    width: 400,
-    height: 400,
-    borderRadius: 200,
-    backgroundColor: "#6366f1", // Indigo
-    opacity: 0.25,
-    transform: [{ scale: 1.2 }],
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.12)",
   },
-  blobBottomRight: {
-    position: "absolute",
-    bottom: -150,
-    right: -100,
-    width: 400,
-    height: 400,
-    borderRadius: 200,
-    backgroundColor: "#a855f7", // Purple
-    opacity: 0.25,
-    transform: [{ scale: 1.2 }],
-  },
-  blobCenter: {
-    position: "absolute",
-    top: "30%",
-    left: -100,
-    width: 300,
-    height: 300,
-    borderRadius: 150,
-    backgroundColor: "#3b82f6", // Blue
-    opacity: 0.2,
-    transform: [{ scale: 1.5 }],
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContainer: {
-    flexGrow: 1,
-    justifyContent: "center",
-    padding: 24,
-    paddingTop: 20,
-  },
-  header: {
+  header: { alignItems: "center" },
+  logoRing: {
     alignItems: "center",
-    marginBottom: 32,
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: "rgba(99,102,241,0.2)",
+    backgroundColor: "rgba(99,102,241,0.06)",
   },
   logoCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 16,
+    backgroundColor: "rgba(99,102,241,0.1)",
     shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 18,
+    elevation: 8,
   },
   title: {
-    fontSize: 26,
-    fontWeight: "800",
-    color: "#0f172a",
-    marginBottom: 8,
-    letterSpacing: 0.5,
+    fontWeight: "900",
+    color: "#1e1b4b",
+    letterSpacing: 2.5,
+    marginBottom: 10,
   },
-  subtitle: {
-    fontSize: 16,
-    color: "#64748b",
-    textAlign: "center",
-    lineHeight: 24,
-  },
-  formWrapper: {
-    width: "100%",
-    marginBottom: 24,
-    borderRadius: 24,
-    overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  blurContainer: {
-    width: "100%",
-    backgroundColor: "rgba(255, 255, 255, 0.7)",
-  },
-  formContent: {
-    padding: 24,
-  },
-  inputWrapper: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#334155",
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  inputContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f8fafc",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    borderRadius: 16,
-    height: 56,
-    paddingHorizontal: 16,
-  },
-  inputIcon: {
-    marginRight: 12,
-    color: "#64748b",
-  },
-  input: {
-    flex: 1,
-    color: "#0f172a",
-    fontSize: 16,
-    fontWeight: "500",
-  },
-  eyeIcon: {
-    padding: 4,
-  },
-  signupButton: {
-    marginTop: 10,
-    borderRadius: 16,
-    overflow: "hidden",
+  accentLine: {
+    width: 40,
+    height: 2.5,
+    borderRadius: 2,
+    backgroundColor: "#6366f1",
+    marginBottom: 12,
     shadowColor: "#6366f1",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  gradientButton: {
-    paddingVertical: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  signupButtonText: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#fff",
-    letterSpacing: 0.5,
-  },
-  otpInfoContainer: {
-    backgroundColor: "#f1f5f9",
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 24,
+  card: {
+    overflow: "hidden",
+    backgroundColor: "rgba(255, 255, 255, 0.92)",
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: "rgba(99,102,241,0.1)",
+    shadowColor: "#6366f1",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 36,
+    elevation: 18,
+    marginBottom: 4,
   },
-  otpInfoText: {
-    color: "#64748b",
-    fontSize: 14,
-    textAlign: "center",
-    lineHeight: 22,
+  cardTopGlow: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 70,
   },
-  highlight: {
-    color: "#6366f1",
-    fontWeight: "700",
-  },
-  backLink: {
-    alignItems: "center",
-    marginTop: 20,
-  },
-  backLinkText: {
-    color: "#64748b",
-    fontSize: 14,
-    fontWeight: "600",
-  },
+  cardInner: {},
   pwChecklist: {
-    marginTop: 8,
-    marginBottom: 8,
-    paddingHorizontal: 6,
+    marginTop: 10,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 10,
+    backgroundColor: "rgba(99,102,241,0.04)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(99,102,241,0.08)",
   },
   pwRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginVertical: 2,
+    marginVertical: 3,
+    paddingHorizontal: 8,
   },
   pwText: {
-    color: "#334155",
+    fontSize: 12.5,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  privacyRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 18,
+    paddingHorizontal: 2,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: "rgba(99,102,241,0.32)",
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  checkboxChecked: {
+    backgroundColor: "#6366f1",
+    borderColor: "#6366f1",
+  },
+  privacyText: {
+    flex: 1,
+    color: "#475569",
     fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "600",
+  },
+  privacyLink: {
+    color: "#4f46e5",
+    fontWeight: "800",
+    textDecorationLine: "underline",
   },
   footer: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 10,
   },
-  footerText: {
-    color: "#64748b",
-    fontSize: 15,
-  },
+  footerText: { color: "#94a3b8", fontSize: 13.5, fontWeight: "500" },
   footerLink: {
     color: "#6366f1",
-    fontWeight: "700",
-    fontSize: 15,
+    fontWeight: "800",
+    fontSize: 13.5,
+    letterSpacing: 0.3,
   },
 });
 
 export default SignupScreen;
-

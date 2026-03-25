@@ -2,10 +2,15 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { confirmPermissionRequest } from "../utils/appFeedback";
 
 const HOURLY_FOLLOWUP_ACK_DATE_KEY = "hourlyFollowupAckDate";
 const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule"; // JSON: { dateKey, ids: [] }
 const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule"; // JSON: { dateKey, ids: [] }
+const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
+const TRIGGER_TYPES = Notifications.SchedulableTriggerInputTypes || {};
+const DATE_TRIGGER_TYPE = TRIGGER_TYPES.DATE || "date";
+const DAILY_TRIGGER_TYPE = TRIGGER_TYPES.DAILY || "daily";
 
 // Helper to check if notifications are supported
 const isNotificationSupported = () => {
@@ -15,11 +20,33 @@ const isNotificationSupported = () => {
     return true;
 };
 
+const buildDateTrigger = (date, channelId = "followups") => {
+    const trigger = { type: DATE_TRIGGER_TYPE, date };
+    if (Platform.OS === "android" && channelId) {
+        trigger.channelId = channelId;
+    }
+    return trigger;
+};
+
+const buildDailyTrigger = (hour, minute, channelId = "followups") => {
+    const trigger = {
+        type: DAILY_TRIGGER_TYPE,
+        hour,
+        minute,
+        repeats: true,
+    };
+    if (Platform.OS === "android" && channelId) {
+        trigger.channelId = channelId;
+    }
+    return trigger;
+};
+
 // Configure notification behavior (only on supported platforms)
 if (isNotificationSupported()) {
     Notifications.setNotificationHandler({
         handleNotification: async () => ({
-            shouldShowAlert: true,
+            shouldShowBanner: true,
+            shouldShowList: true,
             shouldPlaySound: true,
             shouldSetBadge: true,
         }),
@@ -33,6 +60,24 @@ export const initializeNotifications = async () => {
         if (Platform.OS === "web") {
             console.log("Notifications not supported on web platform");
             return false;
+        }
+
+        const existingPermission = await Notifications.getPermissionsAsync();
+        if (existingPermission.status !== "granted" && existingPermission.canAskAgain !== false) {
+            const hasExplained =
+                (await AsyncStorage.getItem(NOTIFICATION_PERMISSION_EXPLAINED_KEY)) === "true";
+            if (!hasExplained) {
+                const confirmed = await confirmPermissionRequest({
+                    title: "Allow notifications?",
+                    message:
+                        "We use notifications for follow-up reminders and important app alerts. You can change this later in device settings.",
+                    confirmText: "Allow",
+                });
+                await AsyncStorage.setItem(NOTIFICATION_PERMISSION_EXPLAINED_KEY, "true");
+                if (!confirmed) {
+                    return false;
+                }
+            }
         }
 
         // Request permissions for both iOS and Android
@@ -425,11 +470,7 @@ export const showEnquiryStatusNotification = async (enquiryName, newStatus) => {
 // Schedule daily notification at specific time
 export const scheduleDailyNotification = (hour = 9, minute = 0) => {
     try {
-        const trigger = {
-            hour,
-            minute,
-            repeats: true,
-        };
+        const trigger = buildDailyTrigger(hour, minute, "followups");
 
         Notifications.scheduleNotificationAsync({
             content: {
@@ -925,7 +966,7 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
                         sticky: false,
                     },
                 },
-                trigger: cursor,
+                trigger: buildDateTrigger(cursor, channelId),
             });
 
             ids.push(id);
@@ -1001,7 +1042,10 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                             sticky: false,
                         },
                     },
-                    trigger: new Date(now.getTime() + 60 * 1000),
+                    trigger: buildDateTrigger(
+                        new Date(now.getTime() + 60 * 1000),
+                        channelId,
+                    ),
                 });
                 ids.push(id);
                 continue;
@@ -1025,7 +1069,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                         sticky: false,
                     },
                 },
-                trigger: when,
+                trigger: buildDateTrigger(when, channelId),
             });
             ids.push(dueId);
 
@@ -1049,7 +1093,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                         sticky: false,
                     },
                 },
-                trigger: missedWhen,
+                trigger: buildDateTrigger(missedWhen, channelId),
             });
             ids.push(missedId);
         }

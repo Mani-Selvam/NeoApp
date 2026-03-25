@@ -1,5 +1,7 @@
 ﻿const express = require("express");
 const router = express.Router();
+const crypto = require("crypto");
+const Company = require("../models/Company");
 const User = require("../models/User");
 const Plan = require("../models/Plan");
 const Coupon = require("../models/Coupon");
@@ -7,8 +9,26 @@ const CompanyPlanOverride = require("../models/CompanyPlanOverride");
 const CompanySubscription = require("../models/CompanySubscription");
 const SystemLog = require("../models/SystemLog");
 const Payment = require("../models/Payment");
-const { verifyToken } = require("../middleware/auth");
+const Enquiry = require("../models/Enquiry");
+const FollowUp = require("../models/FollowUp");
+const CallLog = require("../models/CallLog");
+const CallSession = require("../models/CallSession");
+const ChatMessage = require("../models/ChatMessage");
+const CommunicationMessage = require("../models/CommunicationMessage");
+const CommunicationTask = require("../models/CommunicationTask");
+const EmailSettings = require("../models/EmailSettings");
+const EmailTemplate = require("../models/EmailTemplate");
+const EmailLog = require("../models/EmailLog");
+const MessageTemplate = require("../models/MessageTemplate");
+const LeadSource = require("../models/LeadSource");
+const Product = require("../models/Product");
+const Subscription = require("../models/Subscription");
+const SupportTicket = require("../models/SupportTicket");
+const Target = require("../models/Target");
+const WhatsAppConfig = require("../models/WhatsAppConfig");
+const { verifyToken, clearCompanyCache } = require("../middleware/auth");
 const { sendEmailOTP, sendMobileOTP } = require("../utils/otpService");
+const { sendEmail } = require("../utils/emailService");
 const { clearUserCache } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
 const { resolveEffectivePlan } = require("../services/planResolver");
@@ -38,6 +58,99 @@ const isRazorpayConfigured = async () => {
   return Boolean(cfg?.keyId && cfg?.keySecret);
 };
 
+const buildRazorpayReceipt = ({ companyId, planId }) => {
+  const companyPart = String(companyId || "").slice(-6) || "company";
+  const planPart = String(planId || "").slice(-6) || "plan";
+  const timePart = Date.now().toString(36);
+  // Razorpay receipts have a small max length; keep this deterministic and compact.
+  return `c${companyPart}p${planPart}${timePart}`.slice(0, 40);
+};
+
+const buildReceiptNumber = ({ subscriptionId, paymentId }) => {
+  const subPart = String(subscriptionId || "").slice(-6) || "sub000";
+  const payPart = String(paymentId || "").slice(-6) || "pay000";
+  return `NEO-${subPart}-${payPart}`.toUpperCase();
+};
+
+const buildPaymentReceipt = ({
+  companyName = "NeoApp Workspace",
+  customerName = "",
+  customerEmail = "",
+  planName = "",
+  paymentId = "",
+  orderId = "",
+  amountUsd = 0,
+  amountInr = 0,
+  currency = "INR",
+  couponCode = "",
+  renewDate = null,
+  subscriptionId = "",
+  paidAt = new Date(),
+}) => {
+  const receiptNumber = buildReceiptNumber({ subscriptionId, paymentId });
+  const paidDate = new Date(paidAt);
+  return {
+    receiptNumber,
+    companyName,
+    customerName,
+    customerEmail,
+    planName,
+    paymentId,
+    orderId,
+    amountUsd: Number(amountUsd || 0),
+    amountInr: Number(Number(amountInr || 0).toFixed(2)),
+    currency: String(currency || "INR").toUpperCase(),
+    couponCode: String(couponCode || "").trim().toUpperCase(),
+    renewDate,
+    subscriptionId: String(subscriptionId || ""),
+    paidAt: paidDate.toISOString(),
+    paidAtLabel: paidDate.toLocaleString("en-IN", { hour12: true }),
+  };
+};
+
+const buildReceiptEmailHtml = (receipt) => `
+  <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:24px;color:#0f172a">
+    <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:24px">
+      <h2 style="margin:0 0 8px">Payment receipt</h2>
+      <p style="margin:0 0 18px;color:#475569">Your subscription is active now.</p>
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 0;color:#64748b">Receipt No</td><td style="padding:8px 0;text-align:right;font-weight:700">${receipt.receiptNumber}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Plan</td><td style="padding:8px 0;text-align:right">${receipt.planName}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Amount</td><td style="padding:8px 0;text-align:right">INR ${receipt.amountInr.toFixed(2)}${receipt.amountUsd ? ` / USD ${receipt.amountUsd.toFixed(2)}` : ""}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Payment ID</td><td style="padding:8px 0;text-align:right">${receipt.paymentId}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Order ID</td><td style="padding:8px 0;text-align:right">${receipt.orderId}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Paid On</td><td style="padding:8px 0;text-align:right">${receipt.paidAtLabel}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Renew Date</td><td style="padding:8px 0;text-align:right">${receipt.renewDate ? new Date(receipt.renewDate).toLocaleDateString() : "-"}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b">Coupon</td><td style="padding:8px 0;text-align:right">${receipt.couponCode || "-"}</td></tr>
+      </table>
+    </div>
+  </div>
+`;
+
+const buildReceiptEmailText = (receipt) =>
+  [
+    "NeoApp Payment Receipt",
+    `Receipt No: ${receipt.receiptNumber}`,
+    `Plan: ${receipt.planName}`,
+    `Amount: INR ${receipt.amountInr.toFixed(2)}${receipt.amountUsd ? ` / USD ${receipt.amountUsd.toFixed(2)}` : ""}`,
+    `Payment ID: ${receipt.paymentId}`,
+    `Order ID: ${receipt.orderId}`,
+    `Paid On: ${receipt.paidAtLabel}`,
+    `Renew Date: ${receipt.renewDate ? new Date(receipt.renewDate).toLocaleDateString() : "-"}`,
+    `Coupon: ${receipt.couponCode || "-"}`,
+  ].join("\n");
+
+const sendPlanReceiptEmail = async ({ user, receipt }) => {
+  const to = String(user?.email || "").trim().toLowerCase();
+  if (!to) return false;
+  return sendEmail({
+    to,
+    subject: `NeoApp receipt ${receipt.receiptNumber}`,
+    text: buildReceiptEmailText(receipt),
+    html: buildReceiptEmailHtml(receipt),
+  });
+};
+
 const computeDiscount = (price, coupon) => {
   if (!coupon) return { discountAmount: 0, finalPrice: price };
   const safeValue = Number(coupon.discountValue || 0);
@@ -64,6 +177,49 @@ const getCompanyCouponUsedCount = (coupon, companyId) => {
   const map = coupon?.companyUsageMap || {};
   if (typeof map.get === "function") return Number(map.get(String(companyId)) || 0);
   return Number(map[String(companyId)] || 0);
+};
+
+const toWholeNumber = (value, fallback = 0) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return Math.max(0, Number(fallback || 0));
+  return Math.floor(n);
+};
+
+const buildSeatPricing = ({
+  plan,
+  override,
+  requestedAdmins = 0,
+  requestedStaff = 0,
+}) => {
+  const includedAdmins = toWholeNumber(plan?.maxAdmins, 1);
+  const includedStaff =
+    override && typeof override?.customMaxStaff === "number"
+      ? toWholeNumber(override.customMaxStaff, plan?.maxStaff)
+      : toWholeNumber(plan?.maxStaff, 0);
+
+  const allocatedAdmins = Math.max(includedAdmins, toWholeNumber(requestedAdmins, includedAdmins));
+  const allocatedStaff = Math.max(includedStaff, toWholeNumber(requestedStaff, includedStaff));
+
+  const extraAdminsPurchased = Math.max(0, allocatedAdmins - includedAdmins);
+  const extraStaffPurchased = Math.max(0, allocatedStaff - includedStaff);
+
+  const extraAdminPrice = Number(plan?.extraAdminPrice || 0);
+  const extraStaffPrice = Number(plan?.extraStaffPrice || 0);
+  const extraAdminsAmount = Number((extraAdminsPurchased * extraAdminPrice).toFixed(2));
+  const extraStaffAmount = Number((extraStaffPurchased * extraStaffPrice).toFixed(2));
+
+  return {
+    includedAdmins,
+    includedStaff,
+    allocatedAdmins,
+    allocatedStaff,
+    extraAdminsPurchased,
+    extraStaffPurchased,
+    extraAdminPrice,
+    extraStaffPrice,
+    extraAdminsAmount,
+    extraStaffAmount,
+  };
 };
 
 const getActiveOverrideForPlan = async (companyId, planId) => {
@@ -165,17 +321,34 @@ const validateCouponForPlan = async ({ couponCode, companyId, planId }) => {
   return coupon;
 };
 
-const buildCheckoutSummary = async ({ companyId, planId, couponCode = "" }) => {
+const buildCheckoutSummary = async ({
+  companyId,
+  planId,
+  couponCode = "",
+  requestedAdmins = 0,
+  requestedStaff = 0,
+}) => {
   const plan = await Plan.findOne({ _id: planId, isActive: true }).lean();
   if (!plan) throw new Error("Selected plan is not available");
 
   const override = await getActiveOverrideForPlan(companyId, plan._id);
   const basePrice =
     override && typeof override.customPrice === "number" ? override.customPrice : plan.basePrice;
-  const maxStaff =
-    override && typeof override.customMaxStaff === "number" ? override.customMaxStaff : plan.maxStaff;
   const trialDays =
     override && typeof override.customTrialDays === "number" ? override.customTrialDays : plan.trialDays;
+  const seatPricing = buildSeatPricing({
+    plan,
+    override,
+    requestedAdmins,
+    requestedStaff,
+  });
+  const originalPrice = Number(
+    (
+      Number(basePrice || 0) +
+      seatPricing.extraAdminsAmount +
+      seatPricing.extraStaffAmount
+    ).toFixed(2),
+  );
 
   const coupon = await validateCouponForPlan({
     couponCode,
@@ -183,7 +356,7 @@ const buildCheckoutSummary = async ({ companyId, planId, couponCode = "" }) => {
     planId: plan._id,
   });
 
-  const { discountAmount, finalPrice } = computeDiscount(basePrice, coupon);
+  const { discountAmount, finalPrice } = computeDiscount(originalPrice, coupon);
   const renewDate = new Date();
   renewDate.setDate(renewDate.getDate() + 30);
 
@@ -191,11 +364,11 @@ const buildCheckoutSummary = async ({ companyId, planId, couponCode = "" }) => {
     plan,
     override,
     coupon,
-    originalPrice: Number(basePrice || 0),
+    originalPrice,
     discountAmount,
     finalPrice,
-    maxStaff,
     trialDays,
+    ...seatPricing,
     renewDate,
   };
 };
@@ -223,6 +396,12 @@ const activateSubscription = async ({
     endDate: summary.renewDate,
     trialUsed: false,
     finalPrice: summary.finalPrice,
+    allocatedAdmins: summary.allocatedAdmins,
+    allocatedStaff: summary.allocatedStaff,
+    extraAdminsPurchased: summary.extraAdminsPurchased,
+    extraStaffPurchased: summary.extraStaffPurchased,
+    extraAdminPrice: summary.extraAdminPrice,
+    extraStaffPrice: summary.extraStaffPrice,
     notes: paymentReference
       ? `paymentReference:${paymentReference}`
       : `Plan purchased via ${provider}`,
@@ -249,15 +428,54 @@ const activateSubscription = async ({
       companyId,
       planId: summary.plan._id,
       subscriptionId: subscription._id,
-      couponCode: summary.coupon?.code || null,
-      paymentReference: paymentReference || null,
-      provider,
-      finalPrice: summary.finalPrice,
-      ...paymentMeta,
-    },
-  });
+        couponCode: summary.coupon?.code || null,
+        paymentReference: paymentReference || null,
+        provider,
+        finalPrice: summary.finalPrice,
+        allocatedAdmins: summary.allocatedAdmins,
+        allocatedStaff: summary.allocatedStaff,
+        extraAdminsPurchased: summary.extraAdminsPurchased,
+        extraStaffPurchased: summary.extraStaffPurchased,
+        ...paymentMeta,
+      },
+    });
 
   return subscription;
+};
+
+const emitSubscriptionUpdate = (req, payload) => {
+  try {
+    const io = req.app?.get("io");
+    if (!io) return;
+
+    const companyId = payload?.companyId ? String(payload.companyId) : "";
+    const userId = payload?.userId ? String(payload.userId) : "";
+
+    io.emit("SUBSCRIPTION_UPDATED", { ...payload, companyId, userId });
+    if (userId) {
+      io.to(`user:${userId}`).emit("SUBSCRIPTION_UPDATED", payload);
+    }
+  } catch (_socketError) {
+    // ignore socket fanout errors
+  }
+};
+
+const isPrimaryCompanyAdmin = async (user) => {
+  const role = String(user?.role || "").toLowerCase();
+  if (role !== "admin") return false;
+  if (!user?.company_id) return false;
+
+  const primaryAdmin = await User.findOne({
+    company_id: user.company_id,
+    role: { $in: ["Admin", "admin"] },
+  })
+    .sort({ createdAt: 1, _id: 1 })
+    .select("_id")
+    .lean();
+
+  return Boolean(
+    primaryAdmin?._id && String(primaryAdmin._id) === String(user?._id || ""),
+  );
 };
 
 // 1. GET PROFILE
@@ -290,6 +508,207 @@ router.put("/profile", verifyToken, async (req, res) => {
     res.json({ success: true, message: "Profile updated", user });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/company/account/disable", verifyToken, async (req, res) => {
+  try {
+    const actor = await User.findById(req.userId)
+      .select("_id role company_id")
+      .lean();
+
+    if (!actor?.company_id) {
+      return res.status(400).json({
+        success: false,
+        message: "No company linked to this account",
+      });
+    }
+
+    const allowed = await isPrimaryCompanyAdmin(actor);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the primary admin can disable this company account",
+      });
+    }
+
+    const companyId = actor.company_id;
+    const updated = await Company.findByIdAndUpdate(
+      companyId,
+      { $set: { status: "Suspended" } },
+      { returnDocument: "after", runValidators: true },
+    ).select("_id name code status");
+
+    if (!updated) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    clearCompanyCache(companyId);
+
+    try {
+      const io = req.app?.get?.("io");
+      if (io) {
+        const companyUsers = await User.find({ company_id: companyId })
+          .select("_id")
+          .lean();
+
+        companyUsers.forEach((entry) => {
+          const userId = entry?._id?.toString?.() || String(entry?._id || "");
+          if (!userId) return;
+
+          io.to(`user:${userId}`).emit("COMPANY_STATUS_CHANGED", {
+            companyId: String(companyId),
+            status: "Suspended",
+            at: new Date().toISOString(),
+          });
+
+          io.to(`user:${userId}`).emit("FORCE_LOGOUT", {
+            reason: "Company is suspended",
+            companyId: String(companyId),
+            companyStatus: "Suspended",
+            at: new Date().toISOString(),
+          });
+        });
+      }
+    } catch (_socketError) {
+      // ignore socket fanout failures
+    }
+
+    await SystemLog.create({
+      userId: req.userId,
+      action: "COMPANY_SELF_DISABLED",
+      category: "admin_action",
+      ip: req.ip,
+      metadata: {
+        companyId: String(companyId),
+        status: "Suspended",
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: "Company account disabled successfully",
+      company: {
+        id: String(updated._id),
+        name: updated.name || "",
+        code: updated.code || "",
+        status: updated.status || "Suspended",
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete("/company/account", verifyToken, async (req, res) => {
+  try {
+    const actor = await User.findById(req.userId)
+      .select("_id role company_id")
+      .lean();
+
+    if (!actor?.company_id) {
+      return res.status(400).json({
+        success: false,
+        message: "No company linked to this account",
+      });
+    }
+
+    const allowed = await isPrimaryCompanyAdmin(actor);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the primary admin can permanently delete this company account",
+      });
+    }
+
+    const companyId = actor.company_id;
+    const company = await Company.findById(companyId).select("_id name code").lean();
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    const companyUsers = await User.find({ company_id: companyId })
+      .select("_id")
+      .lean();
+    const companyUserIds = companyUsers.map((entry) => entry._id);
+
+    try {
+      const io = req.app?.get?.("io");
+      if (io) {
+        companyUserIds.forEach((userId) => {
+          const safeUserId = String(userId || "");
+          if (!safeUserId) return;
+          io.to(`user:${safeUserId}`).emit("FORCE_LOGOUT", {
+            reason: "Company account deleted permanently",
+            companyId: String(companyId),
+            companyStatus: "Deleted",
+            at: new Date().toISOString(),
+          });
+        });
+      }
+    } catch (_socketError) {
+      // ignore socket fanout errors
+    }
+
+    await Promise.all([
+      Enquiry.deleteMany({
+        $or: [{ userId: { $in: companyUserIds } }, { assignedTo: { $in: companyUserIds } }],
+      }),
+      FollowUp.deleteMany({
+        $or: [{ userId: { $in: companyUserIds } }, { assignedTo: { $in: companyUserIds } }],
+      }),
+      CallLog.deleteMany({
+        $or: [{ userId: { $in: companyUserIds } }, { staffId: { $in: companyUserIds } }],
+      }),
+      CallSession.deleteMany({
+        $or: [{ userId: { $in: companyUserIds } }, { staffId: { $in: companyUserIds } }],
+      }),
+      ChatMessage.deleteMany({ userId: { $in: companyUserIds } }),
+      CommunicationMessage.deleteMany({ companyId }),
+      CommunicationTask.deleteMany({ companyId }),
+      EmailSettings.deleteMany({ companyId }),
+      EmailTemplate.deleteMany({ companyId }),
+      EmailLog.deleteMany({ companyId }),
+      MessageTemplate.deleteMany({ userId: { $in: companyUserIds } }),
+      LeadSource.deleteMany({ createdBy: { $in: companyUserIds } }),
+      Product.deleteMany({ createdBy: { $in: companyUserIds } }),
+      Payment.deleteMany({ companyId }),
+      Subscription.deleteMany({ companyId }),
+      CompanySubscription.deleteMany({ companyId }),
+      CompanyPlanOverride.deleteMany({ companyId }),
+      SupportTicket.deleteMany({ companyId }),
+      Target.deleteMany({ company_id: companyId }),
+      WhatsAppConfig.deleteMany({ companyId }),
+      SystemLog.deleteMany({
+        $or: [
+          { userId: { $in: companyUserIds } },
+          { "metadata.companyId": String(companyId) },
+          { "metadata.companyId": companyId },
+        ],
+      }),
+    ]);
+
+    await User.deleteMany({ company_id: companyId });
+    await Company.deleteOne({ _id: companyId });
+
+    companyUserIds.forEach((userId) => clearUserCache(userId));
+    clearCompanyCache(companyId);
+    clearCompanyPlanCache(companyId);
+    cache.invalidate("dashboard");
+    cache.invalidate("enquiries");
+    cache.invalidate("followups");
+
+    return res.json({
+      success: true,
+      message: "Company account and related data permanently deleted",
+      deletedCompany: {
+        id: String(company._id),
+        name: company.name || "",
+        code: company.code || "",
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -416,6 +835,7 @@ router.post("/email-change/verify-new", verifyToken, async (req, res) => {
 // 7. MOBILE CHANGE - STEP 1: Verify current mobile
 	router.post("/mobile-change/initiate", verifyToken, async (req, res) => {
 	  try {
+      const requestedMethod = String(req.body?.method || "whatsapp").toLowerCase().trim();
 	    const user = await User.findById(req.userId);
 	    const otp = generateOTP();
 
@@ -427,12 +847,12 @@ router.post("/email-change/verify-new", verifyToken, async (req, res) => {
 	    console.log(`[Profile] OTP for current mobile ${user.mobile}: ${otp}`);
 	    const ok = await sendMobileOTP(user.mobile, otp, {
 	      ownerUserId: req.userId,
-	      method: "sms",
+	      method: requestedMethod || "whatsapp",
 	    });
 	    if (!ok) {
 	      return res.status(500).json({
 	        success: false,
-	        message: "Failed to send OTP to mobile. SMS gateway/provider not configured.",
+	        message: "Failed to send OTP to mobile. WhatsApp template or fallback channel is not configured.",
 	      });
 	    }
 
@@ -471,6 +891,7 @@ router.post("/mobile-change/verify-current", verifyToken, async (req, res) => {
 router.post("/mobile-change/new-initiate", verifyToken, async (req, res) => {
   try {
     const { newMobile } = req.body;
+    const requestedMethod = String(req.body?.method || "whatsapp").toLowerCase().trim();
     if (!otpStore[`mobile_old_verified_${req.userId}`]) {
       return res
         .status(403)
@@ -500,12 +921,12 @@ router.post("/mobile-change/new-initiate", verifyToken, async (req, res) => {
 	    console.log(`[Profile] OTP for new mobile ${newMobile}: ${otp}`);
 	    const ok = await sendMobileOTP(newMobile, otp, {
 	      ownerUserId: req.userId,
-	      method: "sms",
+	      method: requestedMethod || "whatsapp",
 	    });
 	    if (!ok) {
 	      return res.status(500).json({
 	        success: false,
-	        message: "Failed to send OTP to new mobile. SMS gateway/provider not configured.",
+	        message: "Failed to send OTP to new mobile. WhatsApp template or fallback channel is not configured.",
 	      });
 	    }
 
@@ -581,7 +1002,7 @@ router.get("/billing/effective-plan", verifyToken, async (req, res) => {
 router.get("/billing/plans", verifyToken, async (req, res) => {
   try {
     const plansRaw = await Plan.find({ isActive: true })
-      .select("code name basePrice trialDays maxAdmins maxStaff features")
+      .select("code name basePrice extraAdminPrice extraStaffPrice trialDays maxAdmins maxStaff features")
       .sort({ sortOrder: 1, createdAt: 1 })
       .lean();
 
@@ -644,7 +1065,12 @@ router.post("/billing/checkout/preview", verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, message: "No company linked to user" });
     }
 
-    const { planId, couponCode = "" } = req.body || {};
+    const {
+      planId,
+      couponCode = "",
+      adminCount = 0,
+      staffCount = 0,
+    } = req.body || {};
     if (!planId) {
       return res.status(400).json({ success: false, message: "planId is required" });
     }
@@ -662,6 +1088,7 @@ router.post("/billing/checkout/preview", verifyToken, async (req, res) => {
           id: plan._id,
           code: plan.code,
           name: plan.name,
+          maxAdmins: plan.maxAdmins,
           maxStaff: plan.maxStaff,
           billingCycle: "Contact Sales",
         },
@@ -672,6 +1099,8 @@ router.post("/billing/checkout/preview", verifyToken, async (req, res) => {
       companyId: req.user.company_id,
       planId,
       couponCode,
+      requestedAdmins: adminCount,
+      requestedStaff: staffCount,
     });
 
     return res.json({
@@ -681,13 +1110,27 @@ router.post("/billing/checkout/preview", verifyToken, async (req, res) => {
         id: summary.plan._id,
         code: summary.plan.code,
         name: summary.plan.name,
-        maxStaff: summary.maxStaff,
+        maxAdmins: summary.allocatedAdmins,
+        maxStaff: summary.allocatedStaff,
+        includedAdmins: summary.includedAdmins,
+        includedStaff: summary.includedStaff,
+        extraAdminPrice: summary.extraAdminPrice,
+        extraStaffPrice: summary.extraStaffPrice,
         billingCycle: "Monthly",
       },
       pricing: {
         originalPrice: summary.originalPrice,
+        basePrice: Number(summary.plan.basePrice || 0),
+        extraAdminsAmount: summary.extraAdminsAmount,
+        extraStaffAmount: summary.extraStaffAmount,
         discountAmount: summary.discountAmount,
         finalPrice: summary.finalPrice,
+      },
+      allocation: {
+        adminCount: summary.allocatedAdmins,
+        staffCount: summary.allocatedStaff,
+        extraAdminsPurchased: summary.extraAdminsPurchased,
+        extraStaffPurchased: summary.extraStaffPurchased,
       },
       coupon: summary.coupon
         ? {
@@ -710,7 +1153,12 @@ router.post("/billing/razorpay/order", verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, message: "No company linked to user" });
     }
 
-    const { planId, couponCode = "" } = req.body || {};
+    const {
+      planId,
+      couponCode = "",
+      adminCount = 0,
+      staffCount = 0,
+    } = req.body || {};
     if (!planId) {
       return res.status(400).json({ success: false, message: "planId is required" });
     }
@@ -731,6 +1179,8 @@ router.post("/billing/razorpay/order", verifyToken, async (req, res) => {
       companyId: req.user.company_id,
       planId,
       couponCode,
+      requestedAdmins: adminCount,
+      requestedStaff: staffCount,
     });
 
     if (Number(summary.finalPrice || 0) <= 0) {
@@ -743,13 +1193,42 @@ router.post("/billing/razorpay/order", verifyToken, async (req, res) => {
         paymentReference: "free",
       });
 
+      emitSubscriptionUpdate(req, {
+        companyId: req.user.company_id,
+        userId: req.userId,
+        planId: String(summary.plan._id),
+        planName: summary.plan.name,
+        subscriptionId: String(subscription?._id || ""),
+        status: "Active",
+        renewDate: summary.renewDate,
+      });
+
       return res.status(201).json({
         success: true,
         requiresPayment: false,
         message: "Plan activated (no payment required)",
         subscription,
-        plan: { id: summary.plan._id, code: summary.plan.code, name: summary.plan.name, maxStaff: summary.maxStaff },
-        pricing: { originalPrice: summary.originalPrice, discountAmount: summary.discountAmount, finalPrice: summary.finalPrice },
+        plan: {
+          id: summary.plan._id,
+          code: summary.plan.code,
+          name: summary.plan.name,
+          maxAdmins: summary.allocatedAdmins,
+          maxStaff: summary.allocatedStaff,
+        },
+        pricing: {
+          originalPrice: summary.originalPrice,
+          basePrice: Number(summary.plan.basePrice || 0),
+          extraAdminsAmount: summary.extraAdminsAmount,
+          extraStaffAmount: summary.extraStaffAmount,
+          discountAmount: summary.discountAmount,
+          finalPrice: summary.finalPrice,
+        },
+        allocation: {
+          adminCount: summary.allocatedAdmins,
+          staffCount: summary.allocatedStaff,
+          extraAdminsPurchased: summary.extraAdminsPurchased,
+          extraStaffPurchased: summary.extraStaffPurchased,
+        },
         renewDate: summary.renewDate,
       });
     }
@@ -767,18 +1246,23 @@ router.post("/billing/razorpay/order", verifyToken, async (req, res) => {
     const amountInrPaise = Math.round(amountInr * 100);
 
     const razorpay = await getRazorpayClientAsync();
-    const receipt = `company_${String(req.user.company_id)}_plan_${String(planId)}_${Date.now()}`;
+    const receipt = buildRazorpayReceipt({
+      companyId: req.user.company_id,
+      planId,
+    });
     const order = await razorpay.orders.create({
       amount: amountInrPaise,
       currency: "INR",
       receipt,
-      notes: {
-        companyId: String(req.user.company_id),
-        userId: String(req.userId),
-        planId: String(planId),
-        couponCode: String(couponCode || ""),
-      },
-    });
+        notes: {
+          companyId: String(req.user.company_id),
+          userId: String(req.userId),
+          planId: String(planId),
+          couponCode: String(couponCode || ""),
+          adminCount: String(summary.allocatedAdmins),
+          staffCount: String(summary.allocatedStaff),
+        },
+      });
 
     await Payment.create({
       provider: "razorpay",
@@ -806,7 +1290,17 @@ router.post("/billing/razorpay/order", verifyToken, async (req, res) => {
       amountInrPaise,
       amountInr: Number(amountInr.toFixed(2)),
       amountUsd: Number(amountUsd.toFixed(2)),
-      plan: { id: summary.plan._id, code: summary.plan.code, name: summary.plan.name },
+      plan: {
+        id: summary.plan._id,
+        code: summary.plan.code,
+        name: summary.plan.name,
+        maxAdmins: summary.allocatedAdmins,
+        maxStaff: summary.allocatedStaff,
+      },
+      allocation: {
+        adminCount: summary.allocatedAdmins,
+        staffCount: summary.allocatedStaff,
+      },
     });
   } catch (err) {
     return res.status(400).json({ success: false, message: err.message });
@@ -823,6 +1317,8 @@ router.post("/billing/razorpay/verify", verifyToken, async (req, res) => {
     const {
       planId,
       couponCode = "",
+      adminCount = 0,
+      staffCount = 0,
       razorpay_order_id: orderId,
       razorpay_payment_id: paymentId,
       razorpay_signature: signature,
@@ -832,21 +1328,12 @@ router.post("/billing/razorpay/verify", verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, message: "Missing required Razorpay fields" });
     }
 
-    const ok = await verifyCheckoutSignatureAsync({ orderId, paymentId, signature });
-    if (!ok) {
-      await Payment.updateOne(
-        { provider: "razorpay", razorpayOrderId: orderId },
-        { $set: { status: "failed", razorpayPaymentId: paymentId, razorpaySignature: signature } },
-      );
-      return res.status(400).json({ success: false, message: "Invalid Razorpay signature" });
-    }
-
     const payment = await Payment.findOne({
       provider: "razorpay",
       razorpayOrderId: orderId,
       companyId: req.user.company_id,
       userId: req.userId,
-    }).lean();
+    });
 
     if (!payment) {
       return res.status(404).json({ success: false, message: "Payment record not found" });
@@ -856,16 +1343,30 @@ router.post("/billing/razorpay/verify", verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, message: "Plan mismatch for this payment" });
     }
 
-    await Payment.updateOne(
-      { _id: payment._id },
-      {
-        $set: {
-          status: "verified",
-          razorpayPaymentId: paymentId,
-          razorpaySignature: signature,
-        },
-      },
-    );
+    const existingSignature = String(payment.razorpaySignature || "");
+    const existingPaymentId = String(payment.razorpayPaymentId || "");
+    const alreadyVerified =
+      payment.status === "verified" &&
+      existingSignature &&
+      existingSignature === String(signature) &&
+      existingPaymentId &&
+      existingPaymentId === String(paymentId);
+
+    if (!alreadyVerified) {
+      const ok = await verifyCheckoutSignatureAsync({ orderId, paymentId, signature });
+      if (!ok) {
+        await Payment.updateOne(
+          { _id: payment._id },
+          { $set: { status: "failed", razorpayPaymentId: paymentId, razorpaySignature: signature } },
+        );
+        return res.status(400).json({ success: false, message: "Invalid Razorpay signature" });
+      }
+
+      payment.status = "verified";
+      payment.razorpayPaymentId = paymentId;
+      payment.razorpaySignature = signature;
+      await payment.save();
+    }
 
     const plan = await Plan.findById(planId).lean();
     if (!plan || !plan.isActive) {
@@ -879,32 +1380,103 @@ router.post("/billing/razorpay/verify", verifyToken, async (req, res) => {
       companyId: req.user.company_id,
       planId,
       couponCode,
+      requestedAdmins: adminCount,
+      requestedStaff: staffCount,
     });
 
-    const subscription = await activateSubscription({
+    const paymentReference = `razorpay:${paymentId}`;
+    let subscription = await CompanySubscription.findOne({
+      companyId: req.user.company_id,
+      notes: `paymentReference:${paymentReference}`,
+    }).sort({ createdAt: -1 }).lean();
+
+    if (!subscription) {
+      subscription = await activateSubscription({
+        companyId: req.user.company_id,
+        userId: req.userId,
+        ip: req.ip,
+        summary,
+        provider: "razorpay",
+        paymentReference,
+        paymentMeta: { razorpayOrderId: orderId, razorpayPaymentId: paymentId },
+      });
+    }
+
+    const user = await User.findById(req.userId).select("name email company_id").lean();
+    const receipt = buildPaymentReceipt({
+      companyName: req.user?.companyName || "NeoApp Workspace",
+      customerName: user?.name || "",
+      customerEmail: user?.email || "",
+      planName: summary.plan.name || "",
+      paymentId,
+      orderId,
+      amountUsd: payment.amountUsd,
+      amountInr: payment.amountInr,
+      currency: "INR",
+      couponCode: summary.coupon?.code || couponCode,
+      renewDate: summary.renewDate,
+      subscriptionId: subscription?._id,
+      paidAt: new Date(),
+    });
+
+    const receiptHash = crypto
+      .createHash("sha256")
+      .update(`${receipt.receiptNumber}|${receipt.paymentId}|${receipt.orderId}`)
+      .digest("hex");
+
+    await Payment.updateOne(
+      { _id: payment._id },
+      {
+        $set: {
+          status: "verified",
+          razorpayPaymentId: paymentId,
+          razorpaySignature: signature,
+          metadata: {
+            ...(payment.metadata || {}),
+            receipt,
+            receiptHash,
+          },
+        },
+      },
+    );
+
+    sendPlanReceiptEmail({ user, receipt }).catch(() => {});
+    emitSubscriptionUpdate(req, {
       companyId: req.user.company_id,
       userId: req.userId,
-      ip: req.ip,
-      summary,
-      provider: "razorpay",
-      paymentReference: `razorpay:${paymentId}`,
-      paymentMeta: { razorpayOrderId: orderId, razorpayPaymentId: paymentId },
+      planId: String(summary.plan._id),
+      planName: summary.plan.name,
+      subscriptionId: String(subscription?._id || ""),
+      status: "Active",
+      renewDate: summary.renewDate,
+      receiptNumber: receipt.receiptNumber,
     });
 
     return res.status(201).json({
       success: true,
       message: "Payment verified and subscription activated",
       subscription,
+      receipt,
       plan: {
         id: summary.plan._id,
         code: summary.plan.code,
         name: summary.plan.name,
-        maxStaff: summary.maxStaff,
+        maxAdmins: summary.allocatedAdmins,
+        maxStaff: summary.allocatedStaff,
       },
       pricing: {
         originalPrice: summary.originalPrice,
+        basePrice: Number(summary.plan.basePrice || 0),
+        extraAdminsAmount: summary.extraAdminsAmount,
+        extraStaffAmount: summary.extraStaffAmount,
         discountAmount: summary.discountAmount,
         finalPrice: summary.finalPrice,
+      },
+      allocation: {
+        adminCount: summary.allocatedAdmins,
+        staffCount: summary.allocatedStaff,
+        extraAdminsPurchased: summary.extraAdminsPurchased,
+        extraStaffPurchased: summary.extraStaffPurchased,
       },
       renewDate: summary.renewDate,
     });
@@ -978,7 +1550,13 @@ router.post("/billing/checkout/purchase", verifyToken, async (req, res) => {
       return res.status(400).json({ success: false, message: "No company linked to user" });
     }
 
-    const { planId, couponCode = "", paymentReference = "" } = req.body || {};
+    const {
+      planId,
+      couponCode = "",
+      paymentReference = "",
+      adminCount = 0,
+      staffCount = 0,
+    } = req.body || {};
     if (!planId) {
       return res.status(400).json({ success: false, message: "planId is required" });
     }
@@ -1006,6 +1584,8 @@ router.post("/billing/checkout/purchase", verifyToken, async (req, res) => {
       companyId: req.user.company_id,
       planId,
       couponCode,
+      requestedAdmins: adminCount,
+      requestedStaff: staffCount,
     });
 
     const subscription = await activateSubscription({
@@ -1025,12 +1605,22 @@ router.post("/billing/checkout/purchase", verifyToken, async (req, res) => {
         id: summary.plan._id,
         code: summary.plan.code,
         name: summary.plan.name,
-        maxStaff: summary.maxStaff,
+        maxAdmins: summary.allocatedAdmins,
+        maxStaff: summary.allocatedStaff,
       },
       pricing: {
         originalPrice: summary.originalPrice,
+        basePrice: Number(summary.plan.basePrice || 0),
+        extraAdminsAmount: summary.extraAdminsAmount,
+        extraStaffAmount: summary.extraStaffAmount,
         discountAmount: summary.discountAmount,
         finalPrice: summary.finalPrice,
+      },
+      allocation: {
+        adminCount: summary.allocatedAdmins,
+        staffCount: summary.allocatedStaff,
+        extraAdminsPurchased: summary.extraAdminsPurchased,
+        extraStaffPurchased: summary.extraStaffPurchased,
       },
       renewDate: summary.renewDate,
     });

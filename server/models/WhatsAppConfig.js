@@ -24,6 +24,7 @@ const WhatsAppConfigSchema = new mongoose.Schema(
         signatureHeader: { type: String, default: "X-Hub-Signature-256" },
         enableSignatureVerification: { type: Boolean, default: false },
         defaultCountry: { type: String, default: "91" },
+        editOtpVerifiedAt: { type: Date, default: null },
         companyId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Company",

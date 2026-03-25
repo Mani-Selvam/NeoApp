@@ -4,17 +4,17 @@
  * BEFORE: Every API call did AsyncStorage.getItem() + axios.create() = ~100-200ms overhead
  * AFTER:  Single instance reused, token cached in memory = ~0ms overhead
  */
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { API_URL } from "./apiConfig";
 import { emitAuthError } from "./authErrorBus";
+import { getAuthToken } from "./secureTokenStorage";
 
 let cachedToken = null;
 let apiClient = null;
 
 // Create or reuse the axios instance
 const getApiClient = async () => {
-    const token = await AsyncStorage.getItem("token");
+    const token = await getAuthToken();
 
     // Reuse existing client if token hasn't changed
     if (apiClient && cachedToken === token) {
@@ -42,10 +42,20 @@ const getApiClient = async () => {
                 error?.message ||
                 "";
 
-            if (status === 401 || status === 403) {
-                // Company suspension, inactive user, expired token, etc.
+            if (message) {
+                error.message = message;
+            }
+
+            const code = error?.response?.data?.code;
+
+            if (
+                status === 402 ||
+                status === 401 ||
+                status === 403
+            ) {
+                // Company suspension, inactive user, expired token, billing, etc.
                 error.isAuthError = true;
-                emitAuthError({ status, message, data: error?.response?.data });
+                emitAuthError({ status, message, data: error?.response?.data, code });
             }
 
             return Promise.reject(error);

@@ -38,9 +38,9 @@ export const verifyNewEmail = async (otp) => {
 };
 
 // Mobile Change Flow
-export const initiateMobileChange = async () => {
+export const initiateMobileChange = async (method = "whatsapp") => {
     const client = await getApiClient();
-    const response = await client.post("/users/mobile-change/initiate");
+    const response = await client.post("/users/mobile-change/initiate", { method });
     return response.data;
 };
 
@@ -50,9 +50,9 @@ export const verifyCurrentMobile = async (otp) => {
     return response.data;
 };
 
-export const initiateNewMobile = async (newMobile) => {
+export const initiateNewMobile = async (newMobile, method = "whatsapp") => {
     const client = await getApiClient();
-    const response = await client.post("/users/mobile-change/new-initiate", { newMobile });
+    const response = await client.post("/users/mobile-change/new-initiate", { newMobile, method });
     return response.data;
 };
 
@@ -80,20 +80,34 @@ export const getBillingCoupons = async () => {
     return response.data;
 };
 
-export const previewPlanCheckout = async ({ planId, couponCode = "" }) => {
+export const previewPlanCheckout = async ({
+    planId,
+    couponCode = "",
+    adminCount = 0,
+    staffCount = 0,
+}) => {
     const client = await getApiClient();
     const response = await client.post("/users/billing/checkout/preview", {
         planId,
         couponCode,
+        adminCount,
+        staffCount,
     });
     return response.data;
 };
 
-export const createRazorpayOrder = async ({ planId, couponCode = "" }) => {
+export const createRazorpayOrder = async ({
+    planId,
+    couponCode = "",
+    adminCount = 0,
+    staffCount = 0,
+}) => {
     const client = await getApiClient();
     const response = await client.post("/users/billing/razorpay/order", {
         planId,
         couponCode,
+        adminCount,
+        staffCount,
     });
     return response.data;
 };
@@ -104,12 +118,20 @@ export const verifyRazorpayPayment = async (payload) => {
     return response.data;
 };
 
-export const purchasePlan = async ({ planId, couponCode = "", paymentReference = "" }) => {
+export const purchasePlan = async ({
+    planId,
+    couponCode = "",
+    paymentReference = "",
+    adminCount = 0,
+    staffCount = 0,
+}) => {
     const client = await getApiClient();
     const response = await client.post("/users/billing/checkout/purchase", {
         planId,
         couponCode,
         paymentReference,
+        adminCount,
+        staffCount,
     });
     return response.data;
 };
@@ -123,5 +145,17 @@ export const submitEnterpriseContact = async (payload) => {
 export const getCurrentPlan = async () => {
     const client = await getApiClient();
     const response = await client.get("/users/company/current-plan");
+    return response.data;
+};
+
+export const deleteCompanyAccount = async () => {
+    const client = await getApiClient();
+    const response = await client.delete("/users/company/account");
+    return response.data;
+};
+
+export const disableCompanyAccount = async () => {
+    const client = await getApiClient();
+    const response = await client.post("/users/company/account/disable");
     return response.data;
 };

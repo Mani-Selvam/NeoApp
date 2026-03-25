@@ -5,6 +5,12 @@ const expoConfig = require('eslint-config-expo/flat');
 module.exports = defineConfig([
   expoConfig,
   {
-    ignores: ['dist/*'],
+    ignores: [
+      'dist/**',
+      'web/dist/**',
+      '.expo/**',
+      'sms-gateway-android/.gradle/**',
+      '**/*.zip',
+    ],
   },
 ]);

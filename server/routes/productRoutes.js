@@ -57,8 +57,20 @@ router.post("/", verifyToken, async (req, res) => {
         ? req.user.parentUserId
         : req.userId;
 
+    const trimmedName = String(name || "").trim();
+    const existingProduct = await Product.findOne({
+      createdBy: ownerId,
+      name: trimmedName,
+    }).lean();
+
+    if (existingProduct) {
+      return res.status(409).json({
+        error: "This product name already exists",
+      });
+    }
+
     const newProduct = new Product({
-      name,
+      name: trimmedName,
       items,
       createdBy: ownerId,
     });
@@ -66,6 +78,11 @@ router.post("/", verifyToken, async (req, res) => {
     const saved = await newProduct.save();
     res.status(201).json(saved);
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({
+        error: "This product name already exists",
+      });
+    }
     res.status(500).json({ error: error.message });
   }
 });

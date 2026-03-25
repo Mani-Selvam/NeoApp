@@ -29,6 +29,9 @@ const emailLogSchema = new mongoose.Schema(
         status: { type: String, enum: ["Queued", "Sent", "Failed"], default: "Queued", index: true },
         error: { type: String, default: "" },
         messageId: { type: String, default: "" },
+        smtpResponse: { type: String, default: "" },
+        acceptedRecipients: { type: [String], default: [] },
+        rejectedRecipients: { type: [String], default: [] },
 
         attachments: { type: [attachmentSchema], default: [] },
 
@@ -48,4 +51,3 @@ const emailLogSchema = new mongoose.Schema(
 emailLogSchema.index({ companyId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("EmailLog", emailLogSchema);
-

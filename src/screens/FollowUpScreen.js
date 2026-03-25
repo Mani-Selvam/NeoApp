@@ -1,4121 +1,4531 @@
 import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { MotiView } from "moti";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    AppState,
-    DeviceEventEmitter,
-    Dimensions,
-    FlatList,
-    Image,
-    Linking,
-    Modal,
-    PermissionsAndroid,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  AppState,
+  BackHandler,
+  DeviceEventEmitter,
+  Easing,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  PanResponder,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from "react-native";
+import { Calendar } from "react-native-calendars";
 import RNImmediatePhoneCall from "react-native-immediate-phone-call";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { PostCallModal } from "../components/PostCallModal";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import AppSideMenu from "../components/AppSideMenu";
 import ConfettiBurst from "../components/ConfettiBurst";
+import { PostCallModal } from "../components/PostCallModal";
+import { FollowUpSkeleton } from "../components/skeleton/screens";
+import { useAuth } from "../contexts/AuthContext";
 import * as callLogService from "../services/callLogService";
+import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
-import { useAuth } from "../contexts/AuthContext";
-import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import { getImageUrl } from "../utils/imageHelper";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-const { width } = Dimensions.get("window");
+import ChatScreen from "./ChatScreen";
 
-const FOLLOWUP_ACTIVITY_OPTIONS = [
-    "Phone Call",
-    "WhatsApp",
-    "Email",
-    "Meeting",
-];
-const ENQUIRY_STATUS_TABS = [
-    { value: "All", label: "All" },
-    { value: "New", label: "New" },
-    { value: "Contacted", label: "Connected" },
-    { value: "Interested", label: "Interested" },
-    { value: "Not Interested", label: "Not Interested" },
-    { value: "Converted", label: "Converted" },
-    { value: "Closed", label: "Closed" },
-];
-
-// ── PREMIUM iOS LIGHT THEME (matches EnquiryListScreen) ───────────────────
-const COLORS = {
-    bgApp: "#F2F4F8",
-    bgCard: "#FFFFFF",
-    bgCardAlt: "#FAFBFF",
-
-    primary: "#1A6BFF",
-    primaryDark: "#0055E5",
-    primaryLight: "#EBF2FF",
-    primaryMid: "#C2D9FF",
-
-    secondary: "#FF3B5C",
-    accent: "#7B61FF",
-    teal: "#00C6A2",
-
-    textMain: "#0A0F1E",
-    textSub: "#3A4060",
-    textMuted: "#7C85A3",
-    textLight: "#B0BAD3",
-
-    border: "#E8ECF4",
-    divider: "#F0F2F8",
-    shadow: "#1A2560",
-
-    success: "#00C48C",
-    whatsapp: "#25D366",
-    danger: "#FF3B5C",
-    warning: "#FF9500",
-    info: "#1A6BFF",
-
-    warningBg: "#FFF5E6",
-    warningText: "#92400E",
-    successBg: "#E6FBF5",
-    successText: "#065F46",
-    primaryBg: "#EBF2FF",
-    primaryText: "#0055E5",
-
-    gradients: {
-        primary: ["#1A6BFF", "#7B61FF"],
-        success: ["#00C48C", "#00A67A"],
-        danger: ["#FF3B5C", "#C5001F"],
-        info: ["#1A6BFF", "#0055E5"],
-        header: ["#FFFFFF", "#F2F4F8"],
-        teal: ["#00C6A2", "#00A685"],
-    },
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg: "#F1F5F9",
+  card: "#FFFFFF",
+  cardAlt: "#F8FAFF",
+  primary: "#2563EB",
+  primaryDark: "#1D4ED8",
+  primarySoft: "#EFF6FF",
+  primaryMid: "#BFDBFE",
+  accent: "#7C3AED",
+  success: "#059669",
+  whatsapp: "#25D366",
+  danger: "#DC2626",
+  warning: "#D97706",
+  info: "#0891B2",
+  teal: "#0D9488",
+  text: "#0F172A",
+  textSub: "#334155",
+  textMuted: "#64748B",
+  textLight: "#94A3B8",
+  border: "#E2E8F0",
+  divider: "#F1F5F9",
+  shadow: "#1E293B",
+};
+const GRAD = {
+  primary: [C.primary, C.accent],
+  success: [C.success, "#047857"],
+  danger: [C.danger, "#991B1B"],
 };
 
-// ── HELPERS ────────────────────────────────────────────────────────────────
-const toLocalIso = (d) => {
-    const date = d ? new Date(d) : new Date();
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-};
-
-const safeLocaleString = (raw) => {
-    if (!raw) return "-";
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleString();
-};
-
-const safeLocaleDateString = (raw, options) => {
-    if (!raw) return "-";
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleDateString(undefined, options);
-};
-
-const getStatusConfig = (status) => {
-    switch (status) {
-        case "New":
-            return { color: COLORS.info, bg: COLORS.primaryLight };
-        case "Contacted":
-            return { color: COLORS.warning, bg: "#FFF5E6" };
-        case "Interested":
-            return { color: COLORS.teal, bg: "#E6FBF5" };
-        case "Not Interested":
-            return { color: COLORS.danger, bg: "#FFF0F3" };
-        case "Converted":
-            return { color: COLORS.success, bg: "#E6FBF5" };
-        case "Closed":
-            return { color: COLORS.textLight, bg: COLORS.bgApp };
-        default:
-            return { color: COLORS.primary, bg: COLORS.primaryLight };
-    }
-};
-
-const normalizeStatusValue = (status) => {
-    const raw = String(status || "")
-        .trim()
-        .toLowerCase();
-    if (raw === "in progress") return "Contacted";
-    if (raw === "dropped" || raw === "drop") return "Not Interested";
-    if (raw === "contacted") return "Contacted";
-    if (raw === "new") return "New";
-    if (raw === "interested") return "Interested";
-    if (raw === "not interested") return "Not Interested";
-    if (raw === "converted") return "Converted";
-    if (raw === "closed") return "Closed";
-    return status || "New";
-};
-
-const matchesStatusTab = (item, tab) =>
-    tab === "All" ? true : normalizeStatusValue(item?.status) === tab;
-
-const formatDisplayValue = (value, fallback = "N/A") => {
-    if (value == null || value === "") return fallback;
-    if (typeof value === "string" || typeof value === "number")
-        return String(value);
-    if (value instanceof Date) return value.toLocaleDateString();
-    if (Array.isArray(value)) {
-        const formatted = value
-            .map((entry) => formatDisplayValue(entry, ""))
-            .filter(Boolean)
-            .join(", ");
-        return formatted || fallback;
-    }
-    if (typeof value === "object") {
-        if (typeof value.name === "string" && value.name.trim())
-            return value.name;
-        if (typeof value.title === "string" && value.title.trim())
-            return value.title;
-        if (typeof value.label === "string" && value.label.trim())
-            return value.label;
-        if (typeof value.value === "string" && value.value.trim())
-            return value.value;
-    }
-    return fallback;
-};
-
-// ── MAIN SCREEN ────────────────────────────────────────────────────────────
-export default function DashboardScreen({ navigation, route }) {
-    const insets = useSafeAreaInsets();
-    const { user, logout } = useAuth();
-    const swipeHandlers = useSwipeNavigation("FollowUp", navigation);
-    const [menuVisible, setMenuVisible] = useState(false);
-    const [showLogoutModal, setShowLogoutModal] = useState(false);
-
-    const handleLogout = () => {
-        setMenuVisible(false);
-        setShowLogoutModal(true);
+// ─── Responsive scale ─────────────────────────────────────────────────────────
+const useScale = () => {
+  const { width, height } = useWindowDimensions();
+  return useMemo(() => {
+    const isTablet = width >= 768;
+    const isLarge = width >= 414 && width < 768;
+    const isMed = width >= 375 && width < 414;
+    const base = isTablet ? 16 : isLarge ? 15 : isMed ? 14 : 13;
+    return {
+      isTablet,
+      isLarge,
+      isMed,
+      isSmall: width < 375,
+      width,
+      height,
+      f: {
+        xs: base - 3,
+        sm: base - 1,
+        base,
+        md: base + 1,
+        lg: base + 2,
+        xl: base + 4,
+        xxl: base + 7,
+      },
+      sp: {
+        xs: isTablet ? 6 : 4,
+        sm: isTablet ? 8 : 6,
+        md: isTablet ? 14 : 10,
+        lg: isTablet ? 20 : 14,
+        xl: isTablet ? 28 : 20,
+      },
+      inputH: isTablet ? 56 : isLarge ? 50 : isMed ? 48 : 46,
+      radius: isTablet ? 16 : 12,
+      cardR: isTablet ? 20 : 14,
+      hPad: isTablet ? 24 : isLarge ? 18 : 16,
+      SW: width,
     };
-    const confirmLogout = async () => {
-        setShowLogoutModal(false);
-        await logout();
-    };
+  }, [width, height]);
+};
 
-    const [screen, setScreen] = useState("ENQUIRY_LIST");
-    const [activeTab, setActiveTab] = useState("New");
-    const [followUps, setFollowUps] = useState([]);
-    const [selectedEnquiry, setSelectedEnquiry] = useState(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [detailsLoading, setDetailsLoading] = useState(false);
-    const [showEditModal, setShowEditModal] = useState(false);
-    const [editItem, setEditItem] = useState(null);
-    const [editRemarks, setEditRemarks] = useState("");
-    const [editActivityType, setEditActivityType] = useState("Phone Call");
-    const [editStatus, setEditStatus] = useState("Contacted");
-    const [editNextDate, setEditNextDate] = useState("");
-    const [editNextTime, setEditNextTime] = useState("");
-    const [editAmount, setEditAmount] = useState("");
-    const [isSavingEdit, setIsSavingEdit] = useState(false);
-    const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
-    const [calendarMonth, setCalendarMonth] = useState(new Date());
-    const [datePickerTarget, setDatePickerTarget] = useState("add"); // "add" | "history"
-    const [isTimePickerVisible, setTimePickerVisibility] = useState(false);
-    const [timePickerValue, setTimePickerValue] = useState(new Date());
-    const [showHistoryModal, setShowHistoryModal] = useState(false);
-    const [showDetailsModal, setShowDetailsModal] = useState(false);
-    const [enquiryHistory, setEnquiryHistory] = useState([]);
-    const [historyLoading, setHistoryLoading] = useState(false);
-    const historyEnqIdentifierRef = useRef(null);
-    const [showHistoryEditModal, setShowHistoryEditModal] = useState(false);
-    const [historyEditItem, setHistoryEditItem] = useState(null);
-    const [historyEditRemarks, setHistoryEditRemarks] = useState("");
-    const [historyEditActivityType, setHistoryEditActivityType] =
-        useState("Phone Call");
-    const [historyEditStatus, setHistoryEditStatus] = useState("Connected");
-    const [historyEditDate, setHistoryEditDate] = useState("");
-    const [historyEditTime, setHistoryEditTime] = useState("");
-    const [isHistoryTimePickerVisible, setHistoryTimePickerVisibility] =
-        useState(false);
-    const [historyTimePickerValue, setHistoryTimePickerValue] = useState(
-        new Date(),
-    );
-    const [isSavingHistoryEdit, setIsSavingHistoryEdit] = useState(false);
-    const [searchQuery, setSearchQuery] = useState("");
+// ─── Constants ────────────────────────────────────────────────────────────────
+const ACTIVITY_OPTIONS = ["Phone Call", "WhatsApp", "Email", "Meeting"];
+const STATUS_TABS = [
+  { value: "All", label: "All", icon: "grid-outline", color: C.primary },
+  {
+    value: "Today",
+    label: "Today",
+    icon: "calendar-clear-outline",
+    color: C.violet,
+  },
+  {
+    value: "Missed",
+    label: "Missed",
+    icon: "alert-circle-outline",
+    color: C.danger,
+  },
+];
 
-    const [callModalVisible, setCallModalVisible] = useState(false);
-    const [callEnquiry, setCallEnquiry] = useState(null);
-    const [callStartTime, setCallStartTime] = useState(null);
-    const [callStarted, setCallStarted] = useState(false);
-    const [autoDuration, setAutoDuration] = useState(0);
-    const [autoCallData, setAutoCallData] = useState(null);
+// Detail tabs
+const DETAIL_TABS = [
+  { key: "followup", label: "Add Follow-up", icon: "add-circle-outline" },
+  { key: "call", label: "Call Log", icon: "call-outline" },
+  { key: "whatsapp", label: "WhatsApp", icon: "logo-whatsapp" },
+  { key: "email", label: "Email", icon: "mail-outline" },
+];
 
-    const [page, setPage] = useState(1);
-    const [hasMore, setHasMore] = useState(true);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const lastFetchTime = useRef(0);
-    const lastComposerToken = useRef(null);
-    const fetchRequestIdRef = useRef(0);
-    const confettiRef = useRef(null);
-    const detailsRequestIdRef = useRef(0);
+const normalizePhone = (value) =>
+  String(value || "")
+    .replace(/\D/g, "")
+    .slice(-10);
 
-    useFocusEffect(
-        useCallback(() => {
-            // Stop hourly reminders once the user has viewed the follow-ups screen.
-            Promise.resolve(
-                notificationService.acknowledgeHourlyFollowUpReminders?.(),
-            ).catch(() => {});
+const formatCallDuration = (seconds) => {
+  const total = Number(seconds || 0);
+  const mins = Math.floor(total / 60);
+  const secs = String(total % 60).padStart(2, "0");
+  return `${mins}:${secs}`;
+};
 
-            const now = Date.now();
-            const isStale = now - lastFetchTime.current > 60000;
-            if (isStale || followUps.length === 0)
-                fetchFollowUps(activeTab, true);
-        }, [activeTab, searchQuery]),
-    );
+const formatShortDateTime = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString([], {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 
-    useEffect(() => {
-        const callEndedSub = DeviceEventEmitter.addListener(
-            "CALL_ENDED",
-            (data) => {
-                if (callStarted && callEnquiry) {
-                    global.__callClaimedByScreen = true;
-                    const fullCallData = {
-                        phoneNumber: data.phoneNumber,
-                        callType: data.callType,
-                        duration: data.duration,
-                        note: data.note || "Auto-logged from Follow-up Screen",
-                        callTime: data.callTime || new Date(),
-                        enquiryId: callEnquiry?._id,
-                        contactName: callEnquiry?.name,
-                    };
-                    handleSaveCallLog(fullCallData);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                }
-            },
+function FloatingInput({
+  label,
+  value,
+  onChangeText,
+  placeholder = "",
+  multiline = false,
+  keyboardType = "default",
+  containerStyle,
+  inputStyle,
+  minHeight,
+  scrollEnabled = true,
+}) {
+  const [focused, setFocused] = useState(false);
+  const anim = useRef(new Animated.Value(value ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.timing(anim, {
+      toValue: focused || String(value || "").trim().length > 0 ? 1 : 0,
+      duration: 180,
+      useNativeDriver: false,
+    }).start();
+  }, [anim, focused, value]);
+
+  return (
+    <View
+      style={[
+        FU.floatingWrap,
+        multiline && FU.floatingWrapMultiline,
+        containerStyle,
+      ]}
+    >
+      <Animated.Text
+        pointerEvents="none"
+        style={[
+          FU.floatingLabel,
+          {
+            top: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [multiline ? 20 : 16, 6],
+            }),
+            fontSize: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [14, 11],
+            }),
+            color: anim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [C.textLight, C.primary],
+            }),
+          },
+        ]}
+      >
+        {label}
+      </Animated.Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={focused ? placeholder : ""}
+        placeholderTextColor={C.textLight}
+        style={[
+          FU.floatingInput,
+          multiline && FU.floatingInputMultiline,
+          minHeight ? { minHeight } : null,
+          inputStyle,
+        ]}
+        multiline={multiline}
+        keyboardType={keyboardType}
+        textAlignVertical={multiline ? "top" : "center"}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        scrollEnabled={scrollEnabled}
+      />
+    </View>
+  );
+}
+
+function FollowUpCallPanel({ enquiry, onCallPress }) {
+  const phoneKey = normalizePhone(enquiry?.mobile || enquiry?.phoneNumber);
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [typeFilter, setTypeFilter] = useState("All");
+
+  useEffect(() => {
+    let active = true;
+
+    const loadLogs = async () => {
+      if (!phoneKey && !enquiry?._id) {
+        if (active) {
+          setLogs([]);
+          setLoading(false);
+        }
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const result = await callLogService.getCallLogs(
+          enquiry?._id
+            ? {
+                enquiryId: enquiry._id,
+                filter: "All",
+                limit: 100,
+              }
+            : {
+                search: phoneKey,
+                filter: "All",
+                limit: 100,
+              },
         );
-        return () => callEndedSub.remove();
-    }, [callStarted, callEnquiry]);
-
-    useEffect(() => {
-        const subscription = AppState.addEventListener(
-            "change",
-            async (nextAppState) => {
-                if (
-                    nextAppState === "active" &&
-                    callStarted &&
-                    callStartTime &&
-                    callEnquiry
-                ) {
-                    if (autoCallData) return;
-                    const endTime = Date.now();
-                    const durationSeconds = Math.floor(
-                        (endTime - callStartTime) / 1000,
-                    );
-                    const realDuration = Math.max(0, durationSeconds - 5);
-                    const fullCallData = {
-                        phoneNumber: callEnquiry.mobile,
-                        callType: "Outgoing",
-                        duration: realDuration,
-                        note: `Auto-logged (AppState fallback). Duration: ${realDuration}s`,
-                        callTime: new Date(),
-                        enquiryId: callEnquiry._id,
-                        contactName: callEnquiry.name,
-                    };
-                    handleSaveCallLog(fullCallData);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                }
-            },
-        );
-        return () => subscription.remove();
-    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
-
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-            lastFetchTime.current = 0;
-            fetchFollowUps(activeTab, true);
+        if (!active) return;
+        const items = Array.isArray(result?.data) ? result.data : [];
+        const filtered = items.filter((item) => {
+          const sameEnquiry =
+            enquiry?._id && item?.enquiryId
+              ? String(item?.enquiryId?._id || item.enquiryId) ===
+                String(enquiry._id)
+              : false;
+          const samePhone = phoneKey
+            ? normalizePhone(item?.phoneNumber) === phoneKey
+            : false;
+          return enquiry?._id ? sameEnquiry : samePhone;
         });
-        return () => sub.remove();
-    }, [activeTab]);
-
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            lastFetchTime.current = 0;
-            fetchFollowUps(activeTab, true);
-        }, 300);
-        return () => clearTimeout(timer);
-    }, [searchQuery]);
-
-    useEffect(() => {
-        const composerToken = route.params?.composerToken;
-        const enquiry = route.params?.enquiry;
-        if (!route.params?.openComposer || !composerToken || !enquiry) return;
-        if (lastComposerToken.current === composerToken) return;
-        lastComposerToken.current = composerToken;
-        openCreateComposer(enquiry);
-    }, [
-        route.params?.openComposer,
-        route.params?.composerToken,
-        route.params?.enquiry,
-    ]);
-
-    // ── API HANDLERS (unchanged) ───────────────────────────────────────────
-    const fetchFollowUps = async (tab, refresh = false) => {
-        const requestId = ++fetchRequestIdRef.current;
-        if (refresh) {
-            setIsLoading(true);
-            setPage(1);
-            setHasMore(true);
-            setFollowUps([]);
-        } else {
-            if (!hasMore || isLoadingMore) return;
-            setIsLoadingMore(true);
-        }
-        try {
-            const currentPage = refresh ? 1 : page;
-            const response = await enquiryService.getAllEnquiries(
-                currentPage,
-                20,
-                searchQuery,
-                tab === "All" ? "" : tab,
-                "",
-            );
-            let newData = [];
-            let totalPages = 1;
-            if (Array.isArray(response)) {
-                newData = response;
-            } else if (response && response.data) {
-                newData = response.data;
-                totalPages = response.pagination?.pages || 1;
-            }
-            if (requestId !== fetchRequestIdRef.current) return;
-            newData = newData
-                .filter((item) => matchesStatusTab(item, tab))
-                .filter(
-                    (item, index, arr) =>
-                        arr.findIndex(
-                            (c) => String(c?._id) === String(item?._id),
-                        ) === index,
-                );
-            setHasMore(
-                Array.isArray(response) ? false : currentPage < totalPages,
-            );
-            if (refresh) {
-                setFollowUps(newData);
-            } else {
-                setFollowUps((prev) => [...prev, ...newData]);
-            }
-            lastFetchTime.current = Date.now();
-            if (!refresh) {
-                setPage((prev) => prev + 1);
-            } else if (newData.length > 0 && currentPage < totalPages) {
-                setPage(2);
-            }
-        } catch (error) {
-            console.error(error);
-        } finally {
-            if (requestId === fetchRequestIdRef.current) {
-                setIsLoading(false);
-                setIsLoadingMore(false);
-            }
-        }
-    };
-
-    const handleLoadMore = () => {
-        if (!isLoading && !isLoadingMore && hasMore)
-            fetchFollowUps(activeTab, false);
-    };
-
-    const handleTabChange = (tab) => {
-        if (tab === activeTab) return;
-        fetchRequestIdRef.current += 1;
-        setFollowUps([]);
-        setIsLoading(true);
-        setPage(1);
-        setHasMore(true);
-        lastFetchTime.current = 0;
-        setActiveTab(tab);
-    };
-
-    const handleOpenEdit = useCallback((item) => {
-        setEditItem(null);
-        setSelectedEnquiry(item);
-        setEditRemarks("");
-        setEditActivityType("Phone Call");
-        setEditStatus(item?.status || "Contacted");
-        setEditNextDate("");
-        setEditNextTime("");
-        setTimePickerVisibility(false);
-        setEditAmount("");
-        setShowEditModal(true);
-    }, []);
-
-    const openCreateComposer = (enquiry) => {
-        setSelectedEnquiry(enquiry);
-        setEditItem(null);
-        setEditRemarks("");
-        setEditActivityType("Phone Call");
-        setEditStatus(enquiry?.status || "Contacted");
-        setEditNextDate("");
-        setEditNextTime("");
-        setTimePickerVisibility(false);
-        setEditAmount("");
-        setCalendarMonth(new Date());
-        setShowEditModal(true);
-        if (route.params?.openComposer)
-            navigation.setParams({ openComposer: false, composerToken: null });
-    };
-
-    const closeEditModal = () => {
-        setShowEditModal(false);
-        setEditItem(null);
-        setEditRemarks("");
-        setEditActivityType("Phone Call");
-        setEditStatus("Contacted");
-        setEditNextDate("");
-        setEditNextTime("");
-        setTimePickerVisibility(false);
-        setEditAmount("");
-    };
-
-    const handleSaveEdit = async () => {
-        if (!selectedEnquiry) return;
-        try {
-            const validStatuses = ENQUIRY_STATUS_TABS.map((item) => item.value)
-                .filter((v) => v !== "All");
-            if (!validStatuses.includes(editStatus))
-                return Alert.alert("Error", "Please select a valid status");
-            if (!editRemarks.trim())
-                return Alert.alert("Required", "Enter follow-up remarks");
-            if (
-                ["New", "Contacted", "Interested"].includes(editStatus) &&
-                !editNextDate
-            )
-                return Alert.alert("Required", "Enter next follow-up date");
-            if (editStatus === "Converted" && !editAmount)
-                return Alert.alert("Required", "Enter amount");
-            setIsSavingEdit(true);
-            let remarksValue = editRemarks;
-            if (editStatus === "Converted")
-                remarksValue = editRemarks
-                    ? `${editRemarks} | Sales: ₹${editAmount}`
-                    : `Sales: ₹${editAmount}`;
-            const rawAssignedTo =
-                selectedEnquiry.assignedTo?._id ||
-                selectedEnquiry.assignedTo?.id ||
-                selectedEnquiry.assignedTo;
-            const assignedToId =
-                typeof rawAssignedTo === "string"
-                    ? rawAssignedTo
-                    : rawAssignedTo && typeof rawAssignedTo === "object"
-                      ? rawAssignedTo.toString?.()
-                      : "";
-            const effectiveDate = editNextDate || toLocalIso(new Date());
-            const followUpAction =
-                editStatus === "Converted"
-                    ? "Sales"
-                    : ["Not Interested", "Closed"].includes(editStatus)
-                      ? "Drop"
-                      : "Followup";
-            const followUpState =
-                followUpAction === "Sales"
-                    ? "Completed"
-                    : followUpAction === "Drop"
-                      ? "Drop"
-                      : "Scheduled";
-            const createPayload = {
-                enqId: selectedEnquiry._id,
-                enqNo: selectedEnquiry.enqNo,
-                name: selectedEnquiry.name,
-                mobile: selectedEnquiry.mobile,
-                product: selectedEnquiry.product,
-                image: selectedEnquiry.image,
-                ...(assignedToId ? { assignedTo: assignedToId } : {}),
-                activityType: editActivityType,
-                type: editActivityType,
-                note: remarksValue,
-                remarks: remarksValue,
-                date: effectiveDate,
-                ...(editNextTime ? { time: editNextTime } : {}),
-                followUpDate: effectiveDate,
-                nextFollowUpDate: effectiveDate,
-                nextAction: followUpAction,
-                status: followUpState,
-                ...(editStatus === "Converted"
-                    ? {
-                          amount:
-                              Number(
-                                  editAmount.toString().replace(/[^0-9.]/g, ""),
-                              ) || 0,
-                      }
-                    : {}),
-            };
-            await followupService.createFollowUp(createPayload);
-            const parsedAmount =
-                Number(editAmount.toString().replace(/[^0-9.]/g, "")) || 0;
-            const updatePayload = {
-                status: editStatus,
-                ...(editStatus === "Converted"
-                    ? { cost: parsedAmount, conversionDate: new Date() }
-                    : {}),
-            };
-            await enquiryService.updateEnquiry(
-                selectedEnquiry._id || selectedEnquiry.enqNo,
-                updatePayload,
-            );
-            closeEditModal();
-            lastFetchTime.current = 0;
-            fetchFollowUps(activeTab, true);
-            const newStatus = String(editStatus || "");
-            const celebrateStatuses = new Set([
-                "Contacted",
-                "Interested",
-                "Converted",
-            ]);
-            if (celebrateStatuses.has(newStatus)) {
-                confettiRef.current?.play?.();
-            }
-        } catch (e) {
-            Alert.alert("Error", e.response?.data?.message || "Could not save");
-        } finally {
-            setIsSavingEdit(false);
-        }
-    };
-
-    const handleOpenDetails = useCallback(async (enq) => {
-        if (!enq) return;
-        const requestId = ++detailsRequestIdRef.current;
-        const fallbackEnquiry = {
-            _id: enq._id,
-            name: enq.name || "Unknown",
-            mobile: enq.mobile || "N/A",
-            enqNo: enq.enqNo || "N/A",
-            status: enq.status || "New",
-            requirements: enq.requirements || "No remarks",
-            product: enq.product || "N/A",
-            source: enq.source || "N/A",
-            address: enq.address || "N/A",
-            image: enq.image || null,
-            createdAt: enq.createdAt || null,
-            enquiryDateTime: enq.enquiryDateTime || null,
-            lastContactedAt: enq.lastContactedAt || null,
-        };
-        if (enq.enqId && typeof enq.enqId === "object" && enq.enqId.name) {
-            setSelectedEnquiry(enq.enqId);
-            setShowDetailsModal(true);
-            return;
-        }
-        const enqIdentifier = enq._id || enq.enqNo;
-        if (!enqIdentifier) {
-            setSelectedEnquiry(fallbackEnquiry);
-            setShowDetailsModal(true);
-            return;
-        }
-        setSelectedEnquiry(fallbackEnquiry);
-        setShowDetailsModal(true);
-        setDetailsLoading(true);
-        try {
-            const data = await enquiryService.getEnquiryById(enqIdentifier);
-            if (requestId !== detailsRequestIdRef.current) return;
-            setSelectedEnquiry(data);
-        } catch (error) {
-            if (requestId !== detailsRequestIdRef.current) return;
-            setSelectedEnquiry(fallbackEnquiry);
-        } finally {
-            if (requestId === detailsRequestIdRef.current)
-                setDetailsLoading(false);
-        }
-    }, []);
-
-    const handleOpenHistory = useCallback(async (enq) => {
-        if (!enq) return;
-        setHistoryLoading(true);
-        setShowHistoryModal(true);
-        try {
-            const enqIdentifier = enq.enqNo || enq._id;
-            historyEnqIdentifierRef.current = enqIdentifier;
-            const historyData =
-                await followupService.getFollowUpHistory(enqIdentifier);
-            setEnquiryHistory(Array.isArray(historyData) ? historyData : []);
-        } catch (error) {
-            setEnquiryHistory([]);
-        } finally {
-            setHistoryLoading(false);
-        }
-    }, []);
-
-    const openHistoryEdit = (item) => {
-        if (!item) return;
-        const normalizedNextAction = String(item?.nextAction || "")
-            .trim()
-            .toLowerCase();
-        const inferredEnquiryStatus =
-            normalizedNextAction === "sales"
-                ? "Converted"
-                : normalizedNextAction === "drop"
-                  ? "Not Interested"
-                  : "Connected";
-
-        setHistoryEditItem(item);
-        setHistoryEditRemarks(item?.remarks || item?.note || "");
-        setHistoryEditActivityType(item?.activityType || item?.type || "Phone Call");
-        setHistoryEditStatus(inferredEnquiryStatus);
-        setHistoryEditDate(
-            item?.nextFollowUpDate || item?.followUpDate || item?.date || "",
+        filtered.sort(
+          (a, b) => new Date(b?.callTime || 0) - new Date(a?.callTime || 0),
         );
-        setHistoryEditTime(item?.time || "");
-        setHistoryTimePickerVisibility(false);
-        setShowHistoryEditModal(true);
+        setLogs(filtered);
+      } catch (_error) {
+        if (active) setLogs([]);
+      } finally {
+        if (active) setLoading(false);
+      }
     };
 
-    const closeHistoryEdit = () => {
-        setShowHistoryEditModal(false);
-        setHistoryEditItem(null);
-        setHistoryEditRemarks("");
-        setHistoryEditActivityType("Phone Call");
-        setHistoryEditStatus("Connected");
-        setHistoryEditDate("");
-        setHistoryEditTime("");
-        setHistoryTimePickerVisibility(false);
-        setIsSavingHistoryEdit(false);
+    loadLogs();
+    return () => {
+      active = false;
     };
+  }, [phoneKey, enquiry?._id]);
 
-    const showHistoryTimePicker = () => {
-        if (Platform.OS === "web") return;
-        if (historyEditTime && /^\d{1,2}:\d{2}$/.test(historyEditTime)) {
-            const [hh, mm] = historyEditTime.split(":").map((n) => Number(n));
-            const base = new Date();
-            base.setHours(hh || 0, mm || 0, 0, 0);
-            setHistoryTimePickerValue(base);
-        } else {
-            setHistoryTimePickerValue(new Date());
-        }
-        setHistoryTimePickerVisibility(true);
-    };
-
-    const hideHistoryTimePicker = () => setHistoryTimePickerVisibility(false);
-
-    const handleConfirmHistoryTime = (event, selectedDate) => {
-        if (Platform.OS === "android") {
-            if (event?.type === "dismissed") return hideHistoryTimePicker();
-            if (selectedDate) setHistoryEditTime(formatTime(selectedDate));
-            return hideHistoryTimePicker();
-        }
-        if (selectedDate) setHistoryEditTime(formatTime(selectedDate));
-    };
-
-    const handleSaveHistoryEdit = async () => {
-        if (!historyEditItem?._id) return;
-        try {
-            if (!historyEditRemarks.trim())
-                return Alert.alert("Required", "Enter follow-up remarks");
-            if (!historyEditDate)
-                return Alert.alert("Required", "Select follow-up date");
-
-            setIsSavingHistoryEdit(true);
-
-            const followUpAction =
-                historyEditStatus === "Converted"
-                    ? "Sales"
-                    : ["Not Interested", "Closed"].includes(historyEditStatus)
-                      ? "Drop"
-                      : "Followup";
-            const followUpState =
-                followUpAction === "Sales"
-                    ? "Completed"
-                    : followUpAction === "Drop"
-                      ? "Drop"
-                      : "Scheduled";
-
-            const payload = {
-                remarks: historyEditRemarks,
-                note: historyEditRemarks,
-                activityType: historyEditActivityType,
-                type: historyEditActivityType,
-                date: historyEditDate,
-                followUpDate: historyEditDate,
-                nextFollowUpDate: historyEditDate,
-                ...(historyEditTime ? { time: historyEditTime } : { time: "" }),
-                nextAction: followUpAction,
-                status: followUpState,
-            };
-
-            await followupService.updateFollowUp(historyEditItem._id, payload);
-
-            // Keep enquiry status aligned (for New/Interested/Closed selections).
-            try {
-                const enqIdentifier =
-                    historyEditItem?.enqId?._id ||
-                    historyEditItem?.enqId ||
-                    historyEditItem?.enqNo;
-                if (enqIdentifier) {
-                    const mapped =
-                        historyEditStatus === "Connected"
-                            ? "Contacted"
-                            : historyEditStatus;
-                    await enquiryService.updateEnquiry(enqIdentifier, {
-                        status: mapped,
-                    });
-                }
-            } catch (e) {}
-
-            // Refresh history list
-            const enqIdentifier = historyEnqIdentifierRef.current;
-            if (enqIdentifier) {
-                const historyData =
-                    await followupService.getFollowUpHistory(enqIdentifier);
-                setEnquiryHistory(
-                    Array.isArray(historyData) ? historyData : [],
-                );
-            }
-
-            // Resync today's reminders immediately (date/time might have changed)
-            try {
-                const res = await followupService.getFollowUps("Today", 1, 200);
-                const list = Array.isArray(res?.data)
-                    ? res.data
-                    : Array.isArray(res)
-                      ? res
-                      : [];
-                await notificationService.scheduleTimeFollowUpRemindersForToday?.(
-                    list,
-                    { channelId: "followups", missedAfterMinutes: 20 },
-                );
-                await notificationService.scheduleHourlyFollowUpRemindersForToday?.(
-                    list,
-                    { endHour: 21, channelId: "followups" },
-                );
-            } catch (e) {}
-
-            closeHistoryEdit();
-            const celebrateStatuses = new Set([
-                "Connected",
-                "Interested",
-                "Converted",
-            ]);
-            if (celebrateStatuses.has(String(historyEditStatus || ""))) {
-                confettiRef.current?.play?.();
-            }
-        } catch (e) {
-            Alert.alert("Error", e?.response?.data?.message || "Could not save");
-            setIsSavingHistoryEdit(false);
-        }
-    };
-
-    const showDatePicker = (target = "add") => {
-        setDatePickerTarget(target);
-        setCalendarMonth(new Date());
-        setDatePickerVisibility(true);
-    };
-    const hideDatePicker = () => setDatePickerVisibility(false);
-    const handleConfirmDate = (date) => {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, "0");
-        const day = String(date.getDate()).padStart(2, "0");
-        const value = `${year}-${month}-${day}`;
-        if (datePickerTarget === "history") setHistoryEditDate(value);
-        else setEditNextDate(value);
-        setTimeout(() => setDatePickerVisibility(false), 100);
-    };
-
-    const formatTime = (d) => {
-        const h = String(d.getHours()).padStart(2, "0");
-        const m = String(d.getMinutes()).padStart(2, "0");
-        return `${h}:${m}`;
-    };
-
-    const showTimePicker = () => {
-        if (Platform.OS === "web") return;
-        if (editNextTime && /^\d{1,2}:\d{2}$/.test(editNextTime)) {
-            const [hh, mm] = editNextTime.split(":").map((n) => Number(n));
-            const base = new Date();
-            base.setHours(hh || 0, mm || 0, 0, 0);
-            setTimePickerValue(base);
-        } else {
-            setTimePickerValue(new Date());
-        }
-        setTimePickerVisibility(true);
-    };
-    const hideTimePicker = () => setTimePickerVisibility(false);
-    const handleConfirmTime = (event, selectedDate) => {
-        if (Platform.OS === "android") {
-            if (event?.type === "dismissed") return hideTimePicker();
-            if (selectedDate) setEditNextTime(formatTime(selectedDate));
-            return hideTimePicker();
-        }
-        if (selectedDate) setEditNextTime(formatTime(selectedDate));
-    };
-
-    const handleCall = useCallback(async (item) => {
-        if (!item || !item.mobile) return;
-        if (Platform.OS === "android") {
-            await PermissionsAndroid.requestMultiple([
-                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
-                PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
-                PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
-            ]);
-        }
-        let callTriggered = false;
-        try {
-            if (
-                RNImmediatePhoneCall &&
-                typeof RNImmediatePhoneCall.immediatePhoneCall === "function"
-            ) {
-                RNImmediatePhoneCall.immediatePhoneCall(item.mobile);
-                callTriggered = true;
-            }
-        } catch (e) {}
-        if (!callTriggered) Linking.openURL(`tel:${item.mobile}`);
-        const mockEnquiry = {
-            _id: item._id || item.enqNo,
-            name: item.name,
-            mobile: item.mobile,
-        };
-        setCallEnquiry(mockEnquiry);
-        setCallStartTime(Date.now());
-        setCallStarted(true);
-    }, []);
-
-    const handleWhatsApp = useCallback(
-        (item) => {
-            if (!item || !item.mobile) return;
-            navigation.navigate("WhatsAppChat", {
-                enquiry: {
-                    _id: item._id || item.enqNo,
-                name: item.name,
-                mobile: item.mobile,
-                },
-            });
-        },
-        [navigation],
+  const counts = useMemo(() => {
+    return logs.reduce(
+      (acc, item) => {
+        const type = String(item?.callType || "").toLowerCase();
+        if (type.includes("miss")) acc.Missed += 1;
+        else if (type.includes("incoming")) acc.Incoming += 1;
+        else if (type.includes("outgoing")) acc.Outgoing += 1;
+        return acc;
+      },
+      { Missed: 0, Incoming: 0, Outgoing: 0 },
     );
+  }, [logs]);
 
-    const handleSaveCallLog = async (callData) => {
-        try {
-            const savedLog = await callLogService.createCallLog(callData);
-            if (!savedLog?._id) {
-                console.log("Call log was not created:", savedLog);
-                return;
-            }
-            setCallModalVisible(false);
-            setCallEnquiry(null);
-            setAutoCallData(null);
-            DeviceEventEmitter.emit("CALL_LOG_CREATED", savedLog);
-            fetchFollowUps(activeTab, true);
-        } catch (error) {
-            console.error("Error logging call:", error);
-        }
-    };
-
-    const getDaysInMonth = (date) =>
-        new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-    const getFirstDayOfMonth = (date) => {
-        const d = new Date(date.getFullYear(), date.getMonth(), 1).getDay();
-        return d === 0 ? 6 : d - 1;
-    };
-    const renderCalendarDays = () => {
-        const daysInMonth = getDaysInMonth(calendarMonth);
-        const firstDay = getFirstDayOfMonth(calendarMonth);
-        const days = [];
-        for (let i = 0; i < firstDay; i++) days.push(null);
-        for (let day = 1; day <= daysInMonth; day++) days.push(day);
-        return days;
-    };
-
-    // ── SIDE MENU ──────────────────────────────────────────────────────────
-    const SideMenu = () => (
-        <Modal
-            animationType="fade"
-            transparent
-            visible={menuVisible}
-            onRequestClose={() => setMenuVisible(false)}>
-            <TouchableOpacity
-                style={menuStyles.menuOverlay}
-                activeOpacity={1}
-                onPress={() => setMenuVisible(false)}>
-                <View style={menuStyles.menuContent}>
-                    <LinearGradient
-                        colors={["#1A6BFF", "#7B61FF"]}
-                        style={menuStyles.menuHeader}>
-                        <View style={menuStyles.profileCircle}>
-                            {user?.logo ? (
-                                <Image
-                                    source={{ uri: getImageUrl(user.logo) }}
-                                    style={{
-                                        width: "100%",
-                                        height: "100%",
-                                        borderRadius: 35,
-                                    }}
-                                />
-                            ) : (
-                                <Ionicons
-                                    name="person"
-                                    size={38}
-                                    color="#fff"
-                                />
-                            )}
-                        </View>
-                        <Text style={menuStyles.profileName}>
-                            {user?.name || "User"}
-                        </Text>
-                        <View style={menuStyles.rolePill}>
-                            <Text style={menuStyles.profileRole}>
-                                {user?.role || "Staff Member"}
-                            </Text>
-                        </View>
-                    </LinearGradient>
-
-                    <ScrollView
-                        style={menuStyles.menuList}
-                        showsVerticalScrollIndicator={false}>
-                        <MenuItem
-                            icon="grid-outline"
-                            label="Dashboard"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                if (navigation.canGoBack()) navigation.goBack();
-                                else navigation.navigate("Home");
-                            }}
-                        />
-                        <MenuItem
-                            icon="people-outline"
-                            label="Enquiries"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                navigation.navigate("Enquiry");
-                            }}
-                        />
-	                        <MenuItem
-	                            icon="call-outline"
-	                            label="Follow-ups"
-	                            onPress={() => setMenuVisible(false)}
-	                            active
-	                        />
-	                        <MenuItem
-	                            icon="mail-outline"
-	                            label="Email"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("EmailScreen");
-	                            }}
-	                        />
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="link-outline"
-                                label="Lead Sources"
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    navigation.navigate("LeadSourceScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="people-circle-outline"
-                                label="Staff Management"
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    navigation.navigate("StaffScreen");
-                                }}
-                            />
-                        )}
-                        {user?.role !== "Staff" && (
-                            <MenuItem
-                                icon="flag-outline"
-                                label="Targets"
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    navigation.navigate("TargetsScreen");
-                                }}
-                            />
-                        )}
-                        <MenuItem
-                            icon="bar-chart-outline"
-                            label="Reports"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                navigation.navigate("Report");
-                            }}
-                        />
-                        <MenuItem
-                            icon="list-outline"
-                            label="Call Logs"
-                            onPress={() => {
-                                setMenuVisible(false);
-                                navigation.navigate("CallLog");
-                            }}
-                        />
-	                        <MenuItem
-	                            icon="settings-outline"
-	                            label="WhatsApp Settings"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("WhatsAppSettings");
-	                            }}
-	                        />
-	                        <MenuItem
-	                            icon="mail-open-outline"
-	                            label="Email Settings"
-	                            onPress={() => {
-	                                setMenuVisible(false);
-	                                navigation.navigate("EmailSettingsScreen");
-	                            }}
-	                        />
-                        <MenuItem
-                            icon="log-out-outline"
-                            label="Logout"
-                            color={COLORS.danger}
-                            onPress={handleLogout}
-                        />
-
-                        <View style={menuStyles.logoSection}>
-                            <View style={menuStyles.logoContainer}>
-                                {true ? (
-                                    <Image
-                                        source={require("../assets/logo.png")}
-                                        style={menuStyles.logoImage}
-                                        resizeMode="contain"
-                                    />
-                                ) : (
-                                    <View style={menuStyles.logoIconCircle}>
-                                        <Ionicons
-                                            name="business"
-                                            size={26}
-                                            color="#fff"
-                                        />
-                                    </View>
-                                )}
-                                <Text style={menuStyles.logoText}>
-                                    Neophorn Technologies
-                                </Text>
-                                <Text style={menuStyles.logoSubtext}>
-                                    CRM System
-                                </Text>
-                            </View>
-                            <Text style={menuStyles.versionText}>v1.0.0</Text>
-                        </View>
-                    </ScrollView>
-                </View>
-            </TouchableOpacity>
-        </Modal>
+  const visibleLogs = useMemo(() => {
+    if (typeFilter === "All") return logs;
+    return logs.filter(
+      (item) =>
+        String(item?.callType || "").toLowerCase() === typeFilter.toLowerCase(),
     );
+  }, [logs, typeFilter]);
 
-    const LogoutConfirmModal = ({ visible, onClose, onConfirm }) => (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onClose}>
-            <TouchableOpacity
-                style={{
-                    flex: 1,
-                    backgroundColor: "rgba(10,15,30,0.45)",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    padding: 24,
-                }}
-                activeOpacity={1}
-                onPress={onClose}>
-                <MotiView
-                    from={{ opacity: 0, scale: 0.88, translateY: 24 }}
-                    animate={{ opacity: 1, scale: 1, translateY: 0 }}
-                    style={styles.logoutModalContainer}>
-                    <View style={styles.logoutIconRing}>
-                        <LinearGradient
-                            colors={[
-                                COLORS.danger + "22",
-                                COLORS.danger + "08",
-                            ]}
-                            style={styles.logoutIconGrad}>
-                            <Ionicons
-                                name="log-out-outline"
-                                size={30}
-                                color={COLORS.danger}
-                            />
-                        </LinearGradient>
-                    </View>
-                    <Text style={styles.logoutTitle}>Sign Out?</Text>
-                    <Text style={styles.logoutMessage}>
-                        You'll need to log in again to access your follow-ups
-                        and data.
-                    </Text>
-                    <View style={styles.logoutActionRow}>
-                        <TouchableOpacity
-                            style={styles.logoutCancelBtn}
-                            onPress={onClose}>
-                            <Text style={styles.logoutCancelText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={onConfirm}>
-                            <LinearGradient
-                                colors={[COLORS.danger, "#C5001F"]}
-                                style={styles.logoutConfirmBtn}>
-                                <Text style={styles.logoutConfirmText}>
-                                    Sign Out
-                                </Text>
-                            </LinearGradient>
-                        </TouchableOpacity>
-                    </View>
-                </MotiView>
-            </TouchableOpacity>
-        </Modal>
-    );
-
-    const MenuItem = ({
-        icon,
-        label,
-        color = COLORS.textSub,
-        onPress,
-        active,
-    }) => (
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={DV.panelHero}>
+        <View style={{ flex: 1 }}>
+          <Text style={DV.panelEyebrow}>Contact Call History</Text>
+          <Text style={DV.panelTitle}>{enquiry?.name || "Lead"}</Text>
+          <Text style={DV.panelSub}>
+            {enquiry?.mobile || "No number available"}
+          </Text>
+        </View>
         <TouchableOpacity
-            style={[menuStyles.menuItem, active && menuStyles.menuItemActive]}
-            onPress={onPress}
-            activeOpacity={0.7}>
-            <View
-                style={[
-                    menuStyles.menuIconWrap,
-                    active && { backgroundColor: COLORS.primary + "18" },
-                ]}>
-                <Ionicons
-                    name={icon}
-                    size={21}
-                    color={active ? COLORS.primary : color}
-                />
-            </View>
-            <Text
-                style={[
-                    menuStyles.menuItemText,
-                    { color: active ? COLORS.primary : color },
-                    active && { fontWeight: "700" },
-                ]}>
-                {label}
-            </Text>
-            {active && <View style={menuStyles.menuActiveIndicator} />}
+          style={DV.callPrimaryBtn}
+          onPress={onCallPress}
+          activeOpacity={0.86}
+        >
+          <Ionicons name="call" size={16} color="#fff" />
+          <Text style={DV.callPrimaryText}>Call</Text>
         </TouchableOpacity>
-    );
+      </View>
 
-    // ── TOP BAR ────────────────────────────────────────────────────────────
-    const TopBar = ({
-        title,
-        showBack = false,
-        onBack,
-        showMenu = false,
-        onMenuPress,
-    }) => (
-        <View style={[styles.headerWrapper, { paddingTop: insets.top + -30 }]}>
-            <View style={styles.headerTop}>
-                <View style={styles.headerLeft}>
-                    {showMenu ? (
-                        <TouchableOpacity
-                            onPress={onMenuPress}
-                            style={styles.menuIconContainer}>
-                            <Ionicons
-                                name="menu"
-                                size={22}
-                                color={COLORS.textSub}
-                            />
-                        </TouchableOpacity>
-                    ) : showBack ? (
-                        <TouchableOpacity
-                            onPress={
-                                onBack ||
-                                (() => {
-                                    if (navigation?.canGoBack?.())
-                                        navigation.goBack();
-                                    else setScreen("ENQUIRY_LIST");
-                                })
-                            }
-                            style={styles.menuIconContainer}>
-                            <Ionicons
-                                name="arrow-back"
-                                size={22}
-                                color={COLORS.textSub}
-                            />
-                        </TouchableOpacity>
-                    ) : null}
+      <View style={DV.filterRow}>
+        {["All", "Missed", "Incoming", "Outgoing"].map((label) => {
+          const active = typeFilter === label;
+          const count = label === "All" ? logs.length : counts[label] || 0;
+          return (
+            <TouchableOpacity
+              key={label}
+              onPress={() => setTypeFilter(label)}
+              style={[DV.filterChip, active && DV.filterChipActive]}
+              activeOpacity={0.86}
+            >
+              <Text
+                style={[DV.filterChipText, active && DV.filterChipTextActive]}
+              >
+                {label}
+              </Text>
+              <View style={[DV.filterCount, active && DV.filterCountActive]}>
+                <Text
+                  style={[
+                    DV.filterCountText,
+                    active && DV.filterCountTextActive,
+                  ]}
+                >
+                  {count}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
-                    <View style={{ marginLeft: 12 }}>
-                        <Text style={styles.headerSubLabel}>
-                            Follow-up Center
-                        </Text>
-                        <Text style={styles.headerTitle}>{title}</Text>
-                    </View>
-                </View>
-
-                {showMenu && (
-                    <View style={styles.headerRight}>
-                        <TouchableOpacity style={styles.notifContainer}>
-                            <Ionicons
-                                name="notifications-outline"
-                                size={22}
-                                color={COLORS.textSub}
-                            />
-                            <View style={styles.notifBadge} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={() =>
-                                navigation.navigate("ProfileScreen")
-                            }
-                            activeOpacity={0.85}
-                            style={styles.profileBtn}>
-                            {user?.logo ? (
-                                <Image
-                                    source={{ uri: getImageUrl(user.logo) }}
-                                    style={styles.profileAvatar}
-                                />
-                            ) : (
-                                <View style={styles.profileFallback}>
-                                    <Text style={styles.profileFallbackText}>
-                                        {user?.name?.[0]?.toUpperCase?.() ||
-                                            "U"}
-                                    </Text>
-                                </View>
-                            )}
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
-
-            {showMenu && (
-                <View style={styles.searchContainer}>
-                    <Ionicons
-                        name="search-outline"
-                        size={18}
-                        color={COLORS.textMuted}
-                        style={{ marginLeft: 14 }}
-                    />
-                    <TextInput
-                        placeholder="Search enquiries..."
-                        style={styles.searchInput}
-                        placeholderTextColor={COLORS.textLight}
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                    />
-                </View>
-            )}
+      {loading ? (
+        <View style={DV.emptyWrap}>
+          <ActivityIndicator color={C.primary} />
         </View>
-    );
-
-    // ── TAB BAR ────────────────────────────────────────────────────────────
-    const TabBar = () => (
-        <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.tabBarScroll}
-            contentContainerStyle={styles.tabBarContent}>
-            {ENQUIRY_STATUS_TABS.map((tab) => {
-                const isActive = activeTab === tab.value;
-                const cfg = getStatusConfig(tab.value);
-                return (
-                    <TouchableOpacity
-                        key={tab.value}
-                        onPress={() => handleTabChange(tab.value)}
-                        style={[
-                            styles.tabPill,
-                            isActive && {
-                                backgroundColor: cfg.color,
-                                borderColor: cfg.color,
-                            },
-                        ]}
-                        activeOpacity={0.75}>
-                        <Text
-                            style={[
-                                styles.tabText,
-                                isActive && styles.activeTabText,
-                            ]}>
-                            {tab.label}
-                        </Text>
-                        {isActive && (
-                            <MotiView
-                                from={{ opacity: 0, scale: 0 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                style={[
-                                    styles.tabDot,
-                                    { backgroundColor: "#fff" },
-                                ]}
-                            />
-                        )}
-                    </TouchableOpacity>
-                );
-            })}
-        </ScrollView>
-    );
-
-    // ── FOLLOW-UP CARD ─────────────────────────────────────────────────────
-    const FollowUpCard = useMemo(() => React.memo(
-        ({
-            item,
-            index,
-            activeTab,
-            handleOpenDetails,
-            handleOpenHistory,
-            handleOpenEdit,
-            handleCall,
-            handleWhatsApp,
-        }) => {
-            if (!item) return null;
-            const initials = item.name
-                ? item.name.substring(0, 2).toUpperCase()
-                : "NA";
-            const normalizedStatus = normalizeStatusValue(item.status);
-            const sCfg = getStatusConfig(normalizedStatus);
-            const avatarHue = item.name
-                ? (item.name.charCodeAt(0) * 23 +
-                      item.name.charCodeAt(1 % item.name.length) * 7) %
-                  360
-                : 220;
-            const avatarColors = [
-                `hsl(${avatarHue},70%,55%)`,
-                `hsl(${(avatarHue + 30) % 360},75%,45%)`,
-            ];
-
+      ) : visibleLogs.length === 0 ? (
+        <View style={DV.emptyWrap}>
+          <View style={DV.emptyIcon}>
+            <Ionicons name="call-outline" size={24} color={C.textLight} />
+          </View>
+          <Text style={DV.emptyText}>No call records for this contact</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={visibleLogs}
+          keyExtractor={(item, index) =>
+            String(
+              item?._id ||
+                `${item?.phoneNumber || "call"}-${item?.callTime || index}`,
+            )
+          }
+          contentContainerStyle={{
+            paddingHorizontal: 14,
+            paddingBottom: 24,
+            gap: 10,
+          }}
+          renderItem={({ item }) => {
+            const type = String(item?.callType || "Call");
+            const icon =
+              type === "Missed"
+                ? "close-circle-outline"
+                : type === "Incoming"
+                  ? "arrow-down-circle-outline"
+                  : "arrow-up-circle-outline";
+            const color =
+              type === "Missed"
+                ? C.danger
+                : type === "Incoming"
+                  ? C.info
+                  : C.success;
             return (
-                <MotiView
-                    from={{ opacity: 0, translateY: 14 }}
-                    animate={{ opacity: 1, translateY: 0 }}
-                    transition={{
-                        type: "timing",
-                        duration: 280,
-                        delay: index < 6 ? index * 50 : 0,
-                    }}
-                    style={styles.cardWrapper}>
-                    <TouchableOpacity
-                        activeOpacity={0.95}
-                        onPress={() => handleOpenDetails(item)}>
-                        <View style={styles.cardContainer}>
-                            {/* Left accent stripe */}
-                            <View
-                                style={[
-                                    styles.cardStripe,
-                                    { backgroundColor: sCfg.color },
-                                ]}
-                            />
-
-                            {/* Header */}
-                            <View style={styles.cardHeader}>
-                                <View
-                                    style={[
-                                        styles.avatarContainer,
-                                        item.image && {
-                                            backgroundColor: "transparent",
-                                            overflow: "hidden",
-                                        },
-                                    ]}>
-                                    {item.image ? (
-                                        <Image
-                                            source={{
-                                                uri: getImageUrl(item.image),
-                                            }}
-                                            style={styles.avatarImg}
-                                            resizeMode="cover"
-                                        />
-                                    ) : (
-                                        <LinearGradient
-                                            colors={avatarColors}
-                                            style={styles.avatarGradient}>
-                                            <Text style={styles.avatarText}>
-                                                {initials}
-                                            </Text>
-                                        </LinearGradient>
-                                    )}
-                                </View>
-
-                                <View style={styles.cardInfo}>
-                                    <View style={styles.nameRow}>
-                                        <Text
-                                            style={styles.cardName}
-                                            numberOfLines={1}>
-                                            {item.name}
-                                        </Text>
-                                        <View
-                                            style={[
-                                                styles.statusTag,
-                                                { backgroundColor: sCfg.bg },
-                                            ]}>
-                                            <View
-                                                style={[
-                                                    styles.statusDot,
-                                                    {
-                                                        backgroundColor:
-                                                            sCfg.color,
-                                                    },
-                                                ]}
-                                            />
-                                            <Text
-                                                style={[
-                                                    styles.statusTagText,
-                                                    { color: sCfg.color },
-                                                ]}>
-                                                {normalizedStatus ===
-                                                "Contacted"
-                                                    ? "Connected"
-                                                    : normalizedStatus ||
-                                                      activeTab}
-                                            </Text>
-                                        </View>
-                                    </View>
-                                    <View style={styles.subInfoRow}>
-                                        <View style={styles.subInfoChip}>
-                                            <Ionicons
-                                                name="call-outline"
-                                                size={11}
-                                                color={COLORS.primary}
-                                            />
-                                            <Text style={styles.cardSubtext}>
-                                                {item.mobile}
-                                            </Text>
-                                        </View>
-                                        {item.enqNo ? (
-                                            <View style={styles.enqNoBadge}>
-                                                <Text style={styles.enqNoText}>
-                                                    #{item.enqNo}
-                                                </Text>
-                                            </View>
-                                        ) : null}
-                                    </View>
-                                </View>
-                            </View>
-
-                            {/* Product + Date */}
-                            <View style={styles.productSection}>
-                                <View style={styles.productTag}>
-                                    <Ionicons
-                                        name="briefcase-outline"
-                                        size={13}
-                                        color={COLORS.primary}
-                                    />
-                                    <Text
-                                        style={styles.productText}
-                                        numberOfLines={1}>
-                                        {item.product || "No product"}
-                                    </Text>
-                                </View>
-                                <View
-                                    style={[
-                                        styles.dateBadge,
-                                        { backgroundColor: sCfg.bg },
-                                    ]}>
-                                    <Ionicons
-                                        name="time-outline"
-                                        size={11}
-                                        color={sCfg.color}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.dateText,
-                                            { color: sCfg.color },
-                                        ]}>
-                                        {item.latestFollowUpDate
-                                            ? item.latestFollowUpDate
-                                            : item.lastContactedAt
-                                              ? safeLocaleDateString(
-                                                    item.lastContactedAt,
-                                                )
-                                              : (item.enquiryDateTime ||
-                                                    item.createdAt)
-                                                ? safeLocaleDateString(
-                                                      item.enquiryDateTime ||
-                                                          item.createdAt,
-                                                  )
-                                                : "-"}
-                                    </Text>
-                                </View>
-                            </View>
-
-                            {/* Meta */}
-                            <View style={styles.metaRow}>
-                                <View style={styles.metaChip}>
-                                    <Ionicons
-                                        name="person-outline"
-                                        size={11}
-                                        color={COLORS.textMuted}
-                                    />
-                                    <Text style={styles.metaChipText}>
-                                        {formatDisplayValue(
-                                            item.assignedTo,
-                                            "Unassigned",
-                                        )}
-                                    </Text>
-                                </View>
-                            </View>
-
-                            <View style={styles.cardDivider} />
-
-                            {/* Actions */}
-                            <View style={styles.actionBar}>
-                                <TouchableOpacity
-                                    style={[
-                                        styles.actionBtnPrimary,
-                                        {
-                                            backgroundColor:
-                                                COLORS.success + "18",
-                                        },
-                                    ]}
-                                    onPress={() => handleCall(item)}>
-                                    <Ionicons
-                                        name="call"
-                                        size={16}
-                                        color={COLORS.success}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.actionBtnLabel,
-                                            { color: COLORS.success },
-                                        ]}>
-                                        Call
-                                    </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[
-                                        styles.actionBtnPrimary,
-                                        {
-                                            backgroundColor:
-                                                COLORS.whatsapp + "18",
-                                        },
-                                    ]}
-                                    onPress={() => handleWhatsApp(item)}>
-                                    <Ionicons
-                                        name="logo-whatsapp"
-                                        size={16}
-                                        color={COLORS.whatsapp}
-                                    />
-                                    <Text
-                                        style={[
-                                            styles.actionBtnLabel,
-                                            { color: COLORS.whatsapp },
-                                        ]}>
-                                        WhatsApp
-                                    </Text>
-                                </TouchableOpacity>
-                                <View style={styles.actionRight}>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.actionIconBtn,
-                                            {
-                                                backgroundColor:
-                                                    COLORS.teal + "18",
-                                            },
-                                        ]}
-                                        onPress={() => handleOpenHistory(item)}>
-                                        <Ionicons
-                                            name="time-outline"
-                                            size={17}
-                                            color={COLORS.teal}
-                                        />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.actionIconBtn,
-                                            {
-                                                backgroundColor:
-                                                    COLORS.primary + "12",
-                                            },
-                                        ]}
-                                        onPress={() => handleOpenEdit(item)}>
-                                        <Ionicons
-                                            name="create-outline"
-                                            size={17}
-                                            color={COLORS.primary}
-                                        />
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                        </View>
-                    </TouchableOpacity>
-                </MotiView>
+              <View style={DV.callRowCard}>
+                <View
+                  style={[DV.callIconWrap, { backgroundColor: `${color}18` }]}
+                >
+                  <Ionicons name={icon} size={18} color={color} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={DV.callRowTop}>
+                    <Text style={DV.callTypeText}>{type}</Text>
+                    <Text style={DV.callTimeText}>
+                      {formatShortDateTime(item?.callTime)}
+                    </Text>
+                  </View>
+                  <Text style={DV.callMetaText}>
+                    {item?.duration
+                      ? `Duration ${formatCallDuration(item.duration)}`
+                      : "No duration"}
+                  </Text>
+                  {!!item?.note && (
+                    <Text style={DV.callNoteText} numberOfLines={2}>
+                      {item.note}
+                    </Text>
+                  )}
+                </View>
+              </View>
             );
-        },
-    ), []);
+          }}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
+    </View>
+  );
+}
 
-    // ── FOLLOW-UP LIST ─────────────────────────────────────────────────────
-    const renderFollowUpList = () => (
-        <View style={{ flex: 1, backgroundColor: COLORS.bgApp }}>
-            <TopBar
-                title={user?.name || "Follow-ups"}
-                showMenu
-                onMenuPress={() => setMenuVisible(true)}
-            />
-            <TabBar />
-            <FlatList
-                data={followUps}
-                keyExtractor={(item, index) =>
-                    item?.id
-                        ? item.id.toString()
-                        : item?._id?.toString() || `item-${index}`
-                }
-                contentContainerStyle={[
-                    styles.listContent,
-                    followUps.length === 0 && { flex: 1 },
-                ]}
-                refreshing={isLoading && followUps.length > 0}
-                onRefresh={() => fetchFollowUps(activeTab, true)}
-                onEndReached={handleLoadMore}
-                onEndReachedThreshold={0.5}
-                initialNumToRender={10}
-                maxToRenderPerBatch={10}
-                windowSize={10}
-                removeClippedSubviews={true}
-                ListFooterComponent={
-                    isLoadingMore ? (
-                        <View style={{ paddingVertical: 20 }}>
-                            <ActivityIndicator
-                                size="small"
-                                color={COLORS.primary}
-                            />
-                        </View>
-                    ) : null
-                }
-                ListEmptyComponent={
-                    isLoading ? (
-                        <View style={styles.emptyContainer}>
-                            <ActivityIndicator
-                                size="large"
-                                color={COLORS.primary}
-                            />
-                            <Text style={[styles.emptyText, { marginTop: 16 }]}>
-                                Loading enquiries...
-                            </Text>
-                        </View>
-                    ) : (
-                        <View style={styles.emptyContainer}>
-                            <View style={styles.emptyIconWrap}>
-                                <Ionicons
-                                    name="calendar-outline"
-                                    size={38}
-                                    color={COLORS.primary}
-                                />
-                            </View>
-                            <Text style={styles.emptyTitle}>No enquiries</Text>
-                            <Text style={styles.emptyText}>
-                                No {activeTab} enquiries found
-                            </Text>
-                        </View>
-                    )
-                }
-                renderItem={({ item, index }) => (
-                    <FollowUpCard
-                        item={item}
-                        index={index}
-                        activeTab={activeTab}
-                        handleOpenDetails={handleOpenDetails}
-                        handleOpenHistory={handleOpenHistory}
-                        handleOpenEdit={handleOpenEdit}
-                        handleCall={handleCall}
-                        handleWhatsApp={handleWhatsApp}
-                    />
-                )}
-            />
+function FollowUpEmailPanel({ enquiry }) {
+  const [subject, setSubject] = useState("");
+  const [message, setMessage] = useState(
+    enquiry?.name ? `Hello ${enquiry.name},\n\n` : "",
+  );
+  const [templates, setTemplates] = useState([]);
+  const [showComposer, setShowComposer] = useState(false);
+  const [subjectSelection, setSubjectSelection] = useState({
+    start: 0,
+    end: 0,
+  });
+  const [templateMatch, setTemplateMatch] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [logs, setLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(true);
+
+  const templateOptions = useMemo(() => {
+    if (!templateMatch) return [];
+    const query = String(templateMatch.query || "").toLowerCase();
+    return (templates || [])
+      .filter((item) => {
+        const haystack =
+          `${item?.name || ""} ${item?.subject || ""} ${item?.body || ""}`.toLowerCase();
+        return !query || haystack.includes(query);
+      })
+      .slice(0, 6);
+  }, [templateMatch, templates]);
+
+  useEffect(() => {
+    setMessage(enquiry?.name ? `Hello ${enquiry.name},\n\n` : "");
+    setSubject("");
+    setTemplateMatch(null);
+    setShowComposer(false);
+  }, [enquiry?._id, enquiry?.name]);
+
+  useEffect(() => {
+    let active = true;
+    const loadTemplates = async () => {
+      try {
+        const result = await emailService.getEmailTemplates();
+        if (!active) return;
+        const items = Array.isArray(result?.templates)
+          ? result.templates
+          : Array.isArray(result?.data)
+            ? result.data
+            : [];
+        setTemplates(items);
+      } catch (_error) {
+        if (active) setTemplates([]);
+      }
+    };
+    loadTemplates();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadLogs = async () => {
+      if (!enquiry?.email && !enquiry?._id) {
+        if (active) {
+          setLogs([]);
+          setLoadingLogs(false);
+        }
+        return;
+      }
+
+      setLoadingLogs(true);
+      try {
+        const result = await emailService.getEmailLogs({ page: 1, limit: 50 });
+        if (!active) return;
+        const items = Array.isArray(result?.logs)
+          ? result.logs
+          : Array.isArray(result?.data)
+            ? result.data
+            : [];
+        const filtered = items.filter((item) => {
+          const sameEnquiry =
+            enquiry?._id && item?.enquiryId
+              ? String(item.enquiryId) === String(enquiry._id)
+              : false;
+          const sameEmail =
+            enquiry?.email && item?.to
+              ? String(item.to).toLowerCase() ===
+                String(enquiry.email).toLowerCase()
+              : false;
+          return sameEnquiry || sameEmail;
+        });
+        filtered.sort(
+          (a, b) =>
+            new Date(b?.createdAt || b?.sentAt || 0) -
+            new Date(a?.createdAt || a?.sentAt || 0),
+        );
+        setLogs(filtered.slice(0, 10));
+      } catch (_error) {
+        if (active) setLogs([]);
+      } finally {
+        if (active) setLoadingLogs(false);
+      }
+    };
+
+    loadLogs();
+    return () => {
+      active = false;
+    };
+  }, [enquiry?._id, enquiry?.email]);
+
+  const getTemplateMentionMatch = useCallback((text, cursor) => {
+    const cur = Math.max(0, Number(cursor || 0));
+    const before = String(text || "").slice(0, cur);
+    const match = before.match(/@([a-zA-Z0-9_-]*)$/);
+    if (!match) return null;
+    return {
+      query: String(match[1] || "").toLowerCase(),
+      start: cur - match[0].length,
+      end: cur,
+    };
+  }, []);
+
+  const applyTemplateToComposer = useCallback((template) => {
+    if (!template) return;
+    setSubject(template.subject || template.name || "");
+    setMessage(template.body || "");
+    setTemplateMatch(null);
+    setShowComposer(true);
+  }, []);
+
+  const onSubjectChange = useCallback(
+    (nextText) => {
+      setSubject(nextText);
+      setTemplateMatch(
+        getTemplateMentionMatch(
+          nextText,
+          subjectSelection?.start ?? nextText.length,
+        ),
+      );
+    },
+    [getTemplateMentionMatch, subjectSelection?.start],
+  );
+
+  const onSubjectSelectionChange = useCallback(
+    (event) => {
+      const nextSelection = event?.nativeEvent?.selection;
+      if (!nextSelection) return;
+      setSubjectSelection(nextSelection);
+      setTemplateMatch(getTemplateMentionMatch(subject, nextSelection.start));
+    },
+    [getTemplateMentionMatch, subject],
+  );
+
+  const handleSend = async () => {
+    if (!enquiry?.email) {
+      Alert.alert(
+        "Missing email",
+        "This enquiry does not have an email address.",
+      );
+      return;
+    }
+    if (!subject.trim()) {
+      Alert.alert("Required", "Enter email subject.");
+      return;
+    }
+    if (!message.trim()) {
+      Alert.alert("Required", "Enter email message.");
+      return;
+    }
+
+    setSending(true);
+    try {
+      await emailService.sendEmail({
+        to: enquiry.email,
+        subject: subject.trim(),
+        message: message.trim(),
+        enquiryId: enquiry?._id,
+      });
+      Alert.alert("Sent", "Email sent successfully.");
+      setSubject("");
+      setMessage(enquiry?.name ? `Hello ${enquiry.name},\n\n` : "");
+      setLoadingLogs(true);
+      const result = await emailService.getEmailLogs({ page: 1, limit: 20 });
+      const items = Array.isArray(result?.logs)
+        ? result.logs
+        : Array.isArray(result?.data)
+          ? result.data
+          : [];
+      const filtered = items.filter((item) => {
+        const sameEnquiry =
+          enquiry?._id && item?.enquiryId
+            ? String(item.enquiryId) === String(enquiry._id)
+            : false;
+        const sameEmail =
+          enquiry?.email && item?.to
+            ? String(item.to).toLowerCase() ===
+              String(enquiry.email).toLowerCase()
+            : false;
+        return sameEnquiry || sameEmail;
+      });
+      filtered.sort(
+        (a, b) =>
+          new Date(b?.createdAt || b?.sentAt || 0) -
+          new Date(a?.createdAt || a?.sentAt || 0),
+      );
+      setLogs(filtered.slice(0, 10));
+    } catch (error) {
+      Alert.alert(
+        "Error",
+        error?.response?.data?.message || "Could not send email.",
+      );
+    } finally {
+      setSending(false);
+      setLoadingLogs(false);
+    }
+  };
+
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{ padding: 14, paddingBottom: 28, gap: 12 }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={DV.emailHero}>
+        <View style={DV.emailHeroIcon}>
+          <Ionicons name="mail-outline" size={20} color={C.primary} />
         </View>
-    );
+        <View style={{ flex: 1 }}>
+          <Text style={DV.panelTitle}>Email</Text>
+          <Text style={DV.panelSub}>
+            {enquiry?.email || "No email address available"}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => setShowComposer((prev) => !prev)}
+          activeOpacity={0.88}
+          style={DV.emailToggleBtn}
+        >
+          <Ionicons
+            name={showComposer ? "chevron-up" : "add"}
+            size={16}
+            color="#fff"
+          />
+          <Text style={DV.emailToggleText}>
+            {showComposer ? "Close Form" : "Add Email"}
+          </Text>
+        </TouchableOpacity>
+      </View>
 
+      {showComposer ? (
+        <View style={DV.emailCard}>
+          <Text style={DV.emailLabel}>To</Text>
+          <Text style={DV.emailValue}>{enquiry?.email || "-"}</Text>
+
+          <Text style={DV.emailLabel}>Subject</Text>
+          <TextInput
+            value={subject}
+            onChangeText={onSubjectChange}
+            onSelectionChange={onSubjectSelectionChange}
+            selection={subjectSelection}
+            placeholder="Type subject or @template"
+            placeholderTextColor={C.textLight}
+            style={DV.emailInput}
+          />
+
+          {templateMatch && templateOptions.length > 0 ? (
+            <View style={DV.emailTemplateBox}>
+              <Text style={DV.emailTemplateTitle}>Templates</Text>
+              <ScrollView
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+                style={DV.emailTemplateScroll}
+                contentContainerStyle={{ gap: 8 }}
+              >
+                {templateOptions.map((item) => (
+                  <TouchableOpacity
+                    key={String(item?._id || item?.name)}
+                    onPress={() => applyTemplateToComposer(item)}
+                    activeOpacity={0.8}
+                    style={DV.emailTemplateRow}
+                  >
+                    <View style={DV.emailTemplateBadge}>
+                      <Ionicons
+                        name="sparkles-outline"
+                        size={12}
+                        color={C.primary}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={DV.emailTemplateName} numberOfLines={1}>
+                        {item?.name || "Template"}
+                      </Text>
+                      <Text style={DV.emailTemplateSub} numberOfLines={1}>
+                        {item?.subject || "No subject"}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          <Text style={DV.emailHint}>
+            Type `@` in subject to pick a template quickly.
+          </Text>
+
+          <Text style={DV.emailLabel}>Message</Text>
+          <TextInput
+            value={message}
+            onChangeText={setMessage}
+            placeholder="Write your message"
+            placeholderTextColor={C.textLight}
+            multiline
+            textAlignVertical="top"
+            style={DV.emailTextArea}
+          />
+
+          <TouchableOpacity
+            onPress={handleSend}
+            activeOpacity={0.88}
+            disabled={sending || !enquiry?.email}
+            style={[
+              DV.emailSendBtn,
+              (!enquiry?.email || sending) && { opacity: 0.7 },
+            ]}
+          >
+            {sending ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <>
+                <Ionicons name="send" size={16} color="#fff" />
+                <Text style={DV.emailSendText}>Send Email</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <View style={DV.emailLogsCard}>
+        <View style={DV.emailSectionHead}>
+          <Text style={DV.emailSectionTitle}>Sent Emails</Text>
+          <Text style={DV.emailSectionMeta}>{logs.length}</Text>
+        </View>
+
+        {loadingLogs ? (
+          <View style={{ paddingVertical: 20 }}>
+            <ActivityIndicator color={C.primary} />
+          </View>
+        ) : logs.length === 0 ? (
+          <View style={DV.emptyWrap}>
+            <View style={DV.emptyIcon}>
+              <Ionicons
+                name="mail-open-outline"
+                size={24}
+                color={C.textLight}
+              />
+            </View>
+            <Text style={DV.emptyText}>No email history for this enquiry</Text>
+          </View>
+        ) : (
+          logs.map((item, index) => (
+            <View
+              key={String(item?._id || `${item?.to || "mail"}-${index}`)}
+              style={[
+                DV.emailLogRow,
+                index === logs.length - 1 && { marginBottom: 0 },
+              ]}
+            >
+              <View style={DV.emailLogDot} />
+              <View style={{ flex: 1 }}>
+                <View style={DV.callRowTop}>
+                  <Text style={DV.callTypeText} numberOfLines={1}>
+                    {item?.subject || "No subject"}
+                  </Text>
+                  <Text style={DV.callTimeText}>
+                    {formatShortDateTime(item?.createdAt || item?.sentAt)}
+                  </Text>
+                </View>
+                <Text style={DV.callMetaText} numberOfLines={1}>
+                  {item?.to || enquiry?.email || "-"}
+                </Text>
+                {!!item?.message && (
+                  <Text style={DV.callNoteText} numberOfLines={2}>
+                    {item.message}
+                  </Text>
+                )}
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const toIso = (d) => {
+  const dt = d ? new Date(d) : new Date();
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+};
+const toMonthKey = (value) => {
+  const dt = value ? new Date(value) : new Date();
+  if (Number.isNaN(dt.getTime())) return "";
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+};
+const getFollowUpCalendarDate = (item) => {
+  const raw =
+    item?.nextFollowUpDate ||
+    item?.latestFollowUpDate ||
+    item?.followUpDate ||
+    item?.date ||
+    "";
+  if (!raw) return "";
+  const dt = new Date(raw);
+  return Number.isNaN(dt.getTime()) ? "" : toIso(dt);
+};
+const safeLocale = (raw) => {
+  if (!raw) return "-";
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? "-" : d.toLocaleString();
+};
+const safeDate = (raw, opts) => {
+  if (!raw) return "-";
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? "-" : d.toLocaleDateString(undefined, opts);
+};
+const fmtDate = (v) => {
+  if (!v) return "Select date";
+  const d = new Date(v);
+  return isNaN(d.getTime())
+    ? v
+    : d.toLocaleDateString(undefined, {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+};
+const getInitials = (n = "") => n.substring(0, 2).toUpperCase() || "NA";
+const avatarGrad = (name = "") => {
+  const h = name
+    ? (name.charCodeAt(0) * 23 + (name.charCodeAt(1) || 0) * 7) % 360
+    : 220;
+  return [`hsl(${h},65%,52%)`, `hsl(${(h + 30) % 360},70%,42%)`];
+};
+const statusCfg = (s) => {
+  switch (s) {
+    case "New":
+      return { color: C.info, bg: "#EFF6FF" };
+    case "Contacted":
+      return { color: C.warning, bg: "#FFFBEB" };
+    case "Interested":
+      return { color: C.teal, bg: "#F0FDFA" };
+    case "Not Interested":
+      return { color: C.danger, bg: "#FEF2F2" };
+    case "Converted":
+      return { color: C.success, bg: "#F0FDF4" };
+    case "Closed":
+      return { color: C.textLight, bg: C.bg };
+    default:
+      return { color: C.primary, bg: C.primarySoft };
+  }
+};
+const normalizeStatus = (s) => {
+  const r = String(s || "")
+    .trim()
+    .toLowerCase();
+  if (r === "in progress" || r === "contacted") return "Contacted";
+  if (r === "dropped" || r === "drop" || r === "not interested")
+    return "Not Interested";
+  if (r === "new") return "New";
+  if (r === "interested") return "Interested";
+  if (r === "converted") return "Converted";
+  if (r === "closed") return "Closed";
+  return s || "New";
+};
+const displayStatusLabel = (status) => {
+  if (status === "Converted") return "Sales";
+  if (status === "Closed") return "Drop";
+  return status;
+};
+const getRecommendedNextStatus = (currentStatus) => {
+  const current = normalizeStatus(currentStatus);
+  if (current === "New") return "Contacted";
+  if (current === "Contacted") return "Interested";
+  if (current === "Interested") return "Converted";
+  return current;
+};
+const getForwardStatusOptions = (currentStatus) => {
+  const current = normalizeStatus(currentStatus);
+  if (current === "New")
+    return ["New", "Contacted", "Interested", "Not Interested", "Closed"];
+  if (current === "Contacted")
+    return ["Contacted", "Interested", "Not Interested", "Converted", "Closed"];
+  if (current === "Interested")
+    return ["Interested", "Converted", "Not Interested", "Closed"];
+  if (current === "Not Interested") return ["Not Interested", "Closed"];
+  if (current === "Converted") return ["Converted"];
+  if (current === "Closed") return ["Closed"];
+  return [
+    "New",
+    "Contacted",
+    "Interested",
+    "Not Interested",
+    "Converted",
+    "Closed",
+  ];
+};
+const fmtDisplay = (v, fb = "N/A") => {
+  if (v == null || v === "") return fb;
+  if (typeof v === "string" || typeof v === "number") return String(v);
+  if (Array.isArray(v))
     return (
-        <SafeAreaView style={styles.safeArea} {...swipeHandlers}>
-            <StatusBar barStyle="dark-content" backgroundColor={COLORS.bgApp} />
-            <ConfettiBurst ref={confettiRef} topOffset={0} />
-            <LogoutConfirmModal
-                visible={showLogoutModal}
-                onClose={() => setShowLogoutModal(false)}
-                onConfirm={confirmLogout}
-            />
-            <SideMenu />
+      v
+        .map((e) => fmtDisplay(e, ""))
+        .filter(Boolean)
+        .join(", ") || fb
+    );
+  if (typeof v === "object")
+    return v.name || v.title || v.label || v.value || fb;
+  return fb;
+};
+const isMissed = (item) => {
+  if (item?.isVirtualNew) return false;
+  const raw =
+    item?.nextFollowUpDate ||
+    item?.latestFollowUpDate ||
+    item?.followUpDate ||
+    item?.date ||
+    "";
+  if (!raw)
+    return !["converted", "closed"].includes(
+      String(item?.status || "").toLowerCase(),
+    );
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return d < today;
+};
+const formatTime = (d) =>
+  `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+const mapFollowUpItemToEnquiryCard = (item = {}) => {
+  const displayStatus = normalizeStatus(
+    item?.enquiryStatus || item?.status || "New",
+  );
+  return {
+    _id:
+      item?.enqId ||
+      item?.enqNo ||
+      item?._id ||
+      `${item?.name || "lead"}-${item?.date || ""}`,
+    enqId: item?.enqId || null,
+    enqNo: item?.enqNo || "",
+    name: item?.name || "Unknown",
+    mobile: item?.mobile || "N/A",
+    status: displayStatus,
+    product: item?.product || "General",
+    image: item?.image || null,
+    assignedTo: item?.assignedTo || item?.staffName || null,
+    latestFollowUpDate:
+      item?.nextFollowUpDate || item?.followUpDate || item?.date || null,
+    nextFollowUpDate: item?.nextFollowUpDate || item?.date || null,
+    followUpDate: item?.followUpDate || item?.date || null,
+    date: item?.date || null,
+    activityTime: item?.activityTime || item?.createdAt || null,
+    createdAt: item?.createdAt || null,
+    source: "",
+    address: "",
+    requirements: "",
+  };
+};
+const mapEnquiryToFollowUpCard = (item = {}) => ({
+  _id: item?._id || item?.enqNo || `new-${item?.name || "lead"}`,
+  enqId: item?._id || null,
+  enqNo: item?.enqNo || "",
+  name: item?.name || "Unknown",
+  mobile: item?.mobile || "N/A",
+  status: normalizeStatus(item?.selectedEnquiryStatus || item?.status || "New"),
+  product: item?.product || "General",
+  image: item?.image || null,
+  assignedTo: item?.assignedTo || null,
+  latestFollowUpDate: null,
+  nextFollowUpDate: null,
+  followUpDate: null,
+  date: null,
+  activityTime:
+    item?.latestFollowUpAt || item?.enquiryDateTime || item?.createdAt || null,
+  createdAt: item?.createdAt || item?.enquiryDateTime || null,
+  enquiryDateTime: item?.enquiryDateTime || null,
+  lastContactedAt: item?.lastContactedAt || null,
+  source: item?.source || "",
+  address: item?.address || "",
+  requirements: "",
+  isVirtualNew: true,
+});
+const toTs = (value) => {
+  if (!value) return 0;
+  const t = new Date(value).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+const dedupeByLatestActivity = (items = []) => {
+  const latestByKey = new Map();
+  for (const item of items) {
+    const key = String(item?.enqId || item?.enqNo || item?._id || "");
+    if (!key) continue;
+    const prev = latestByKey.get(key);
+    const itemTs = Math.max(
+      toTs(item?.activityTime),
+      toTs(item?.createdAt),
+      toTs(item?.date),
+    );
+    const prevTs = prev
+      ? Math.max(
+          toTs(prev?.activityTime),
+          toTs(prev?.createdAt),
+          toTs(prev?.date),
+        )
+      : -1;
+    if (!prev || itemTs >= prevTs) {
+      latestByKey.set(key, item);
+    }
+  }
+  return Array.from(latestByKey.values());
+};
 
-            {screen === "ENQUIRY_LIST" && renderFollowUpList()}
+const getTabUniqueCount = async (tab, referenceDate = "") => {
+  const response = await followupService.getFollowUps(tab, 1, 500, referenceDate);
+  const rawItems = Array.isArray(response?.data)
+    ? response.data
+    : Array.isArray(response)
+      ? response
+      : [];
+  return dedupeByLatestActivity(rawItems.map(mapFollowUpItemToEnquiryCard)).length;
+};
 
-            <PostCallModal
-                visible={callModalVisible}
-                enquiry={callEnquiry}
-                onSave={handleSaveCallLog}
-                initialDuration={autoDuration}
-                autoCallData={autoCallData}
-                onCancel={() => {
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setCallStarted(false);
-                    setAutoCallData(null);
+// ─── FollowUp List Card (left-swipe → details) ────────────────────────────────
+const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
+  const tx = useRef(new Animated.Value(0)).current;
+  const norm = normalizeStatus(item?.status);
+  const sCfg = statusCfg(norm);
+  const cols = avatarGrad(item?.name);
+
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dx) > 3 && Math.abs(g.dy) < 15 && g.dx < 0,
+      onPanResponderGrant: () => tx.setValue(0),
+      onPanResponderMove: (_, g) => {
+        if (g.dx < 0) tx.setValue(g.dx);
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dx < -18) {
+          Animated.timing(tx, {
+            toValue: -36,
+            duration: 60,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start(() => {
+            Animated.spring(tx, {
+              toValue: 0,
+              useNativeDriver: true,
+              tension: 110,
+              friction: 9,
+            }).start(() => {
+              onSwipe?.(item);
+            });
+          });
+        } else {
+          Animated.spring(tx, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 80,
+            friction: 10,
+          }).start();
+        }
+      },
+    }),
+  ).current;
+
+  return (
+    <Animated.View
+      style={{
+        transform: [{ translateX: tx }],
+        marginBottom: sc.sp.sm,
+        opacity: tx.interpolate({
+          inputRange: [0, sc.SW * 0.5, sc.SW],
+          outputRange: [1, 0.9, 0.75],
+          extrapolate: "clamp",
+        }),
+      }}
+      {...pan.panHandlers}
+    >
+      <TouchableOpacity activeOpacity={0.92} onPress={() => onSwipe?.(item)}>
+        <View style={[FCS.card, { borderRadius: sc.cardR }]}>
+          <View
+            style={[
+              FCS.stripe,
+              {
+                backgroundColor: sCfg.color,
+                borderTopLeftRadius: sc.cardR,
+                borderBottomLeftRadius: sc.cardR,
+              },
+            ]}
+          />
+          <View
+            style={{
+              paddingLeft: 16,
+              paddingRight: 12,
+              paddingTop: 11,
+              paddingBottom: 9,
+            }}
+          >
+            {/* Top row */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "flex-start",
+                marginBottom: sc.sp.sm,
+              }}
+            >
+              <View style={[FCS.avatar, { borderRadius: sc.radius }]}>
+                {item.image ? (
+                  <Image
+                    source={{ uri: getImageUrl(item.image) }}
+                    style={[FCS.avatarImg, { borderRadius: sc.radius }]}
+                  />
+                ) : (
+                  <LinearGradient
+                    colors={cols}
+                    style={[FCS.avatarGrad, { borderRadius: sc.radius }]}
+                  >
+                    <Text
+                      style={{
+                        color: "#fff",
+                        fontSize: sc.f.md,
+                        fontWeight: "800",
+                      }}
+                    >
+                      {getInitials(item.name)}
+                    </Text>
+                  </LinearGradient>
+                )}
+                <View
+                  style={[FCS.avatarDot, { backgroundColor: sCfg.color }]}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 3,
+                  }}
+                >
+                  <Text
+                    style={[FCS.name, { fontSize: sc.f.md }]}
+                    numberOfLines={1}
+                  >
+                    {item.name}
+                  </Text>
+                  <View style={[FCS.statusPill, { backgroundColor: sCfg.bg }]}>
+                    <View
+                      style={[FCS.statusDot, { backgroundColor: sCfg.color }]}
+                    />
+                    <Text
+                      style={[
+                        FCS.statusText,
+                        { color: sCfg.color, fontSize: sc.f.xs },
+                      ]}
+                    >
+                      {norm === "Contacted" ? "Connected" : displayStatusLabel(norm)}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[FCS.mobile, { fontSize: sc.f.sm }]}>
+                  {item.mobile}
+                </Text>
+              </View>
+            </View>
+            {/* Product + date */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                paddingTop: sc.sp.xs,
+                borderTopWidth: 1,
+                borderTopColor: C.divider,
+                marginBottom: sc.sp.xs,
+              }}
+            >
+              <View style={[FCS.productTag, { borderRadius: sc.sp.sm }]}>
+                <Ionicons
+                  name="briefcase-outline"
+                  size={sc.f.xs}
+                  color={C.primary}
+                />
+                <Text
+                  style={[FCS.productText, { fontSize: sc.f.xs }]}
+                  numberOfLines={1}
+                >
+                  {item.product || "General"}
+                </Text>
+              </View>
+              <View
+                style={[
+                  FCS.dateBadge,
+                  { backgroundColor: sCfg.bg, borderRadius: sc.sp.sm },
+                ]}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={sc.f.xs}
+                  color={sCfg.color}
+                />
+                <Text
+                  style={[
+                    FCS.dateText,
+                    { color: sCfg.color, fontSize: sc.f.xs },
+                  ]}
+                >
+                  {item.isVirtualNew
+                    ? "No follow-up yet"
+                    : item.latestFollowUpDate ||
+                      safeDate(
+                        item.lastContactedAt ||
+                          item.enquiryDateTime ||
+                          item.createdAt,
+                        { month: "short", day: "numeric" },
+                      )}
+                </Text>
+              </View>
+            </View>
+            {/* Footer */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: sc.sp.xs,
                 }}
+              >
+                <Ionicons
+                  name="person-outline"
+                  size={sc.f.xs}
+                  color={C.textMuted}
+                />
+                <Text
+                  style={{
+                    fontSize: sc.f.xs,
+                    color: C.textMuted,
+                    fontWeight: "500",
+                  }}
+                  numberOfLines={1}
+                >
+                  {fmtDisplay(item.assignedTo, "Unassigned")}
+                </Text>
+                {item.enqNo && (
+                  <View style={FCS.enqBadge}>
+                    <Text
+                      style={{
+                        fontSize: sc.f.xs - 1,
+                        color: C.primary,
+                        fontWeight: "800",
+                      }}
+                    >
+                      #{item.enqNo}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 3,
+                  opacity: 0.55,
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: sc.f.xs,
+                    color: C.textLight,
+                    fontWeight: "600",
+                  }}
+                >
+                  Swipe left
+                </Text>
+                <Ionicons
+                  name="chevron-back"
+                  size={sc.f.sm}
+                  color={C.textLight}
+                />
+              </View>
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+});
+
+const FCS = StyleSheet.create({
+  card: {
+    backgroundColor: C.card,
+    overflow: "hidden",
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  stripe: { position: "absolute", left: 0, top: 0, bottom: 0, width: 3 },
+  avatar: { width: 44, height: 44, marginRight: 10, flexShrink: 0 },
+  avatarImg: { width: "100%", height: "100%" },
+  avatarGrad: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarDot: {
+    position: "absolute",
+    bottom: 1,
+    right: 1,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: C.card,
+  },
+  name: { fontWeight: "700", color: C.text, flex: 1, letterSpacing: -0.2 },
+  mobile: { color: C.textMuted, fontWeight: "500" },
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 99,
+  },
+  statusDot: { width: 5, height: 5, borderRadius: 3 },
+  statusText: {
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.2,
+  },
+  productTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: C.primarySoft,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flex: 1,
+    marginRight: 8,
+  },
+  productText: { color: C.primaryDark, fontWeight: "700", flex: 1 },
+  dateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  dateText: { fontWeight: "700" },
+  enqBadge: {
+    backgroundColor: C.primarySoft,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.primaryMid,
+  },
+});
+
+// ─── Detail View — full screen, tab-per-page swipe ────────────────────────────
+const DetailView = ({
+  enquiry,
+  history,
+  historyLoading,
+  onClose,
+  // composer state
+  selectedEnquiry,
+  editRemarks,
+  setEditRemarks,
+  editActivityType,
+  setEditActivityType,
+  editStatus,
+  setEditStatus,
+  editNextDate,
+  editNextTime,
+  setEditNextTime,
+  editAmount,
+  setEditAmount,
+  isSavingEdit,
+  showDatePicker,
+  setTimePickerValue,
+  setTimePickerVisible,
+  isTimePickerVisible,
+  handleConfirmTime,
+  setEditTimeMeridian,
+  timePickerValue,
+  onSaveFollowUp,
+  onStartCall,
+  sc,
+  currentStatus,
+}) => {
+  const insets = useSafeAreaInsets();
+  const { width: SW, height: SH } = useWindowDimensions();
+
+  // Slide in from right on mount
+  const mountX = useRef(new Animated.Value(SW)).current;
+  const [tabIdx, setTabIdx] = useState(0);
+  const [showFollowUpForm, setShowFollowUpForm] = useState(false);
+  const tabRef = useRef(0);
+  const tabGestureLockedRef = useRef(false);
+
+  const norm = normalizeStatus(enquiry?.status);
+  const sCfg = statusCfg(norm);
+  const cols = avatarGrad(enquiry?.name);
+  const statusOptions = useMemo(
+    () => ["New", "Contacted", "Interested", "Not Interested", "Converted", "Closed"],
+    [],
+  );
+
+  // Mount animation
+  useEffect(() => {
+    Animated.timing(mountX, {
+      toValue: 0,
+      duration: 320,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const goClose = () => {
+    if (tabGestureLockedRef.current) return;
+    tabGestureLockedRef.current = true;
+    Animated.timing(mountX, {
+      toValue: SW,
+      duration: 280,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(onClose);
+  };
+
+  const goToTab = (idx) => {
+    if (idx === tabRef.current || tabGestureLockedRef.current) return;
+    tabGestureLockedRef.current = true;
+    tabRef.current = idx;
+    setTabIdx(idx);
+    setTimeout(
+      () => {
+        tabGestureLockedRef.current = false;
+      },
+      idx >= 3 ? 240 : 140,
+    );
+  };
+
+  useEffect(() => {
+    setShowFollowUpForm(false);
+  }, [enquiry?._id, enquiry?.enqNo]);
+
+  // Swipe between tabs using left swipe only
+  const swipePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, g) => {
+        const cur = tabRef.current;
+        if (tabGestureLockedRef.current) return false;
+        if (cur >= 2) {
+          const isEdgeStart = g.x0 < 34 || g.x0 > SW - 34;
+          if (!isEdgeStart) return false;
+          if (cur === 2 && g.y0 > SH - 220) return false;
+        }
+        return Math.abs(g.dx) > 28 && Math.abs(g.dx) > Math.abs(g.dy) * 1.35;
+      },
+      onMoveShouldSetPanResponderCapture: (_, g) => {
+        const cur = tabRef.current;
+        if (cur !== 2 || tabGestureLockedRef.current) return false;
+        return Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy);
+      },
+      onPanResponderRelease: (_, g) => {
+        if (tabGestureLockedRef.current) return;
+        const cur = tabRef.current;
+        if (g.dx < -56 && cur < DETAIL_TABS.length - 1) {
+          goToTab(cur + 1);
+          return;
+        }
+      },
+    }),
+  ).current;
+  const detailPanHandlers = tabIdx === 2 ? {} : swipePan.panHandlers;
+  const whatsappEdgePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () =>
+        tabRef.current === 2 && !tabGestureLockedRef.current,
+      onStartShouldSetPanResponderCapture: () =>
+        tabRef.current === 2 && !tabGestureLockedRef.current,
+      onMoveShouldSetPanResponder: (_, g) => {
+        if (tabRef.current !== 2 || tabGestureLockedRef.current) return false;
+        return Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.1;
+      },
+      onMoveShouldSetPanResponderCapture: (_, g) => {
+        if (tabRef.current !== 2 || tabGestureLockedRef.current) return false;
+        return Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.1;
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: (_, g) => {
+        if (tabGestureLockedRef.current || tabRef.current !== 2) return;
+        if (g.dx < -56) {
+          goToTab(3);
+          return;
+        }
+      },
+    }),
+  ).current;
+
+  // Hardware back
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (tabRef.current > 0) {
+        goToTab(tabRef.current - 1);
+        return true;
+      }
+      goClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, []);
+
+  if (!enquiry) return null;
+  const lastContact = enquiry?.lastContactedAt;
+
+  const getTypeIcon = (t) => {
+    const s = (t || "").toLowerCase();
+    if (s.includes("call")) return { icon: "call", color: C.success };
+    if (s.includes("whatsapp"))
+      return { icon: "logo-whatsapp", color: C.whatsapp };
+    if (s.includes("email")) return { icon: "mail", color: C.info };
+    if (s.includes("meeting")) return { icon: "people", color: C.accent };
+    return { icon: "chatbubble-ellipses", color: C.primary };
+  };
+  const getHistStatus = (status) => {
+    const s = (status || "").toLowerCase();
+    if (s.includes("sales") || s.includes("converted"))
+      return { color: C.success, label: "CONVERTED" };
+    if (s.includes("drop") || s.includes("closed"))
+      return { color: C.textLight, label: "CLOSED" };
+    if (s.includes("not interest"))
+      return { color: C.danger, label: "NOT INTERESTED" };
+    return {
+      color: C.primary,
+      label: displayStatusLabel(status)?.toUpperCase() || "FOLLOW-UP",
+    };
+  };
+
+  return (
+    <Animated.View style={[DV.root, { transform: [{ translateX: mountX }] }]}>
+      <StatusBar barStyle="dark-content" />
+
+      {/* ── Fixed top bar: back + avatar + name + status chips ── */}
+      <View
+        style={[DV.topBar, { paddingTop: insets.top + 8, paddingBottom: 14 }]}
+      >
+        {/* Decorative circles */}
+        <View style={DV.deco1} />
+        <View style={DV.deco2} />
+
+        {/* Back button */}
+        <TouchableOpacity
+          onPress={goClose}
+          style={[DV.backBtn, { top: insets.top + 8 }]}
+        >
+          <Ionicons name="arrow-back" size={18} color={C.textSub} />
+        </TouchableOpacity>
+
+        {/* Avatar + name + mobile */}
+        <View style={DV.topContent}>
+          <View style={DV.avatarRing}>
+            <View style={DV.avatarOuter}>
+              {enquiry.image ? (
+                <Image
+                  source={{ uri: getImageUrl(enquiry.image) }}
+                  style={DV.avatarImg}
+                />
+              ) : (
+                <LinearGradient colors={cols} style={DV.avatarGrad}>
+                  <Text style={DV.avatarText}>{getInitials(enquiry.name)}</Text>
+                </LinearGradient>
+              )}
+            </View>
+            <View style={[DV.priDot, { backgroundColor: sCfg.color }]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={DV.heroName} numberOfLines={1}>
+              {enquiry.name}
+            </Text>
+            <Text style={DV.heroMobile}>{enquiry.mobile}</Text>
+            {/* Chips row */}
+            <View style={DV.chipsRow}>
+              <View style={[DV.chip, { backgroundColor: sCfg.bg }]}>
+                <View style={[DV.chipDot, { backgroundColor: sCfg.color }]} />
+                <Text style={[DV.chipText, { color: sCfg.color }]}>
+                  {norm === "Contacted" ? "Connected" : displayStatusLabel(norm)}
+                </Text>
+              </View>
+              {enquiry.source ? (
+                <View style={DV.chip}>
+                  <Ionicons
+                    name="git-branch-outline"
+                    size={9}
+                    color={C.textMuted}
+                  />
+                  <Text style={DV.chipText}>{enquiry.source}</Text>
+                </View>
+              ) : null}
+              {enquiry.product ? (
+                <View style={DV.chip}>
+                  <Ionicons
+                    name="briefcase-outline"
+                    size={9}
+                    color={C.textMuted}
+                  />
+                  <Text style={DV.chipText} numberOfLines={1}>
+                    {enquiry.product}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* ── Tab bar (horizontal scroll, fixed) ── */}
+      <View style={DV.tabBar}>
+        {DETAIL_TABS.map((t, i) => (
+          <TouchableOpacity
+            key={t.key}
+            onPress={() => goToTab(i)}
+            style={[
+              DV.tabBtn,
+              tabIdx === i && {
+                backgroundColor: C.primary,
+                borderColor: C.primary,
+              },
+            ]}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={t.icon}
+              size={sc.f.xs}
+              color={tabIdx === i ? "#fff" : C.textMuted}
             />
+            <Text
+              style={[
+                DV.tabBtnText,
+                tabIdx === i && { color: "#fff", fontWeight: "700" },
+              ]}
+              numberOfLines={1}
+            >
+              {t.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
-            {/* ── DETAILS MODAL ── */}
-            <Modal visible={showDetailsModal} transparent animationType="slide">
-                <View style={styles.modalOverlay}>
-                    <View style={styles.sheetContainer}>
-                        <View style={styles.handleBar} />
-                        <View style={styles.sheetHeader}>
-                            <Text style={styles.sheetTitle}>
-                                Enquiry Details
-                            </Text>
-                            {detailsLoading ? (
-                                <ActivityIndicator
-                                    size="small"
-                                    color={COLORS.primary}
-                                    style={{ marginLeft: 10 }}
-                                />
-                            ) : null}
-                            <TouchableOpacity
-                                onPress={() => setShowDetailsModal(false)}
-                                style={styles.closeCircle}>
+      {/* ── Full-screen tab content with slide animation ── */}
+      <View style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        <View style={{ flex: 1, minHeight: 0 }} {...detailPanHandlers}>
+          {/* ── TAB 0: Details ── */}
+          {false && (
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ padding: 14, paddingBottom: 30 }}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={{ gap: 8 }}>
+                {[
+                  {
+                    label: "Enquiry No",
+                    value: enquiry.enqNo || "-",
+                    icon: "document-text-outline",
+                  },
+                  {
+                    label: "Product",
+                    value: enquiry.product || "-",
+                    icon: "briefcase-outline",
+                  },
+                  {
+                    label: "Cost",
+                    value: enquiry.cost ? `₹${enquiry.cost}` : "-",
+                    icon: "pricetag-outline",
+                  },
+                  {
+                    label: "Email",
+                    value: enquiry.email || "-",
+                    icon: "mail-outline",
+                  },
+                  {
+                    label: "Address",
+                    value: enquiry.address || "-",
+                    icon: "location-outline",
+                  },
+                  {
+                    label: "Assigned To",
+                    value: fmtDisplay(enquiry.assignedTo, "-"),
+                    icon: "person-circle-outline",
+                  },
+                  {
+                    label: "Status",
+                    value: displayStatusLabel(normalizeStatus(enquiry.status)) || "-",
+                    icon: "flag-outline",
+                  },
+                  {
+                    label: "Last Contact",
+                    value: safeLocale(lastContact),
+                    icon: "time-outline",
+                  },
+                  {
+                    label: "Created",
+                    value: safeLocale(
+                      enquiry.enquiryDateTime || enquiry.createdAt,
+                    ),
+                    icon: "calendar-outline",
+                  },
+                  {
+                    label: "Source",
+                    value: enquiry.source || "-",
+                    icon: "git-branch-outline",
+                  },
+                ].map((row) => (
+                  <View key={row.label} style={DV.detailRow}>
+                    <View style={DV.detailIcon}>
+                      <Ionicons name={row.icon} size={13} color={C.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={DV.detailLabel}>{row.label}</Text>
+                      <Text style={DV.detailValue}>{row.value}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          )}
+
+          {/* ── TAB 2: WhatsApp ── */}
+          {tabIdx === 2 && (
+            <View style={{ flex: 1 }}>
+              <ChatScreen
+                key={`followup-whatsapp-${enquiry?._id || enquiry?.enqNo || enquiry?.mobile || "chat"}`}
+                embedded
+                route={{ params: { enquiry } }}
+              />
+            </View>
+          )}
+
+          {/* ── TAB 2: Call Logs ── */}
+          {tabIdx === 1 && (
+            <View style={{ flex: 1 }}>
+              <FollowUpCallPanel enquiry={enquiry} onCallPress={onStartCall} />
+            </View>
+          )}
+
+          {/* ── TAB 4: Email ── */}
+          {tabIdx === 3 && (
+            <View style={{ flex: 1 }}>
+              <FollowUpEmailPanel enquiry={enquiry} />
+            </View>
+          )}
+
+          {/* ── TAB 1: Add Follow-up ── */}
+          {tabIdx === 0 && (
+            <KeyboardAvoidingView
+              style={{ flex: 1 }}
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
+              keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 96 : 24}
+            >
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{
+                  padding: 14,
+                  paddingBottom: Math.max(insets.bottom + 180, 220),
+                  flexGrow: 1,
+                }}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+                nestedScrollEnabled
+              >
+                {selectedEnquiry && (
+                  <View style={{ gap: 12 }}>
+                  <TouchableOpacity
+                    onPress={() => setShowFollowUpForm((prev) => !prev)}
+                    style={FU.toggleBtn}
+                    activeOpacity={0.9}
+                  >
+                    <View style={FU.toggleBtnIcon}>
+                      <Ionicons
+                        name={
+                          showFollowUpForm ? "remove-outline" : "add-outline"
+                        }
+                        size={18}
+                        color={C.primary}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={FU.toggleBtnTitle}>Add Follow-up</Text>
+                      <Text style={FU.toggleBtnSub}>
+                        Tap to {showFollowUpForm ? "hide" : "open"} the
+                        follow-up form
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={showFollowUpForm ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={C.textMuted}
+                    />
+                  </TouchableOpacity>
+
+                  {showFollowUpForm && (
+                    <>
+                      <View style={FU.sectionCard}>
+                        <Text style={FU.sectionTitle}>Conversation Notes</Text>
+                        <Text style={FU.sectionSub}>
+                          Capture the latest update before scheduling the next
+                          action.
+                        </Text>
+                        <Text style={FU.label}>Remarks *</Text>
+                        <FloatingInput
+                          label="Follow-up notes"
+                          value={editRemarks}
+                          onChangeText={setEditRemarks}
+                          placeholder="Add notes"
+                          multiline
+                          minHeight={88}
+                          scrollEnabled={false}
+                        />
+                      </View>
+
+                      <View style={FU.sectionCard}>
+                        <Text style={FU.sectionTitle}>Activity Type</Text>
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={{ gap: 8, paddingBottom: 4 }}
+                        >
+                          {ACTIVITY_OPTIONS.map((a) => {
+                            const active = editActivityType === a;
+                            const icon =
+                              a === "Phone Call"
+                                ? "call-outline"
+                                : a === "WhatsApp"
+                                  ? "logo-whatsapp"
+                                  : a === "Email"
+                                    ? "mail-outline"
+                                    : "people-outline";
+                            return (
+                              <TouchableOpacity
+                                key={a}
+                                onPress={() => setEditActivityType(a)}
+                                style={[
+                                  FU.pill,
+                                  active && {
+                                    borderColor: C.primaryMid,
+                                    backgroundColor: C.primarySoft,
+                                  },
+                                ]}
+                              >
                                 <Ionicons
-                                    name="close"
-                                    size={20}
-                                    color={COLORS.textSub}
+                                  name={icon}
+                                  size={14}
+                                  color={active ? C.primary : C.textMuted}
                                 />
-                            </TouchableOpacity>
-                        </View>
+                                <Text
+                                  style={[
+                                    FU.pillText,
+                                    active && { color: C.primary },
+                                  ]}
+                                >
+                                  {a}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
 
-                        {selectedEnquiry && (
-                            <ScrollView
-                                showsVerticalScrollIndicator={false}
-                                style={{ paddingHorizontal: 20 }}>
-                                <View
+                      <View style={FU.sectionCard}>
+                        <Text style={FU.sectionTitle}>Status & Schedule</Text>
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            flexWrap: "wrap",
+                            gap: 8,
+                            marginBottom: 8,
+                          }}
+                        >
+                          {[
+                            {
+                              id: "New",
+                              icon: "sparkles-outline",
+                              color: C.info,
+                            },
+                            {
+                              id: "Contacted",
+                              label: "Connected",
+                              icon: "call-outline",
+                              color: C.warning,
+                            },
+                            {
+                              id: "Interested",
+                              icon: "thumbs-up-outline",
+                              color: C.teal,
+                            },
+                            {
+                              id: "Not Interested",
+                              icon: "close-circle-outline",
+                              color: C.danger,
+                            },
+                            {
+                              id: "Converted",
+                              label: "Sales",
+                              icon: "cash-outline",
+                              color: C.success,
+                            },
+                            {
+                              id: "Closed",
+                              label: "Drop",
+                              icon: "archive-outline",
+                              color: C.textLight,
+                            },
+                          ]
+                            .filter((s) => statusOptions.includes(s.id))
+                            .map((s) => {
+                              const active = editStatus === s.id;
+                              return (
+                                <TouchableOpacity
+                                  key={s.id}
+                                  onPress={() => setEditStatus(s.id)}
+                                  style={[
+                                    FU.statusBtn,
+                                    active && {
+                                      borderColor: s.color,
+                                      backgroundColor: s.color + "12",
+                                    },
+                                  ]}
+                                >
+                                  <Ionicons
+                                    name={s.icon}
+                                    size={14}
+                                    color={s.color}
+                                  />
+                                  <Text
                                     style={[
-                                        styles.contextCard,
-                                        [
-                                            "drop",
-                                            "dropped",
-                                            "not interested",
-                                        ].includes(
-                                            String(
-                                                selectedEnquiry.status || "",
-                                            ).toLowerCase(),
-                                        ) && { opacity: 0.6 },
-                                    ]}>
-                                    <View
-                                        style={[
-                                            styles.contextAvatar,
-                                            selectedEnquiry.image && {
-                                                backgroundColor: "transparent",
-                                                overflow: "hidden",
-                                            },
-                                        ]}>
-                                        {selectedEnquiry.image ? (
-                                            <Image
-                                                source={{
-                                                    uri: getImageUrl(
-                                                        selectedEnquiry.image,
-                                                    ),
-                                                }}
-                                                style={{
-                                                    width: "100%",
-                                                    height: "100%",
-                                                }}
-                                                resizeMode="cover"
-                                            />
-                                        ) : (
-                                            <LinearGradient
-                                                colors={
-                                                    COLORS.gradients.primary
-                                                }
-                                                style={{
-                                                    width: "100%",
-                                                    height: "100%",
-                                                    borderRadius: 20,
-                                                    justifyContent: "center",
-                                                    alignItems: "center",
-                                                }}>
-                                                <Text
-                                                    style={
-                                                        styles.contextAvatarText
-                                                    }>
-                                                    {selectedEnquiry.name
-                                                        ? selectedEnquiry.name
-                                                              .substring(0, 2)
-                                                              .toUpperCase()
-                                                        : "NA"}
-                                                </Text>
-                                            </LinearGradient>
-                                        )}
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.contextName}>
-                                            {selectedEnquiry.name}
-                                        </Text>
-                                        <Text style={styles.contextDate}>
-                                            {selectedEnquiry.mobile}
-                                        </Text>
-                                    </View>
-                                    {[
-                                        "drop",
-                                        "dropped",
-                                        "not interested",
-                                    ].includes(
-                                        String(
-                                            selectedEnquiry.status || "",
-                                        ).toLowerCase(),
-	                                    ) && (
-	                                        <View
-	                                            style={[
-	                                                styles.statusTag,
-                                                {
-                                                    backgroundColor:
-                                                        COLORS.danger + "15",
-                                                    marginLeft: "auto",
-                                                },
-                                            ]}>
-                                            <Text
-                                                style={[
-                                                    styles.statusTagText,
-                                                    { color: COLORS.danger },
-                                                ]}>
-                                                NOT INTERESTED
-                                            </Text>
-	                                        </View>
-	                                    )}
-	                                </View>
-
-	                                <View style={styles.heroChipsRow}>
-	                                    {selectedEnquiry.status ? (
-	                                        <View style={styles.heroChip}>
-	                                            <Ionicons
-	                                                name="radio-button-on-outline"
-	                                                size={13}
-	                                                color={COLORS.textSub}
-	                                            />
-	                                            <Text style={styles.heroChipText}>
-	                                                {selectedEnquiry.status}
-	                                            </Text>
-	                                        </View>
-	                                    ) : null}
-	                                    {selectedEnquiry.assignedTo?.name ? (
-	                                        <View style={styles.heroChip}>
-	                                            <Ionicons
-	                                                name="person-circle-outline"
-	                                                size={13}
-	                                                color={COLORS.textSub}
-	                                            />
-	                                            <Text style={styles.heroChipText}>
-	                                                {selectedEnquiry.assignedTo
-	                                                    ?.name}
-	                                            </Text>
-	                                        </View>
-	                                    ) : null}
-	                                    {selectedEnquiry.source ? (
-	                                        <View style={styles.heroChip}>
-	                                            <Ionicons
-	                                                name="git-branch-outline"
-	                                                size={13}
-	                                                color={COLORS.textSub}
-	                                            />
-	                                            <Text style={styles.heroChipText}>
-	                                                {selectedEnquiry.source}
-	                                            </Text>
-	                                        </View>
-	                                    ) : null}
-	                                </View>
-
-	                                <View style={styles.sectionBlock}>
-	                                    <View style={styles.sectionHeaderRow}>
-	                                        <View
-	                                            style={
-	                                                styles.sectionHeaderIcon
-	                                            }>
-	                                            <Ionicons
-	                                                name="information-circle-outline"
-	                                                size={15}
-	                                                color={COLORS.primary}
-	                                            />
-	                                        </View>
-	                                        <Text
-	                                            style={styles.sectionHeaderTitle}>
-	                                            Details
-	                                        </Text>
-	                                    </View>
-	                                    <View style={styles.sectionCard}>
-	                                        <DetailRow
-	                                            label="Product"
-	                                            value={selectedEnquiry.product}
-	                                            icon="briefcase-outline"
-	                                        />
-	                                        <DetailRow
-	                                            label="Enquiry No"
-	                                            value={selectedEnquiry.enqNo}
-	                                            icon="document-text-outline"
-	                                        />
-	                                        <DetailRow
-	                                            label="Enquiry Date Time"
-	                                            value={
-	                                                selectedEnquiry.enquiryDateTime
-	                                                    ? safeLocaleString(
-	                                                          selectedEnquiry.enquiryDateTime,
-	                                                      )
-	                                                    : safeLocaleString(
-	                                                          selectedEnquiry.createdAt,
-	                                                      )
-	                                            }
-	                                            icon="time-outline"
-	                                        />
-	                                        <DetailRow
-	                                            label="Status"
-	                                            value={selectedEnquiry.status}
-	                                            icon="flag-outline"
-	                                        />
-	                                        <DetailRow
-	                                            label="Remarks"
-	                                            value={
-	                                                selectedEnquiry.requirements ||
-	                                                "No remarks"
-	                                            }
-	                                            icon="chatbubble-outline"
-	                                        />
-	                                        <DetailRow
-	                                            label="Source"
-	                                            value={
-	                                                selectedEnquiry.source ||
-	                                                "N/A"
-	                                            }
-	                                            icon="git-branch-outline"
-	                                        />
-	                                        <DetailRow
-	                                            label="Address"
-	                                            value={
-	                                                selectedEnquiry.address ||
-	                                                "N/A"
-	                                            }
-	                                            icon="location-outline"
-	                                        />
-	                                    </View>
-	                                </View>
-	                                <View style={{ height: 32 }} />
-	                            </ScrollView>
-	                        )}
-                    </View>
-                </View>
-            </Modal>
-
-            {/* ── HISTORY MODAL ── */}
-            <Modal visible={showHistoryModal} transparent animationType="slide">
-                <View style={styles.modalOverlay}>
-                    <View style={styles.sheetContainer}>
-                        <View style={styles.handleBar} />
-                        <View style={styles.historyModalHeader}>
-                            <View style={styles.historyHeaderIcon}>
-                                <Ionicons
-                                    name="time-outline"
-                                    size={22}
-                                    color={COLORS.primary}
-                                />
-                            </View>
-                            <View style={styles.historyHeaderText}>
-                                <Text style={styles.sheetTitle}>
-                                    Follow-up History
-                                </Text>
-                                <Text style={styles.historyModalSubtitle}>
-                                    All interactions & updates
-                                </Text>
-                            </View>
-                            <TouchableOpacity
-                                onPress={() => setShowHistoryModal(false)}
-                                style={styles.closeCircle}>
-                                <Ionicons
-                                    name="close"
-                                    size={20}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        {historyLoading ? (
-                            <View style={styles.loadingContainer}>
-                                <ActivityIndicator
-                                    size="large"
-                                    color={COLORS.primary}
-                                />
-                                <Text style={styles.loadingText}>
-                                    Loading history...
-                                </Text>
-                            </View>
-                        ) : enquiryHistory.length === 0 ? (
-                            <View style={styles.emptyContainer}>
-                                <View style={styles.emptyIconWrap}>
-                                    <Ionicons
-                                        name="document-text-outline"
-                                        size={38}
-                                        color={COLORS.primary}
-                                    />
-                                </View>
-                                <Text style={styles.emptyTitle}>
-                                    No Activity Yet
-                                </Text>
-                                <Text style={styles.emptyText}>
-                                    Historical interactions will appear here.
-                                </Text>
-                            </View>
-                        ) : (
-                            <FlatList
-                                data={enquiryHistory}
-                                keyExtractor={(item, index) =>
-                                    item._id || `history-${index}`
-                                }
-                                contentContainerStyle={styles.historyList}
-                                showsVerticalScrollIndicator={false}
-                                renderItem={({ item, index }) => {
-                                    const getTypeConfig = (type) => {
-                                        const t = (type || "").toLowerCase();
-                                        if (t.includes("call"))
-                                            return {
-                                                icon: "call",
-                                                color: COLORS.success,
-                                            };
-                                        if (t.includes("whatsapp"))
-                                            return {
-                                                icon: "logo-whatsapp",
-                                                color: COLORS.whatsapp,
-                                            };
-                                        if (t.includes("email"))
-                                            return {
-                                                icon: "mail",
-                                                color: COLORS.info,
-                                            };
-                                        if (t.includes("meeting"))
-                                            return {
-                                                icon: "people",
-                                                color: COLORS.accent,
-                                            };
-                                        return {
-                                            icon: "chatbubble-ellipses",
-                                            color: COLORS.primary,
-                                        };
-                                    };
-                                    const getHistoryStatusConfig = (status) => {
-                                        const s = (status || "").toLowerCase();
-                                        if (s.includes("sales"))
-                                            return {
-                                                color: COLORS.success,
-                                                label: "CONVERTED",
-                                            };
-                                        if (
-                                            s.includes("drop") ||
-                                            s.includes("not interested")
-                                        )
-                                            return {
-                                                color: COLORS.danger,
-                                                label: "NOT INTERESTED",
-                                            };
-                                        return {
-                                            color: COLORS.primary,
-                                            label:
-                                                status?.toUpperCase() ||
-                                                "FOLLOW-UP",
-                                        };
-                                    };
-                                    const typeConfig = getTypeConfig(item.type);
-                                    const statusCfg = getHistoryStatusConfig(
-                                        item.status,
-                                    );
-                                    return (
-                                        <MotiView
-                                            from={{
-                                                opacity: 0,
-                                                translateX: -16,
-                                            }}
-                                            animate={{
-                                                opacity: 1,
-                                                translateX: 0,
-                                            }}
-                                            transition={{ delay: index * 80 }}
-                                            style={styles.historyTimelineItem}>
-                                            <View style={styles.timelineLeft}>
-                                                <View
-                                                    style={[
-                                                        styles.timelineDot,
-                                                        {
-                                                            backgroundColor:
-                                                                typeConfig.color,
-                                                        },
-                                                    ]}>
-                                                    <Ionicons
-                                                        name={typeConfig.icon}
-                                                        size={12}
-                                                        color="#FFF"
-                                                    />
-                                                </View>
-                                                {index !==
-                                                    enquiryHistory.length -
-                                                        1 && (
-                                                    <View
-                                                        style={
-                                                            styles.timelineConnector
-                                                        }
-                                                    />
-                                                )}
-                                            </View>
-                                            <View
-                                                style={
-                                                    styles.historyContentCard
-                                                }>
-                                                <View
-                                                    style={
-                                                        styles.historyCardHeader
-                                                    }>
-                                                    <View>
-                                                        <Text
-                                                            style={
-                                                                styles.historyDateText
-                                                            }>
-                                                            {item.date}
-                                                        </Text>
-                                                        <Text
-                                                            style={
-                                                                styles.historyTimeText
-                                                            }>
-                                                            {item.time || ""}
-                                                        </Text>
-                                                    </View>
-                                                    <View
-                                                        style={{
-                                                            flexDirection:
-                                                                "row",
-                                                            alignItems:
-                                                                "center",
-                                                            gap: 10,
-                                                        }}>
-                                                        <View
-                                                            style={[
-                                                                styles.historyStatusPill,
-                                                                {
-                                                                    backgroundColor:
-                                                                        statusCfg.color +
-                                                                        "15",
-                                                                },
-                                                            ]}>
-                                                            <Text
-                                                                style={[
-                                                                    styles.historyStatusPillText,
-                                                                    {
-                                                                        color: statusCfg.color,
-                                                                    },
-                                                                ]}>
-                                                                {
-                                                                    statusCfg.label
-                                                                }
-                                                            </Text>
-                                                        </View>
-                                                        <TouchableOpacity
-                                                            onPress={() =>
-                                                                openHistoryEdit(
-                                                                    item,
-                                                                )
-                                                            }
-                                                            style={{
-                                                                width: 34,
-                                                                height: 34,
-                                                                borderRadius: 12,
-                                                                backgroundColor:
-                                                                    COLORS.bgApp,
-                                                                borderWidth: 1,
-                                                                borderColor:
-                                                                    COLORS.border,
-                                                                justifyContent:
-                                                                    "center",
-                                                                alignItems:
-                                                                    "center",
-                                                            }}>
-                                                            <Ionicons
-                                                                name="pencil-outline"
-                                                                size={16}
-                                                                color={
-                                                                    COLORS.textSub
-                                                                }
-                                                            />
-                                                        </TouchableOpacity>
-                                                    </View>
-                                                </View>
-                                                <View
-                                                    style={
-                                                        styles.historyRemarksBox
-                                                    }>
-                                                    <Text
-                                                        style={
-                                                            styles.historyRemarksText
-                                                        }>
-                                                        {item.remarks}
-                                                    </Text>
-                                                    {item.amount > 0 && (
-                                                        <Text
-                                                            style={[
-                                                                styles.historyRemarksText,
-                                                                {
-                                                                    color: COLORS.success,
-                                                                    fontWeight:
-                                                                        "800",
-                                                                    marginTop: 4,
-                                                                },
-                                                            ]}>
-                                                            Revenue: ₹
-                                                            {item.amount.toLocaleString()}
-                                                        </Text>
-                                                    )}
-                                                </View>
-                                            </View>
-                                        </MotiView>
-                                    );
-                                }}
-                            />
-                        )}
-                    </View>
-                </View>
-            </Modal>
-
-            {/* ── EDIT / ADD FOLLOW-UP MODAL ── */}
-            <Modal
-                visible={showHistoryEditModal}
-                transparent
-                animationType="slide">
-                <View style={styles.modalOverlay}>
-                    <View style={styles.sheetContainer}>
-                        <View style={styles.handleBar} />
-                        <View style={styles.sheetHeader}>
-                            <Text style={styles.sheetTitle}>Edit Follow-up</Text>
-                            <TouchableOpacity
-                                onPress={closeHistoryEdit}
-                                style={styles.closeCircle}>
-                                <Ionicons
-                                    name="close"
-                                    size={20}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView
-                            showsVerticalScrollIndicator={false}
-                            style={{ paddingHorizontal: 20 }}>
-                            {!!historyEditItem && (
-                                <>
-                                    <View style={styles.contextCard}>
-                                        <LinearGradient
-                                            colors={COLORS.gradients.primary}
-                                            style={styles.contextAvatar}>
-                                            <Text style={styles.contextAvatarText}>
-                                                {String(
-                                                    historyEditItem?.name ||
-                                                        "NA",
-                                                )
-                                                    .substring(0, 2)
-                                                    .toUpperCase()}
-                                            </Text>
-                                        </LinearGradient>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.contextName}>
-                                                {historyEditItem?.name ||
-                                                    "Client"}
-                                            </Text>
-                                            <Text style={styles.contextDate}>
-                                                {historyEditItem?.enqNo ||
-                                                    historyEditItem?.mobile ||
-                                                    ""}
-                                            </Text>
-                                        </View>
-                                    </View>
-
-                                    <Text style={styles.label}>Remarks</Text>
-                                    <View style={styles.textAreaContainer}>
-                                        <TextInput
-                                            value={historyEditRemarks}
-                                            onChangeText={setHistoryEditRemarks}
-                                            placeholder="Write follow-up notes..."
-                                            style={[
-                                                styles.textArea,
-                                                { minHeight: 80 },
-                                            ]}
-                                            multiline
-                                            textAlignVertical="top"
-                                            scrollEnabled={false}
-                                        />
-                                    </View>
-
-                                    <Text style={styles.label}>
-                                        Activity Type
-                                    </Text>
-                                    <ScrollView
-                                        horizontal
-                                        showsHorizontalScrollIndicator={false}
-                                        contentContainerStyle={styles.choiceRow}>
-                                        {FOLLOWUP_ACTIVITY_OPTIONS.map(
-                                            (activity) => {
-                                                const isActive =
-                                                    historyEditActivityType ===
-                                                    activity;
-                                                const icon =
-                                                    activity === "Phone Call"
-                                                        ? "call-outline"
-                                                        : activity === "WhatsApp"
-                                                          ? "logo-whatsapp"
-                                                          : activity === "Email"
-                                                            ? "mail-outline"
-                                                            : "people-outline";
-                                                return (
-                                                    <TouchableOpacity
-                                                        key={activity}
-                                                        onPress={() =>
-                                                            setHistoryEditActivityType(
-                                                                activity,
-                                                            )
-                                                        }
-                                                        activeOpacity={0.9}
-                                                        style={[
-                                                            styles.choicePill,
-                                                            isActive &&
-                                                                styles.choicePillActive,
-                                                        ]}>
-                                                        <Ionicons
-                                                            name={icon}
-                                                            size={16}
-                                                            color={
-                                                                isActive
-                                                                    ? COLORS.primary
-                                                                    : COLORS.textMuted
-                                                            }
-                                                        />
-                                                        <Text
-                                                            style={[
-                                                                styles.choicePillText,
-                                                                isActive &&
-                                                                    styles.choicePillTextActive,
-                                                            ]}>
-                                                            {activity}
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                );
-                                            },
-                                        )}
-                                    </ScrollView>
-
-                                    <Text style={styles.label}>
-                                        Follow-up Date
-                                    </Text>
-                                    <TouchableOpacity
-                                        style={styles.datePickerButton}
-                                        onPress={() =>
-                                            showDatePicker("history")
-                                        }>
-                                        <Ionicons
-                                            name="calendar-outline"
-                                            size={20}
-                                            color={COLORS.primary}
-                                        />
-                                        <Text
-                                            style={[
-                                                styles.datePickerText,
-                                                {
-                                                    color: historyEditDate
-                                                        ? COLORS.textMain
-                                                        : COLORS.textLight,
-                                                },
-                                            ]}>
-                                            {historyEditDate || "Select date"}
-                                        </Text>
-                                    </TouchableOpacity>
-
-                                    <Text style={styles.label}>
-                                        Follow-up Time (Optional)
-                                    </Text>
-                                    <TouchableOpacity
-                                        style={styles.datePickerButton}
-                                        onPress={showHistoryTimePicker}>
-                                        <Ionicons
-                                            name="time-outline"
-                                            size={20}
-                                            color={COLORS.primary}
-                                        />
-                                        <Text
-                                            style={[
-                                                styles.datePickerText,
-                                                {
-                                                    color: historyEditTime
-                                                        ? COLORS.textMain
-                                                        : COLORS.textLight,
-                                                },
-                                            ]}>
-                                            {historyEditTime || "Select time"}
-                                        </Text>
-                                        {!!historyEditTime && (
-                                            <TouchableOpacity
-                                                onPress={() =>
-                                                    setHistoryEditTime("")
-                                                }
-                                                style={{
-                                                    marginLeft: "auto",
-                                                    paddingHorizontal: 10,
-                                                    paddingVertical: 6,
-                                                }}>
-                                                <Text
-                                                    style={{
-                                                        color: COLORS.danger,
-                                                        fontWeight: "700",
-                                                    }}>
-                                                    Clear
-                                                </Text>
-                                            </TouchableOpacity>
-                                        )}
-                                    </TouchableOpacity>
-
-                                    {isHistoryTimePickerVisible &&
-                                        Platform.OS !== "web" && (
-                                            <View>
-                                                <DateTimePicker
-                                                    value={
-                                                        historyTimePickerValue
-                                                    }
-                                                    mode="time"
-                                                    is24Hour={true}
-                                                    display="default"
-                                                    onChange={
-                                                        handleConfirmHistoryTime
-                                                    }
-                                                />
-                                                {Platform.OS === "ios" && (
-                                                    <TouchableOpacity
-                                                        onPress={
-                                                            hideHistoryTimePicker
-                                                        }
-                                                        style={{
-                                                            marginTop: 8,
-                                                            alignSelf:
-                                                                "flex-end",
-                                                        }}>
-                                                        <Text
-                                                            style={{
-                                                                color: COLORS.primary,
-                                                                fontWeight:
-                                                                    "800",
-                                                            }}>
-                                                            Done
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                )}
-                                            </View>
-                                        )}
-
-                                    <Text style={styles.label}>Status</Text>
-                                    <View
-                                        style={{
-                                            flexDirection: "row",
-                                            flexWrap: "wrap",
-                                            gap: 10,
-                                            marginBottom: 10,
-                                        }}>
-                                        {[
-                                            "New",
-                                            "Connected",
-                                            "Interested",
-                                            "Not Interested",
-                                            "Converted",
-                                            "Closed",
-                                        ].map(
-                                            (s) => {
-                                                const active =
-                                                    historyEditStatus === s;
-                                                return (
-                                                    <TouchableOpacity
-                                                        key={s}
-                                                        onPress={() =>
-                                                            setHistoryEditStatus(
-                                                                s,
-                                                            )
-                                                        }
-                                                        style={{
-                                                            paddingHorizontal: 12,
-                                                            paddingVertical: 10,
-                                                            borderRadius: 14,
-                                                            borderWidth: 1.5,
-                                                            borderColor: active
-                                                                ? COLORS.primary
-                                                                : COLORS.border,
-                                                            backgroundColor: active
-                                                                ? COLORS.primaryLight
-                                                                : COLORS.bgCard,
-                                                            minWidth: 120,
-                                                            flexGrow: 1,
-                                                            alignItems:
-                                                                "center",
-                                                        }}>
-                                                        <Text
-                                                            style={{
-                                                                color: active
-                                                                    ? COLORS.primaryDark
-                                                                    : COLORS.textSub,
-                                                                fontWeight:
-                                                                    active
-                                                                        ? "800"
-                                                                        : "700",
-                                                            }}>
-                                                            {s}
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                );
-                                            },
-                                        )}
-                                    </View>
-
-                                    <View style={styles.footerButtons}>
-                                        <TouchableOpacity
-                                            style={styles.btnSecondary}
-                                            onPress={closeHistoryEdit}
-                                            disabled={isSavingHistoryEdit}>
-                                            <Text style={styles.btnSecondaryText}>
-                                                Cancel
-                                            </Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={handleSaveHistoryEdit}
-                                            disabled={isSavingHistoryEdit}
-                                            style={{ flex: 1 }}>
-                                            <LinearGradient
-                                                colors={
-                                                    isSavingHistoryEdit
-                                                        ? ["#ccc", "#bbb"]
-                                                        : COLORS.gradients
-                                                              .primary
-                                                }
-                                                style={styles.btnPrimary}>
-                                                <Text style={styles.btnPrimaryText}>
-                                                    {isSavingHistoryEdit
-                                                        ? "Saving..."
-                                                        : "Update"}
-                                                </Text>
-                                            </LinearGradient>
-                                        </TouchableOpacity>
-                                    </View>
-                                    <View style={{ height: 32 }} />
-                                </>
-                            )}
-                        </ScrollView>
-                    </View>
-                </View>
-            </Modal>
-
-            <Modal visible={showEditModal} transparent animationType="slide">
-                <View style={styles.modalOverlay}>
-                    <View style={styles.sheetContainer}>
-                        <View style={styles.handleBar} />
-                        <View style={styles.sheetHeader}>
-                            <Text style={styles.sheetTitle}>Add Follow-up</Text>
-                            <TouchableOpacity
-                                onPress={closeEditModal}
-                                style={styles.closeCircle}>
-                                <Ionicons
-                                    name="close"
-                                    size={20}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView
-                            showsVerticalScrollIndicator={false}
-                            style={{ paddingHorizontal: 20 }}>
-                            {(editItem || selectedEnquiry) && (
-                                <>
-                                    {/* Context card */}
-                                    <View style={styles.contextCard}>
-                                        <LinearGradient
-                                            colors={COLORS.gradients.primary}
-                                            style={styles.contextAvatar}>
-                                            <Text
-                                                style={
-                                                    styles.contextAvatarText
-                                                }>
-                                                {(
-                                                    editItem?.name ||
-                                                    selectedEnquiry?.name ||
-                                                    "NA"
-                                                )
-                                                    .substring(0, 2)
-                                                    .toUpperCase()}
-                                            </Text>
-                                        </LinearGradient>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.contextName}>
-                                                {editItem?.name ||
-                                                    selectedEnquiry?.name}
-                                            </Text>
-                                            <Text style={styles.contextDate}>
-                                                {editItem?.date ||
-                                                    selectedEnquiry?.enqNo ||
-                                                    selectedEnquiry?.mobile}
-                                            </Text>
-                                        </View>
-                                    </View>
-
-                                    <Text style={styles.label}>Remarks</Text>
-                                    <View style={styles.textAreaContainer}>
-                                        <TextInput
-                                            value={editRemarks}
-                                            onChangeText={setEditRemarks}
-                                            placeholder="Write follow-up notes..."
-                                            style={[
-                                                styles.textArea,
-                                                { minHeight: 80 },
-                                            ]}
-                                            multiline
-                                            textAlignVertical="top"
-                                            scrollEnabled={false}
-                                        />
-                                    </View>
-
-                                    <Text style={styles.label}>
-                                        Activity Type
-                                    </Text>
-                                    <ScrollView
-                                        horizontal
-                                        showsHorizontalScrollIndicator={false}
-                                        contentContainerStyle={styles.choiceRow}>
-                                        {FOLLOWUP_ACTIVITY_OPTIONS.map(
-                                            (activity) => {
-                                                const isActive =
-                                                    editActivityType ===
-                                                    activity;
-                                                const icon =
-                                                    activity === "Phone Call"
-                                                        ? "call-outline"
-                                                        : activity === "WhatsApp"
-                                                          ? "logo-whatsapp"
-                                                          : activity === "Email"
-                                                            ? "mail-outline"
-                                                            : "people-outline";
-                                                return (
-                                                    <TouchableOpacity
-                                                        key={activity}
-                                                        onPress={() =>
-                                                            setEditActivityType(
-                                                                activity,
-                                                            )
-                                                        }
-                                                        activeOpacity={0.9}
-                                                        style={[
-                                                            styles.choicePill,
-                                                            isActive &&
-                                                                styles.choicePillActive,
-                                                        ]}>
-                                                        <Ionicons
-                                                            name={icon}
-                                                            size={16}
-                                                            color={
-                                                                isActive
-                                                                    ? COLORS.primary
-                                                                    : COLORS.textMuted
-                                                            }
-                                                        />
-                                                        <Text
-                                                            style={[
-                                                                styles.choicePillText,
-                                                                isActive &&
-                                                                    styles.choicePillTextActive,
-                                                            ]}>
-                                                            {activity}
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                );
-                                            },
-                                        )}
-                                    </ScrollView>
-
-                                    <Text style={styles.label}>Status</Text>
-                                    <ScrollView
-                                        horizontal
-                                        showsHorizontalScrollIndicator={false}
-                                        contentContainerStyle={styles.choiceRow}>
-                                        {[
-                                            {
-                                                id: "New",
-                                                icon: "sparkles-outline",
-                                                color: COLORS.info,
-                                            },
-                                            {
-                                                id: "Contacted",
-                                                label: "Connected",
-                                                icon: "call-outline",
-                                                color: COLORS.warning,
-                                            },
-                                            {
-                                                id: "Interested",
-                                                icon: "thumbs-up-outline",
-                                                color: COLORS.teal,
-                                            },
-                                            {
-                                                id: "Not Interested",
-                                                label: "Not Interested",
-                                                icon: "close-circle-outline",
-                                                color: COLORS.danger,
-                                            },
-                                            {
-                                                id: "Converted",
-                                                icon: "cash-outline",
-                                                color: COLORS.success,
-                                            },
-                                            {
-                                                id: "Closed",
-                                                icon: "archive-outline",
-                                                color: COLORS.textLight,
-                                            },
-                                        ].map((action) => (
-                                            <TouchableOpacity
-                                                key={action.id}
-                                                onPress={() =>
-                                                    setEditStatus(action.id)
-                                                }
-                                                activeOpacity={0.9}
-                                                style={[
-                                                    styles.statusPill,
-                                                    editStatus === action.id &&
-                                                        styles.statusPillActive,
-                                                    editStatus === action.id && {
-                                                        borderColor: action.color,
-                                                        backgroundColor:
-                                                            action.color + "12",
-                                                    },
-                                                ]}>
-                                                <View style={styles.statusPillIcon}>
-                                                    <Ionicons
-                                                        name={action.icon}
-                                                        size={16}
-                                                        color={
-                                                            editStatus ===
-                                                            action.id
-                                                                ? action.color
-                                                                : action.color
-                                                        }
-                                                    />
-                                                </View>
-                                                <Text
-                                                    style={[
-                                                        styles.statusPillText,
-                                                        editStatus ===
-                                                            action.id && {
-                                                            color: action.color,
-                                                            fontWeight: "700",
-                                                        },
-                                                    ]}>
-                                                    {action.label || action.id}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        ))}
-                                    </ScrollView>
-
-                                    {[
-                                        "New",
-                                        "Contacted",
-                                        "Interested",
-                                    ].includes(editStatus) && (
-                                        <>
-                                            <Text style={styles.label}>
-                                                Next Date
-                                            </Text>
-                                            <TouchableOpacity
-                                                style={styles.datePickerButton}
-                                                onPress={() =>
-                                                    showDatePicker("add")
-                                                }>
-                                                <Ionicons
-                                                    name="calendar-outline"
-                                                    size={20}
-                                                    color={COLORS.primary}
-                                                />
-                                                <Text
-                                                    style={[
-                                                        styles.datePickerText,
-                                                        {
-                                                            color: editNextDate
-                                                                ? COLORS.textMain
-                                                                : COLORS.textLight,
-                                                        },
-                                                    ]}>
-                                                    {editNextDate ||
-                                                        "Select date"}
-                                                </Text>
-                                            </TouchableOpacity>
-
-                                            <Text style={styles.label}>
-                                                Next Time (Optional)
-                                            </Text>
-                                            <TouchableOpacity
-                                                style={styles.datePickerButton}
-                                                onPress={showTimePicker}>
-                                                <Ionicons
-                                                    name="time-outline"
-                                                    size={20}
-                                                    color={COLORS.primary}
-                                                />
-                                                <Text
-                                                    style={[
-                                                        styles.datePickerText,
-                                                        {
-                                                            color: editNextTime
-                                                                ? COLORS.textMain
-                                                                : COLORS.textLight,
-                                                        },
-                                                    ]}>
-                                                    {editNextTime ||
-                                                        "Select time"}
-                                                </Text>
-                                                {!!editNextTime && (
-                                                    <TouchableOpacity
-                                                        onPress={() =>
-                                                            setEditNextTime("")
-                                                        }
-                                                        style={{
-                                                            marginLeft: "auto",
-                                                            paddingHorizontal: 10,
-                                                            paddingVertical: 6,
-                                                        }}>
-                                                        <Text
-                                                            style={{
-                                                                color: COLORS.danger,
-                                                                fontWeight: "700",
-                                                            }}>
-                                                            Clear
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                )}
-                                            </TouchableOpacity>
-
-                                            {isTimePickerVisible &&
-                                                Platform.OS !== "web" && (
-                                                    <View>
-                                                        <DateTimePicker
-                                                            value={
-                                                                timePickerValue
-                                                            }
-                                                            mode="time"
-                                                            is24Hour={true}
-                                                            display="default"
-                                                            onChange={
-                                                                handleConfirmTime
-                                                            }
-                                                        />
-                                                        {Platform.OS ===
-                                                            "ios" && (
-                                                            <TouchableOpacity
-                                                                onPress={
-                                                                    hideTimePicker
-                                                                }
-                                                                style={{
-                                                                    marginTop: 8,
-                                                                    alignSelf:
-                                                                        "flex-end",
-                                                                }}>
-                                                                <Text
-                                                                    style={{
-                                                                        color: COLORS.primary,
-                                                                        fontWeight:
-                                                                            "800",
-                                                                    }}>
-                                                                    Done
-                                                                </Text>
-                                                            </TouchableOpacity>
-                                                        )}
-                                                    </View>
-                                                )}
-                                        </>
-                                    )}
-
-                                    {editStatus === "Converted" && (
-                                        <>
-                                            <Text style={styles.label}>
-                                                Amount (₹)
-                                            </Text>
-                                            <TextInput
-                                                value={editAmount}
-                                                onChangeText={setEditAmount}
-                                                keyboardType="numeric"
-                                                placeholder="0.00"
-                                                style={styles.textInput}
-                                                placeholderTextColor={
-                                                    COLORS.textLight
-                                                }
-                                            />
-                                        </>
-                                    )}
-
-                                    <View style={styles.footerButtons}>
-                                        <TouchableOpacity
-                                            style={styles.btnSecondary}
-                                            onPress={closeEditModal}>
-                                            <Text
-                                                style={styles.btnSecondaryText}>
-                                                Cancel
-                                            </Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            onPress={handleSaveEdit}
-                                            disabled={isSavingEdit}
-                                            style={{ flex: 1 }}>
-                                            <LinearGradient
-                                                colors={
-                                                    isSavingEdit
-                                                        ? ["#ccc", "#bbb"]
-                                                        : COLORS.gradients
-                                                              .primary
-                                                }
-                                                style={styles.btnPrimary}>
-                                                <Text
-                                                    style={
-                                                        styles.btnPrimaryText
-                                                    }>
-                                                    {isSavingEdit
-                                                        ? "Saving..."
-                                                        : "Create"}
-                                                </Text>
-                                            </LinearGradient>
-                                        </TouchableOpacity>
-                                    </View>
-                                    <View style={{ height: 32 }} />
-                                </>
-                            )}
-                        </ScrollView>
-                    </View>
-                </View>
-            </Modal>
-
-            {/* ── CALENDAR MODAL ── */}
-            <Modal
-                visible={isDatePickerVisible}
-                transparent
-                animationType="fade">
-                <View style={styles.modalOverlayCenter}>
-                    <View style={styles.calendarPopup}>
-                        <View style={styles.handleBar} />
-                        <View style={styles.calendarHeader}>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    const d = new Date(calendarMonth);
-                                    d.setMonth(d.getMonth() - 1);
-                                    setCalendarMonth(d);
-                                }}
-                                style={styles.calNavBtn}>
-                                <Ionicons
-                                    name="chevron-back"
-                                    size={22}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                            <Text style={styles.calendarTitle}>
-                                {calendarMonth.toLocaleString("default", {
-                                    month: "long",
-                                    year: "numeric",
-                                })}
-                            </Text>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    const d = new Date(calendarMonth);
-                                    d.setMonth(d.getMonth() + 1);
-                                    setCalendarMonth(d);
-                                }}
-                                style={styles.calNavBtn}>
-                                <Ionicons
-                                    name="chevron-forward"
-                                    size={22}
-                                    color={COLORS.textSub}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={styles.weekdaysRow}>
-                            {["M", "T", "W", "T", "F", "S", "S"].map(
-                                (day, idx) => (
-                                    <Text key={idx} style={styles.weekdayName}>
-                                        {day}
-                                    </Text>
-                                ),
-                            )}
-                        </View>
-
-                        <View style={styles.calendarGrid}>
-                            {renderCalendarDays().map((day, idx) => {
-                                const isToday =
-                                    day === new Date().getDate() &&
-                                    calendarMonth.getMonth() ===
-                                        new Date().getMonth() &&
-                                    calendarMonth.getFullYear() ===
-                                        new Date().getFullYear();
-                                return (
-                                    <TouchableOpacity
-                                        key={idx}
-                                        disabled={!day}
-                                        onPress={() =>
-                                            day &&
-                                            handleConfirmDate(
-                                                new Date(
-                                                    calendarMonth.getFullYear(),
-                                                    calendarMonth.getMonth(),
-                                                    day,
-                                                ),
-                                            )
-                                        }
-                                        style={[
-                                            styles.calendarDay,
-                                            !day && styles.emptyDay,
-                                        ]}>
-                                        {day ? (
-                                            isToday ? (
-                                                <LinearGradient
-                                                    colors={
-                                                        COLORS.gradients.primary
-                                                    }
-                                                    style={styles.todayDayGrad}>
-                                                    <Text
-                                                        style={
-                                                            styles.todayDayText
-                                                        }>
-                                                        {day}
-                                                    </Text>
-                                                </LinearGradient>
-                                            ) : (
-                                                <Text
-                                                    style={
-                                                        styles.calendarDayText
-                                                    }>
-                                                    {day}
-                                                </Text>
-                                            )
-                                        ) : null}
-                                    </TouchableOpacity>
-                                );
+                                      {
+                                        fontSize: 12,
+                                        fontWeight: "600",
+                                        color: C.textMuted,
+                                      },
+                                      active && {
+                                        color: s.color,
+                                        fontWeight: "700",
+                                      },
+                                    ]}
+                                  >
+                                    {s.label || s.id}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
                             })}
                         </View>
 
-                        <TouchableOpacity
-                            style={styles.calendarCancelBtn}
-                            onPress={hideDatePicker}>
-                            <Text style={styles.calendarCancelText}>
-                                Cancel
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </Modal>
-        </SafeAreaView>
-    );
-}
+                        {["New", "Contacted", "Interested"].includes(
+                          editStatus,
+                        ) && (
+                          <>
+                            <Text style={FU.label}>Next Date *</Text>
+                            <TouchableOpacity
+                              style={FU.datePicker}
+                              onPress={() => showDatePicker("add")}
+                            >
+                              <Ionicons
+                                name="calendar-outline"
+                                size={18}
+                                color={C.primary}
+                              />
+                              <Text
+                                style={[
+                                  FU.dateText,
+                                  !editNextDate && { color: C.textLight },
+                                ]}
+                              >
+                                {editNextDate || "Select date"}
+                              </Text>
+                            </TouchableOpacity>
+                            {editNextDate && (
+                              <>
+                                <Text style={FU.label}>Time</Text>
+                                <View style={FU.datePicker}>
+                                  <Ionicons
+                                    name="time-outline"
+                                    size={18}
+                                    color={C.primary}
+                                  />
+                                  <Text
+                                    style={[
+                                      FU.dateText,
+                                      !editNextTime && { color: C.textLight },
+                                    ]}
+                                  >
+                                    {editNextTime || "Auto-selected"}
+                                  </Text>
+                                </View>
+                                {isTimePickerVisible &&
+                                  Platform.OS !== "web" && (
+                                    <DateTimePicker
+                                      value={timePickerValue}
+                                      mode="time"
+                                      is24Hour={false}
+                                      display="default"
+                                      onChange={handleConfirmTime}
+                                    />
+                                  )}
+                              </>
+                            )}
+                          </>
+                        )}
+                      </View>
 
-// ── HELPER COMPONENTS ─────────────────────────────────────────────────────
-const DetailRow = ({ label, value, icon }) => (
-    <View style={styles.detailRow}>
-        <View style={styles.detailIconWrap}>
-            <Ionicons
-                name={icon || "information-circle-outline"}
-                size={15}
-                color={COLORS.primary}
+                      {editStatus === "Converted" && (
+                        <View style={FU.sectionCard}>
+                          <Text style={FU.label}>Amount (₹) *</Text>
+                          <FloatingInput
+                            label="Amount"
+                            value={editAmount}
+                            onChangeText={setEditAmount}
+                            placeholder="0.00"
+                            keyboardType="numeric"
+                            containerStyle={{ marginTop: 4 }}
+                            inputStyle={{ minHeight: 46 }}
+                          />
+                        </View>
+                      )}
+
+                      <TouchableOpacity
+                        onPress={onSaveFollowUp}
+                        disabled={isSavingEdit}
+                        style={{ marginTop: 16 }}
+                      >
+                        <LinearGradient
+                          colors={
+                            isSavingEdit ? ["#ccc", "#bbb"] : GRAD.primary
+                          }
+                          style={FU.btnPrimary}
+                        >
+                          <Text
+                            style={{
+                              color: "#fff",
+                              fontWeight: "700",
+                              fontSize: 14,
+                            }}
+                          >
+                            {isSavingEdit ? "Saving…" : "Create Follow-up"}
+                          </Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  <View style={FU.sectionCard}>
+                    <Text style={FU.sectionTitle}>Scheduled Timeline</Text>
+                    <Text style={FU.sectionSub}>
+                      Follow-up entries and next scheduled dates.
+                    </Text>
+                    {historyLoading ? (
+                      <ActivityIndicator
+                        color={C.primary}
+                        style={{ marginVertical: 18 }}
+                      />
+                    ) : history.length === 0 ? (
+                      <View style={FU.timelineEmpty}>
+                        <Ionicons
+                          name="time-outline"
+                          size={20}
+                          color={C.textLight}
+                        />
+                        <Text style={FU.timelineEmptyText}>
+                          No scheduled follow-up timeline yet
+                        </Text>
+                      </View>
+                    ) : (
+                      history.map((h, i) => {
+                        const tc = getTypeIcon(h.type || h.activityType);
+                        const nextDate =
+                          h.nextFollowUpDate || h.followUpDate || h.date || "-";
+                        return (
+                          <View
+                            key={`inline-${h._id || i}`}
+                            style={[
+                              FU.timelineCard,
+                              i < history.length - 1 && FU.timelineCardGap,
+                            ]}
+                          >
+                            <View
+                              style={[
+                                FU.timelineBadge,
+                                { backgroundColor: `${tc.color}18` },
+                              ]}
+                            >
+                              <Ionicons
+                                name={tc.icon}
+                                size={14}
+                                color={tc.color}
+                              />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={FU.timelineTitle}>
+                                {h.activityType || h.type || "Follow-up"}
+                              </Text>
+                              <Text style={FU.timelineDate}>
+                                Next follow-up: {nextDate}
+                              </Text>
+                              <Text style={FU.timelineNote}>
+                                {h.remarks || h.note || "-"}
+                              </Text>
+                            </View>
+                          </View>
+                        );
+                      })
+                    )}
+                  </View>
+                  </View>
+                )}
+              </ScrollView>
+            </KeyboardAvoidingView>
+          )}
+        </View>
+        {tabIdx === 2 && (
+          <>
+            <View
+              pointerEvents="box-only"
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                bottom: 142,
+                width: 34,
+                zIndex: 20,
+                elevation: 20,
+                backgroundColor: "transparent",
+              }}
+              {...whatsappEdgePan.panHandlers}
             />
-        </View>
-        <View style={{ flex: 1 }}>
-            <Text style={styles.detailLabel}>{label}</Text>
-            <Text style={styles.detailValue}>
-                {formatDisplayValue(value)}
-            </Text>
-        </View>
-    </View>
-);
+            <View
+              pointerEvents="box-only"
+              style={{
+                position: "absolute",
+                right: 0,
+                top: 0,
+                bottom: 130,
+                width: 34,
+                zIndex: 20,
+                elevation: 20,
+                backgroundColor: "transparent",
+              }}
+              {...whatsappEdgePan.panHandlers}
+            />
+          </>
+        )}
+      </View>
+    </Animated.View>
+  );
+};
 
-// ── STYLES ────────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
-    safeArea: { flex: 1, backgroundColor: COLORS.bgApp },
+// DetailView styles
+const DV = StyleSheet.create({
+  root: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: C.bg,
+    zIndex: 100,
+  },
 
-    // ── Header ──
-    headerWrapper: {
-        backgroundColor: COLORS.bgCard,
+  // Top bar
+  topBar: {
+    backgroundColor: C.card,
+    paddingHorizontal: 16,
+    overflow: "hidden",
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  deco1: {
+    position: "absolute",
+    top: -50,
+    right: -40,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: C.primarySoft,
+    opacity: 0.6,
+  },
+  deco2: {
+    position: "absolute",
+    top: 10,
+    right: 20,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: C.primaryMid,
+    opacity: 0.3,
+  },
+  backBtn: {
+    position: "absolute",
+    left: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+  },
+  topContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingLeft: 52,
+    paddingTop: 4,
+  },
+  avatarRing: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2.5,
+    borderColor: C.border,
+    padding: 2.5,
+    backgroundColor: C.card,
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  avatarOuter: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  avatarImg: { width: "100%", height: "100%", borderRadius: 999 },
+  avatarGrad: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 999,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarText: { color: "#fff", fontSize: 17, fontWeight: "900" },
+  priDot: {
+    position: "absolute",
+    bottom: 1,
+    right: 1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: C.card,
+  },
+  heroName: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: C.text,
+    letterSpacing: -0.3,
+  },
+  heroMobile: {
+    fontSize: 12,
+    color: C.textMuted,
+    fontWeight: "500",
+    marginBottom: 5,
+  },
+  chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: C.bg,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 99,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  chipDot: { width: 5, height: 5, borderRadius: 3 },
+  chipText: { fontSize: 10, color: C.textSub, fontWeight: "700" },
 
-        paddingHorizontal: 18,
-        paddingBottom: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
-        elevation: 3,
-    },
-    headerTop: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 14,
-    },
-    headerLeft: { flexDirection: "row", alignItems: "center" },
-    menuIconContainer: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    menuIconInner: { gap: 4, alignItems: "flex-end" },
-    hamburgerLine: {
-        height: 2,
-        width: 18,
-        backgroundColor: COLORS.textSub,
-        borderRadius: 2,
-    },
-    headerSubLabel: {
-        fontSize: 11,
-        color: COLORS.textMuted,
-        fontWeight: "500",
-        letterSpacing: 0.5,
-    },
-    headerTitle: {
-        fontSize: 18,
-        color: COLORS.textMain,
-        fontWeight: "700",
-        letterSpacing: -0.3,
-    },
-    headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
-    notifContainer: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    notifBadge: {
-        position: "absolute",
-        top: 10,
-        right: 10,
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: COLORS.secondary,
-        borderWidth: 1.5,
-        borderColor: COLORS.bgCard,
-    },
-    profileBtn: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        overflow: "hidden",
-    },
-    profileAvatar: { width: "100%", height: "100%", borderRadius: 14 },
-    profileFallback: {
-        width: "100%",
-        height: "100%",
-        justifyContent: "center",
-        alignItems: "center",
-        backgroundColor: COLORS.primaryLight,
-    },
-    profileFallbackText: {
-        color: COLORS.primaryDark,
-        fontWeight: "900",
-        fontSize: 16,
-    },
+  // Tab bar
+  tabBar: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    backgroundColor: C.card,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  tabBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    minHeight: 38,
+    paddingHorizontal: 6,
+    paddingVertical: 7,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: C.bg,
+  },
+  tabBtnText: {
+    flexShrink: 1,
+    fontSize: 10,
+    fontWeight: "600",
+    color: C.textMuted,
+    textAlign: "center",
+  },
 
-    searchContainer: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: COLORS.bgApp,
-        borderRadius: 14,
-        height: 48,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-    },
-    searchInput: {
-        flex: 1,
-        marginLeft: 8,
-        fontSize: 15,
-        color: COLORS.textMain,
-    },
+  // Content
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: C.card,
+    borderRadius: 13,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: C.border,
+    gap: 10,
+  },
+  detailIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: C.primarySoft,
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  detailLabel: {
+    fontSize: 10,
+    color: C.textLight,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 1,
+  },
+  detailValue: { fontSize: 13, color: C.text, fontWeight: "600" },
+  timelineDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  timelineLine: {
+    position: "absolute",
+    top: 28,
+    bottom: -14,
+    width: 2,
+    backgroundColor: C.divider,
+    zIndex: 1,
+  },
+  histCard: {
+    backgroundColor: C.card,
+    borderRadius: 13,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: C.primary,
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  histStatus: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+  histRemarks: {
+    backgroundColor: C.bg,
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  timelineMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+  },
+  timelineMetaText: {
+    flex: 1,
+    fontSize: 11,
+    color: C.textSub,
+    fontWeight: "600",
+  },
+  emptyWrap: { alignItems: "center", paddingTop: 60, gap: 10 },
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: C.primarySoft,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emptyText: { fontSize: 14, color: C.textMuted, fontWeight: "600" },
+  panelHero: {
+    margin: 14,
+    marginBottom: 10,
+    backgroundColor: C.card,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  panelEyebrow: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: C.textLight,
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+    marginBottom: 4,
+  },
+  panelTitle: { fontSize: 16, fontWeight: "800", color: C.text },
+  panelSub: { fontSize: 12, color: C.textMuted, marginTop: 3 },
+  callPrimaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: C.primary,
+    paddingHorizontal: 14,
+    minWidth: 86,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  callPrimaryText: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+  },
+  filterChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.card,
+  },
+  filterChipActive: {
+    borderColor: C.primaryMid,
+    backgroundColor: C.primarySoft,
+  },
+  filterChipText: { fontSize: 12, fontWeight: "700", color: C.textMuted },
+  filterChipTextActive: { color: C.primary },
+  filterCount: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    backgroundColor: C.bg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filterCountActive: { backgroundColor: "#fff" },
+  filterCountText: { fontSize: 10, fontWeight: "800", color: C.textSub },
+  filterCountTextActive: { color: C.primary },
+  callRowCard: {
+    flexDirection: "row",
+    gap: 12,
+    backgroundColor: C.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 12,
+  },
+  callIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  callRowTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  callTypeText: { flex: 1, fontSize: 13, fontWeight: "800", color: C.text },
+  callTimeText: { fontSize: 11, color: C.textLight, fontWeight: "600" },
+  callMetaText: { fontSize: 12, color: C.textMuted, marginTop: 4 },
+  callNoteText: {
+    fontSize: 12,
+    color: C.textSub,
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  emailHero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: C.card,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  emailHeroIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: C.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emailToggleBtn: {
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: C.primary,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  emailToggleText: { color: "#fff", fontSize: 12, fontWeight: "800" },
+  emailCard: {
+    backgroundColor: C.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+  },
+  emailLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: C.textLight,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  emailValue: { fontSize: 14, fontWeight: "700", color: C.text },
+  emailInput: {
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.bg,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: C.text,
+  },
+  emailHint: {
+    marginTop: 8,
+    fontSize: 11,
+    color: C.textLight,
+    fontWeight: "600",
+  },
+  emailTemplateBox: {
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.cardAlt,
+    padding: 10,
+    gap: 8,
+  },
+  emailTemplateScroll: {
+    maxHeight: 210,
+  },
+  emailTemplateTitle: {
+    fontSize: 11,
+    color: C.textLight,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  emailTemplateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  emailTemplateBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: C.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emailTemplateName: { fontSize: 13, fontWeight: "800", color: C.text },
+  emailTemplateSub: { fontSize: 11, color: C.textMuted, marginTop: 2 },
+  emailTextArea: {
+    minHeight: 132,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.bg,
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    fontSize: 14,
+    color: C.text,
+  },
+  emailSendBtn: {
+    marginTop: 16,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: C.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  emailSendText: { color: "#fff", fontSize: 14, fontWeight: "800" },
+  emailLogsCard: {
+    backgroundColor: C.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+  },
+  emailSectionHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  emailSectionTitle: { fontSize: 14, fontWeight: "800", color: C.text },
+  emailSectionMeta: { fontSize: 12, fontWeight: "800", color: C.primary },
+  emailLogRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
+  emailLogDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: C.primary,
+    marginTop: 6,
+  },
 
-    // ── Tab Bar ──
-    tabBarScroll: {
-        backgroundColor: COLORS.bgCard,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
-        maxHeight: 60,
-    },
-    tabBarContent: {
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        gap: 8,
-        flexDirection: "row",
-        alignItems: "center",
-    },
-    tabPill: {
-        paddingHorizontal: 14,
-        paddingVertical: 7,
-        borderRadius: 20,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        backgroundColor: COLORS.bgApp,
-    },
-    tabText: { fontSize: 13, fontWeight: "600", color: COLORS.textMuted },
-    activeTabText: { color: "#fff", fontWeight: "700" },
-    tabDot: { width: 5, height: 5, borderRadius: 2.5 },
-
-    // ── Cards ──
-    listContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 100 },
-    cardWrapper: { marginBottom: 14 },
-    cardContainer: {
-        backgroundColor: COLORS.bgCard,
-        borderRadius: 20,
-        padding: 16,
-        paddingLeft: 20,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.07,
-        shadowRadius: 16,
-        elevation: 3,
-        overflow: "hidden",
-    },
-    cardStripe: {
-        position: "absolute",
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: 4,
-        borderTopLeftRadius: 20,
-        borderBottomLeftRadius: 20,
-    },
-
-    cardHeader: {
-        flexDirection: "row",
-        alignItems: "flex-start",
-        marginBottom: 12,
-    },
-    avatarContainer: {
-        width: 50,
-        height: 50,
-        borderRadius: 15,
-        marginRight: 12,
-        flexShrink: 0,
-    },
-    avatarImg: { width: "100%", height: "100%", borderRadius: 15 },
-    avatarGradient: {
-        width: "100%",
-        height: "100%",
-        borderRadius: 15,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    avatarText: { color: "#FFF", fontSize: 17, fontWeight: "800" },
-
-    cardInfo: { flex: 1 },
-    nameRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        marginBottom: 6,
-        gap: 6,
-    },
-    cardName: {
-        fontSize: 16,
-        fontWeight: "700",
-        color: COLORS.textMain,
-        flex: 1,
-        letterSpacing: -0.2,
-    },
-    statusTag: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 20,
-        gap: 4,
-    },
-    statusDot: { width: 5, height: 5, borderRadius: 2.5 },
-    statusTagText: {
-        fontSize: 10,
-        fontWeight: "800",
-        textTransform: "uppercase",
-        letterSpacing: 0.3,
-    },
-    subInfoRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-    subInfoChip: { flexDirection: "row", alignItems: "center", gap: 4 },
-    cardSubtext: { fontSize: 12, color: COLORS.textMuted, fontWeight: "500" },
-    enqNoBadge: {
-        backgroundColor: COLORS.primaryLight,
-        paddingHorizontal: 7,
-        paddingVertical: 3,
-        borderRadius: 7,
-        borderWidth: 1,
-        borderColor: COLORS.primaryMid,
-    },
-    enqNoText: { fontSize: 10, fontWeight: "800", color: COLORS.primary },
-
-    productSection: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingTop: 10,
-        marginBottom: 8,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.divider,
-    },
-    productTag: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        backgroundColor: COLORS.primaryLight,
-        paddingVertical: 5,
-        paddingHorizontal: 10,
-        borderRadius: 9,
-        flex: 1,
-        marginRight: 8,
-    },
-    productText: {
-        fontSize: 12,
-        color: COLORS.primaryDark,
-        fontWeight: "700",
-        flex: 1,
-    },
-    dateBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 4,
-        paddingHorizontal: 9,
-        paddingVertical: 5,
-        borderRadius: 9,
-    },
-    dateText: { fontSize: 11, fontWeight: "700" },
-
-    metaRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
-    metaChip: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 4,
-        backgroundColor: COLORS.bgApp,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 7,
-    },
-    metaChipText: { fontSize: 11, color: COLORS.textMuted, fontWeight: "600" },
-
-    cardDivider: {
-        height: 1,
-        backgroundColor: COLORS.divider,
-        marginBottom: 10,
-    },
-    actionBar: { flexDirection: "row", alignItems: "center", gap: 8 },
-    actionBtnPrimary: {
-        flex: 1,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-        paddingVertical: 9,
-        borderRadius: 11,
-    },
-    actionBtnLabel: { fontSize: 13, fontWeight: "700" },
-    actionRight: { flexDirection: "row", gap: 6 },
-    actionIconBtn: {
-        width: 38,
-        height: 38,
-        borderRadius: 11,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-
-    // ── Empty ──
-    emptyContainer: { alignItems: "center", marginTop: 70, gap: 10 },
-    emptyIconWrap: {
-        width: 72,
-        height: 72,
-        borderRadius: 22,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 4,
-    },
-    emptyTitle: { fontSize: 17, color: COLORS.textSub, fontWeight: "700" },
-    emptyText: { fontSize: 13, color: COLORS.textLight, fontWeight: "500" },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        minHeight: 200,
-    },
-    loadingText: {
-        marginTop: 12,
-        fontSize: 14,
-        color: COLORS.textMuted,
-        fontWeight: "600",
-    },
-
-    // ── Modals (bottom sheet) ──
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: "rgba(10,15,30,0.5)",
-        justifyContent: "flex-end",
-    },
-    modalOverlayCenter: {
-        flex: 1,
-        backgroundColor: "rgba(10,15,30,0.45)",
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 20,
-    },
-    sheetContainer: {
-        backgroundColor: COLORS.bgCard,
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
-        maxHeight: "90%",
-        overflow: "hidden",
-    },
-
-    handleBar: {
-        width: 38,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: COLORS.border,
-        alignSelf: "center",
-        marginTop: 10,
-        marginBottom: 4,
-    },
-    sheetHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.divider,
-    },
-    sheetTitle: {
-        fontSize: 17,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        letterSpacing: -0.2,
-    },
-    closeCircle: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-
-    // Context card (in modals)
-    contextCard: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: COLORS.bgApp,
-        padding: 14,
-        borderRadius: 16,
-        marginBottom: 20,
-        marginTop: 8,
-        borderLeftWidth: 4,
-        borderLeftColor: COLORS.primary,
-    },
-    contextAvatar: {
-        width: 52,
-        height: 52,
-        borderRadius: 16,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 14,
-        overflow: "hidden",
-    },
-    contextAvatarText: { fontSize: 17, fontWeight: "800", color: "#fff" },
-	    contextName: { fontSize: 15, fontWeight: "700", color: COLORS.textMain },
-	    contextDate: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
-	    heroChipsRow: {
-	        flexDirection: "row",
-	        flexWrap: "wrap",
-	        justifyContent: "flex-start",
-	        gap: 8,
-	        marginBottom: 16,
-	        marginTop: -6,
-	    },
-	    heroChip: {
-	        flexDirection: "row",
-	        alignItems: "center",
-	        gap: 6,
-	        paddingHorizontal: 10,
-	        paddingVertical: 6,
-	        borderRadius: 999,
-	        backgroundColor: COLORS.bgApp,
-	        borderWidth: 1,
-	        borderColor: COLORS.border,
-	    },
-	    heroChipText: {
-	        fontSize: 12,
-	        color: COLORS.textSub,
-	        fontWeight: "700",
-	    },
-
-	    sectionBlock: { marginBottom: 16 },
-	    sectionHeaderRow: {
-	        flexDirection: "row",
-	        alignItems: "center",
-	        gap: 10,
-	        marginBottom: 10,
-	    },
-	    sectionHeaderIcon: {
-	        width: 28,
-	        height: 28,
-	        borderRadius: 9,
-	        backgroundColor: COLORS.primaryLight,
-	        justifyContent: "center",
-	        alignItems: "center",
-	    },
-	    sectionHeaderTitle: {
-	        fontSize: 14,
-	        fontWeight: "900",
-	        color: COLORS.textMain,
-	        letterSpacing: -0.1,
-	    },
-	    sectionCard: {
-	        backgroundColor: COLORS.bgCardAlt,
-	        borderRadius: 18,
-	        borderWidth: 1,
-	        borderColor: COLORS.border,
-	        paddingHorizontal: 14,
-	        paddingVertical: 4,
-	        overflow: "hidden",
-	    },
-
-	    // Detail rows
-	    detailRow: {
-	        flexDirection: "row",
-        alignItems: "flex-start",
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.divider,
-    },
-    detailIconWrap: {
-        width: 32,
-        height: 32,
-        borderRadius: 10,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 12,
-        flexShrink: 0,
-    },
-    detailLabel: {
-        fontSize: 11,
-        color: COLORS.textLight,
-        fontWeight: "600",
-        textTransform: "uppercase",
-        letterSpacing: 0.5,
-        marginBottom: 2,
-    },
-    detailValue: { fontSize: 14, color: COLORS.textMain, fontWeight: "600" },
-
-    // Form elements
-    label: {
-        fontSize: 13,
-        fontWeight: "700",
-        color: COLORS.textSub,
-        marginBottom: 8,
-        marginTop: 16,
-        letterSpacing: 0.2,
-    },
-    textAreaContainer: {
-        backgroundColor: COLORS.bgApp,
-        borderRadius: 14,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-        padding: 14,
-        minHeight: 100,
-    },
-    textArea: {
-        fontSize: 15,
-        color: COLORS.textMain,
-        textAlignVertical: "top",
-        paddingTop: 0,
-    },
-    textInput: {
-        backgroundColor: COLORS.bgApp,
-        borderRadius: 14,
-        paddingHorizontal: 16,
-        height: 50,
-        fontSize: 15,
-        color: COLORS.textMain,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-    },
-    datePickerButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: COLORS.primaryLight,
-        paddingHorizontal: 16,
-        borderRadius: 14,
-        height: 50,
-        marginTop: 8,
-        borderWidth: 1.5,
-        borderColor: COLORS.primaryMid,
-    },
-    datePickerText: { fontSize: 15, marginLeft: 10 },
-
-    actionGrid: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 8,
-        marginTop: 8,
-        marginBottom: 8,
-    },
-    actionCard: {
-        width: (width - 56) / 4,
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 10,
-        borderRadius: 14,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.bgCard,
-    },
-    actionIconBox: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 7,
-    },
-    actionCardText: {
-        fontSize: 11,
-        fontWeight: "600",
-        color: COLORS.textMuted,
-        textAlign: "center",
-    },
-    actionCardActive: {
-        borderColor: COLORS.primaryMid,
-        backgroundColor: COLORS.primaryLight,
-    },
-    choiceRow: {
-        flexDirection: "row",
-        gap: 10,
-        marginTop: 8,
-        marginBottom: 8,
-        paddingRight: 8,
-    },
-    choicePill: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 999,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.bgCard,
-    },
-    choicePillActive: {
-        borderColor: COLORS.primaryMid,
-        backgroundColor: COLORS.primaryLight,
-    },
-    choicePillText: {
-        fontSize: 13,
-        fontWeight: "800",
-        color: COLORS.textMuted,
-    },
-    choicePillTextActive: {
-        color: COLORS.primary,
-    },
-    statusPill: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 999,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.bgCard,
-    },
-    statusPillActive: {
-        borderColor: COLORS.primaryMid,
-        backgroundColor: COLORS.primaryLight,
-    },
-    statusPillIcon: {
-        width: 28,
-        height: 28,
-        borderRadius: 10,
-        backgroundColor: COLORS.bgApp,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    statusPillText: {
-        fontSize: 13,
-        fontWeight: "800",
-        color: COLORS.textMuted,
-    },
-
-    footerButtons: {
-        flexDirection: "row",
-        gap: 12,
-        marginTop: 24,
-        marginBottom: 8,
-    },
-    btnSecondary: {
-        flex: 1,
-        paddingVertical: 15,
-        borderRadius: 14,
-        backgroundColor: COLORS.bgApp,
-        alignItems: "center",
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-    },
-    btnSecondaryText: {
-        color: COLORS.textSub,
-        fontWeight: "700",
-        fontSize: 15,
-    },
-    btnPrimary: {
-        flex: 1,
-        paddingVertical: 15,
-        borderRadius: 14,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    btnPrimaryText: { color: "#FFF", fontWeight: "700", fontSize: 15 },
-
-    // History
-    historyModalHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.divider,
-    },
-    historyHeaderIcon: {
-        width: 44,
-        height: 44,
-        borderRadius: 13,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 12,
-    },
-    historyHeaderText: { flex: 1 },
-    historyModalSubtitle: {
-        fontSize: 12,
-        color: COLORS.textMuted,
-        fontWeight: "500",
-        marginTop: 2,
-    },
-    historyList: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 },
-    historyTimelineItem: { flexDirection: "row", marginBottom: 16 },
-    timelineLeft: { width: 36, alignItems: "center", marginRight: 12 },
-    timelineDot: {
-        width: 28,
-        height: 28,
-        borderRadius: 10,
-        justifyContent: "center",
-        alignItems: "center",
-        zIndex: 2,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.15,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    timelineConnector: {
-        position: "absolute",
-        top: 28,
-        bottom: -16,
-        width: 2,
-        backgroundColor: COLORS.divider,
-        zIndex: 1,
-    },
-    historyContentCard: {
-        flex: 1,
-        backgroundColor: COLORS.bgCard,
-        borderRadius: 16,
-        padding: 14,
-        borderLeftWidth: 3,
-        borderLeftColor: COLORS.primary,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
-        elevation: 2,
-    },
-    historyCardHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "flex-start",
-        marginBottom: 10,
-    },
-    historyDateText: {
-        fontSize: 13,
-        fontWeight: "700",
-        color: COLORS.textMain,
-    },
-    historyTimeText: {
-        fontSize: 11,
-        color: COLORS.textLight,
-        marginTop: 2,
-        fontWeight: "500",
-    },
-    historyStatusPill: {
-        paddingHorizontal: 9,
-        paddingVertical: 4,
-        borderRadius: 20,
-    },
-    historyStatusPillText: {
-        fontSize: 10,
-        fontWeight: "800",
-        letterSpacing: 0.4,
-    },
-    historyRemarksBox: {
-        backgroundColor: COLORS.bgApp,
-        padding: 10,
-        borderRadius: 10,
-    },
-    historyRemarksText: {
-        fontSize: 13,
-        color: COLORS.textMuted,
-        lineHeight: 18,
-        fontWeight: "500",
-    },
-
-    // Calendar
-    calendarPopup: {
-        backgroundColor: COLORS.bgCard,
-        width: "100%",
-        borderRadius: 28,
-        padding: 20,
-        maxWidth: 380,
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 16 },
-        shadowOpacity: 0.12,
-        shadowRadius: 32,
-        elevation: 12,
-    },
-    calendarHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: 20,
-        marginTop: 8,
-    },
-    calNavBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
-        backgroundColor: COLORS.bgApp,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    calendarTitle: { fontSize: 16, fontWeight: "800", color: COLORS.textMain },
-    weekdaysRow: {
-        flexDirection: "row",
-        justifyContent: "space-around",
-        marginBottom: 8,
-    },
-    weekdayName: {
-        fontSize: 12,
-        fontWeight: "700",
-        color: COLORS.textLight,
-        width: 35,
-        textAlign: "center",
-    },
-    calendarGrid: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        justifyContent: "space-around",
-    },
-    calendarDay: {
-        width: 35,
-        height: 38,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 4,
-        borderRadius: 10,
-    },
-    emptyDay: { backgroundColor: "transparent" },
-    calendarDayText: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: COLORS.textMain,
-    },
-    todayDayGrad: {
-        width: 35,
-        height: 35,
-        borderRadius: 10,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    todayDayText: { color: "#FFF", fontWeight: "800", fontSize: 14 },
-    calendarCancelBtn: {
-        marginTop: 18,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderTopWidth: 1,
-        borderTopColor: COLORS.divider,
-    },
-    calendarCancelText: {
-        color: COLORS.danger,
-        fontWeight: "700",
-        fontSize: 15,
-    },
-
-    // Logout
-    logoutModalContainer: {
-        backgroundColor: COLORS.bgCard,
-        borderRadius: 28,
-        padding: 28,
-        width: "100%",
-        maxWidth: 340,
-        alignItems: "center",
-        shadowColor: COLORS.shadow,
-        shadowOffset: { width: 0, height: 16 },
-        shadowOpacity: 0.12,
-        shadowRadius: 32,
-        elevation: 12,
-    },
-    logoutIconRing: { marginBottom: 18 },
-    logoutIconGrad: {
-        width: 68,
-        height: 68,
-        borderRadius: 22,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    logoutTitle: {
-        fontSize: 21,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        marginBottom: 8,
-        letterSpacing: -0.3,
-    },
-    logoutMessage: {
-        fontSize: 14,
-        color: COLORS.textMuted,
-        textAlign: "center",
-        lineHeight: 21,
-        marginBottom: 26,
-    },
-    logoutActionRow: { flexDirection: "row", gap: 12, width: "100%" },
-    logoutCancelBtn: {
-        flex: 1,
-        height: 50,
-        borderRadius: 14,
-        justifyContent: "center",
-        alignItems: "center",
-        backgroundColor: COLORS.bgApp,
-        borderWidth: 1.5,
-        borderColor: COLORS.border,
-    },
-    logoutConfirmBtn: {
-        flex: 1,
-        height: 50,
-        borderRadius: 14,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    logoutCancelText: {
-        fontSize: 15,
-        fontWeight: "700",
-        color: COLORS.textMuted,
-    },
-    logoutConfirmText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  // Follow-up context
+  followupContext: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: C.bg,
+    padding: 12,
+    borderRadius: 14,
+    marginBottom: 4,
+    borderLeftWidth: 3,
+    borderLeftColor: C.primary,
+    gap: 12,
+  },
+  followupAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 13,
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+  },
 });
 
-const menuStyles = StyleSheet.create({
-    menuOverlay: { flex: 1, backgroundColor: "rgba(10,15,30,0.45)" },
-    menuContent: {
-        width: "78%",
-        backgroundColor: COLORS.bgCard,
-        height: "100%",
-        borderTopRightRadius: 32,
-        borderBottomRightRadius: 32,
-        overflow: "hidden",
-    },
-    menuHeader: {
-        paddingTop:
-            Platform.OS === "android"
-                ? (StatusBar.currentHeight || 0) + 24
-                : 54,
-        paddingBottom: 28,
-        alignItems: "center",
-    },
-    profileCircle: {
-        width: 72,
-        height: 72,
-        borderRadius: 24,
-        backgroundColor: "rgba(255,255,255,0.2)",
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 12,
-        borderWidth: 2,
-        borderColor: "rgba(255,255,255,0.35)",
-    },
-    profileName: {
-        color: "#fff",
-        fontSize: 18,
-        fontWeight: "800",
-        letterSpacing: -0.3,
-    },
-    rolePill: {
-        marginTop: 6,
-        backgroundColor: "rgba(255,255,255,0.2)",
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 20,
-    },
-    profileRole: {
-        color: "rgba(255,255,255,0.9)",
-        fontSize: 12,
-        fontWeight: "600",
-    },
-    menuList: { padding: 14 },
-    menuItem: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingVertical: 11,
-        paddingHorizontal: 10,
-        borderRadius: 14,
-        marginBottom: 3,
-    },
-    menuItemActive: { backgroundColor: COLORS.primaryLight },
-    menuIconWrap: {
-        width: 36,
-        height: 36,
-        borderRadius: 11,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 12,
-    },
-    menuItemText: { fontSize: 15, fontWeight: "600", flex: 1 },
-    menuActiveIndicator: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: COLORS.primary,
-    },
-    logoSection: {
-        marginTop: 20,
-        paddingTop: 20,
-        paddingBottom: 30,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.border,
-        alignItems: "center",
-    },
-    logoContainer: { alignItems: "center", marginBottom: 10 },
-    logoImage: { width: 120, height: 38 },
-    logoIconCircle: {
-        width: 50,
-        height: 50,
-        borderRadius: 16,
-        backgroundColor: COLORS.primary,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    logoText: {
-        fontSize: 15,
-        fontWeight: "800",
-        color: COLORS.textMain,
-        marginTop: 8,
-    },
-    logoSubtext: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
-    versionText: { fontSize: 11, color: COLORS.textLight, fontWeight: "500" },
+// Follow-up form styles (inside DetailView tab 5)
+const FU = StyleSheet.create({
+  toggleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: C.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+  },
+  toggleBtnIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: C.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  toggleBtnTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: C.text,
+  },
+  toggleBtnSub: {
+    fontSize: 11,
+    color: C.textMuted,
+    marginTop: 2,
+  },
+  floatingWrap: {
+    position: "relative",
+    backgroundColor: C.bg,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    paddingHorizontal: 12,
+    minHeight: 52,
+    justifyContent: "center",
+  },
+  floatingWrapMultiline: { paddingTop: 20, paddingBottom: 40 },
+  floatingLabel: { position: "absolute", left: 12, fontWeight: "600" },
+  floatingInput: {
+    fontSize: 14,
+    color: C.text,
+    minHeight: 46,
+    paddingTop: 20,
+    paddingBottom: 8,
+  },
+  floatingInputMultiline: { minHeight: 88 },
+  label: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: C.textSub,
+    marginBottom: 6,
+    marginTop: 14,
+    letterSpacing: 0.2,
+  },
+  sectionCard: {
+    backgroundColor: C.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: C.text,
+    marginBottom: 4,
+  },
+  sectionSub: { fontSize: 12, color: C.textLight, marginBottom: 2 },
+  textArea: {
+    backgroundColor: C.bg,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    padding: 12,
+    minHeight: 90,
+  },
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 99,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: C.card,
+  },
+  pillText: { fontSize: 13, fontWeight: "600", color: C.textMuted },
+  statusBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: C.card,
+  },
+  datePicker: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: C.primarySoft,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    height: 46,
+    marginTop: 4,
+    borderWidth: 1.5,
+    borderColor: C.primaryMid,
+    gap: 8,
+  },
+  dateText: { fontSize: 14, color: C.text, fontWeight: "600" },
+  btnPrimary: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  timelineEmpty: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 18,
+  },
+  timelineEmptyText: {
+    fontSize: 12,
+    color: C.textMuted,
+    fontWeight: "600",
+  },
+  timelineCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    backgroundColor: C.bg,
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  timelineCardGap: {
+    marginBottom: 10,
+  },
+  timelineBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  timelineTitle: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: C.text,
+  },
+  timelineDate: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: C.primary,
+    marginTop: 2,
+  },
+  timelineNote: {
+    fontSize: 11,
+    color: C.textMuted,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+});
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+export default function FollowUpScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
+  const sc = useScale();
+  const { user, logout } = useAuth();
+
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [activeTab, setActiveTab] = useState("All");
+  const [followUps, setFollowUps] = useState([]);
+  const [tabCounts, setTabCounts] = useState({ All: 0, Today: 0, Missed: 0 });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedDate, setSelectedDate] = useState(toIso(new Date()));
+  const [showMissedModal, setShowMissedModal] = useState(false);
+
+  // Detail view
+  const [detailEnquiry, setDetailEnquiry] = useState(null);
+  const [detailHistory, setDetailHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedEnquiry, setSelectedEnquiry] = useState(null);
+
+  // Follow-up composer
+  const [editRemarks, setEditRemarks] = useState("");
+  const [editActivityType, setEditActivityType] = useState("Phone Call");
+  const [editStatus, setEditStatus] = useState("Contacted");
+  const [editNextDate, setEditNextDate] = useState("");
+  const [editNextTime, setEditNextTime] = useState("");
+  const [editTimeMeridian, setEditTimeMeridian] = useState("AM");
+  const [editAmount, setEditAmount] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDatePickerVisible, setDatePickerVisible] = useState(false);
+  const [datePickerTarget, setDatePickerTarget] = useState("add");
+  const [isTimePickerVisible, setTimePickerVisible] = useState(false);
+  const [timePickerValue, setTimePickerValue] = useState(new Date());
+  const [calendarMonth, setCalendarMonth] = useState(toMonthKey(new Date()));
+  const [calendarDateSummary, setCalendarDateSummary] = useState({});
+
+  // Call
+  const [callEnquiry, setCallEnquiry] = useState(null);
+  const [callStartTime, setCallStartTime] = useState(null);
+  const [callStarted, setCallStarted] = useState(false);
+  const [callModalVisible, setCallModalVisible] = useState(false);
+  const [autoDuration, setAutoDuration] = useState(0);
+  const [autoCallData, setAutoCallData] = useState(null);
+
+  const confettiRef = useRef(null);
+  const fetchIdRef = useRef(0);
+  const lastFetch = useRef(0);
+  const lastToken = useRef(null);
+  const lastFocusDate = useRef(null);
+  const lastFocusKey = useRef(null);
+
+  const missedItems = useMemo(() => followUps.filter(isMissed), [followUps]);
+  const missedAlertCount = Number(tabCounts?.Missed || 0);
+
+  // ── Focus ────────────────────────────────────────────────────────────────
+  useFocusEffect(
+    useCallback(() => {
+      Promise.resolve(
+        notificationService.acknowledgeHourlyFollowUpReminders?.(),
+      ).catch(() => {});
+      const fd = route.params?.focusDate ? String(route.params.focusDate) : "";
+      if (fd && lastFocusDate.current !== fd) {
+        lastFocusDate.current = fd;
+        setSelectedDate(fd);
+      }
+      const stale = Date.now() - lastFetch.current > 60000;
+      if (stale || followUps.length === 0) fetchFollowUps(activeTab, true);
+    }, [activeTab, route.params?.focusDate]),
+  );
+
+  // ── Param effects ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    const token = route.params?.composerToken,
+      enq = route.params?.enquiry;
+    if (!route.params?.openComposer || !token || !enq) return;
+    if (lastToken.current === token) return;
+    lastToken.current = token;
+    openDetail(enq);
+  }, [
+    route.params?.openComposer,
+    route.params?.composerToken,
+    route.params?.enquiry,
+  ]);
+
+  useEffect(() => {
+    const key =
+      route.params?.focusKey ||
+      [
+        route.params?.focusTab,
+        route.params?.focusDate,
+        route.params?.openMissedModal ? "missed" : "",
+      ]
+        .filter(Boolean)
+        .join(":");
+    if (!key || lastFocusKey.current === key) return;
+    lastFocusKey.current = key;
+    if (route.params?.focusDate) {
+      const d = String(route.params.focusDate);
+      lastFocusDate.current = d;
+      setSelectedDate(d);
+    }
+    if (
+      route.params?.focusTab &&
+      STATUS_TABS.some((t) => t.value === route.params.focusTab)
+    )
+      setActiveTab(route.params.focusTab);
+    else if (route.params?.openMissedModal) setActiveTab("Missed");
+    else setActiveTab("All");
+    if (route.params?.focusSearch != null)
+      setSearchQuery(String(route.params.focusSearch));
+    if (route.params?.openMissedModal) setShowMissedModal(true);
+  }, [
+    route.params?.focusKey,
+    route.params?.focusTab,
+    route.params?.focusDate,
+    route.params?.focusSearch,
+    route.params?.openMissedModal,
+  ]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      lastFetch.current = 0;
+      fetchFollowUps(activeTab, true);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+  useEffect(() => {
+    if (activeTab === "All") return;
+    lastFetch.current = 0;
+    fetchFollowUps(activeTab, true);
+  }, [selectedDate, activeTab]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
+      if (callStarted && callEnquiry) {
+        global.__callClaimedByScreen = true;
+        handleSaveCallLog({
+          phoneNumber: data.phoneNumber,
+          callType: data.callType,
+          duration: data.duration,
+          note: "Auto-logged",
+          callTime: data.callTime || new Date(),
+          enquiryId: callEnquiry?._id,
+          contactName: callEnquiry?.name,
+        });
+        setCallStarted(false);
+        setCallStartTime(null);
+      }
+    });
+    return () => sub.remove();
+  }, [callStarted, callEnquiry]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (next) => {
+      if (
+        next === "active" &&
+        callStarted &&
+        callStartTime &&
+        callEnquiry &&
+        !autoCallData
+      ) {
+        const dur = Math.max(
+          0,
+          Math.floor((Date.now() - callStartTime) / 1000) - 5,
+        );
+        handleSaveCallLog({
+          phoneNumber: callEnquiry.mobile,
+          callType: "Outgoing",
+          duration: dur,
+          note: "AppState fallback",
+          callTime: new Date(),
+          enquiryId: callEnquiry._id,
+          contactName: callEnquiry.name,
+        });
+        setCallStarted(false);
+        setCallStartTime(null);
+      }
+    });
+    return () => sub.remove();
+  }, [callStarted, callStartTime, callEnquiry, autoCallData]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
+      lastFetch.current = 0;
+      fetchFollowUps(activeTab, true);
+    });
+    return () => sub.remove();
+  }, [activeTab]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener("blur", () => {
+      setDetailEnquiry(null);
+      setDetailHistory([]);
+      setHistoryLoading(false);
+    });
+    return unsub;
+  }, [navigation]);
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────
+  const fetchTabCounts = async (referenceDate = selectedDate) => {
+    try {
+      const [allCount, todayCount, missedCount] = await Promise.all([
+        getTabUniqueCount("All", ""),
+        getTabUniqueCount("Today", referenceDate),
+        getTabUniqueCount("Missed", referenceDate),
+      ]);
+      setTabCounts({
+        All: Number(allCount || 0),
+        Today: Number(todayCount || 0),
+        Missed: Number(missedCount || 0),
+      });
+    } catch (_error) {
+      // Keep current tab counts if the summary request fails.
+    }
+  };
+
+  const fetchFollowUps = async (tab, refresh = false) => {
+    const rid = ++fetchIdRef.current;
+    if (refresh) {
+      setIsLoading(true);
+      setPage(1);
+      setHasMore(true);
+      if (followUps.length === 0) setFollowUps([]);
+    } else {
+      if (!hasMore || isLoadingMore) return;
+      setIsLoadingMore(true);
+    }
+    try {
+      const pg = refresh ? 1 : page;
+      const filterDate = tab === "All" ? "" : selectedDate;
+      const res = await followupService.getFollowUps(tab, pg, 20, filterDate);
+      let data = [],
+        total = 1;
+      if (Array.isArray(res)) {
+        data = res;
+      } else if (res?.data) {
+        data = res.data;
+        total = res.pagination?.pages || 1;
+      }
+      if (rid !== fetchIdRef.current) return;
+      data = data.map(mapFollowUpItemToEnquiryCard);
+      if (refresh && tab === "All") {
+        try {
+          const enquiryRes = await enquiryService.getAllEnquiries(
+            1,
+            100,
+            searchQuery.trim(),
+            "New",
+            "",
+            "",
+          );
+          const enquiryItems = Array.isArray(enquiryRes?.data)
+            ? enquiryRes.data
+            : Array.isArray(enquiryRes)
+              ? enquiryRes
+              : [];
+          const newOnlyItems = enquiryItems
+            .filter((item) => !item?.latestFollowUpDate)
+            .map(mapEnquiryToFollowUpCard);
+          data = [...newOnlyItems, ...data];
+        } catch (_error) {
+          // If enquiry-side fetch fails, keep follow-up data working normally.
+        }
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        data = data.filter(
+          (item) =>
+            String(item?.name || "")
+              .toLowerCase()
+              .includes(q) ||
+            String(item?.mobile || "")
+              .toLowerCase()
+              .includes(q) ||
+            String(item?.enqNo || "")
+              .toLowerCase()
+              .includes(q),
+        );
+      }
+      data = dedupeByLatestActivity(data);
+      setHasMore(Array.isArray(res) ? false : pg < total);
+      if (refresh) setFollowUps(data);
+      else setFollowUps((p) => [...p, ...data]);
+      if (refresh) fetchTabCounts(selectedDate);
+      lastFetch.current = Date.now();
+      if (!refresh) setPage((p) => p + 1);
+      else if (data.length > 0 && pg < total) setPage(2);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      if (rid === fetchIdRef.current) {
+        setIsLoading(false);
+        setIsLoadingMore(false);
+      }
+    }
+  };
+
+  const handleTabChange = (tab) => {
+    if (tab === activeTab) return;
+    fetchIdRef.current++;
+    setFollowUps([]);
+    setIsLoading(true);
+    setPage(1);
+    setHasMore(true);
+    lastFetch.current = 0;
+    setActiveTab(tab);
+    fetchFollowUps(tab, true);
+  };
+
+  // ── Open detail ───────────────────────────────────────────────────────────
+  const openDetail = useCallback(async (item) => {
+    setDetailHistory([]);
+    setHistoryLoading(true);
+    const fb = {
+      _id: item.enqId || item._id,
+      enqId: item.enqId || item._id,
+      name: item.name || "Unknown",
+      mobile: item.mobile || "N/A",
+      enqNo: item.enqNo || "N/A",
+      status: item.status || "New",
+      product: item.product || "N/A",
+      source: item.source || "N/A",
+      address: item.address || "N/A",
+      image: item.image || null,
+      createdAt: item.createdAt || null,
+      enquiryDateTime: item.enquiryDateTime || null,
+      lastContactedAt: item.lastContactedAt || null,
+      nextFollowUpDate: item.nextFollowUpDate || null,
+      latestFollowUpDate: item.latestFollowUpDate || null,
+      requirements: item.requirements || "",
+    };
+    // reset composer state for this enquiry
+    setEditRemarks("");
+    setEditActivityType("Phone Call");
+    setEditStatus(getRecommendedNextStatus(item?.status || "New"));
+    setEditNextDate("");
+    setEditNextTime("");
+    setEditTimeMeridian("AM");
+    setEditAmount("");
+    setDetailEnquiry(fb);
+    setSelectedEnquiry(fb);
+    try {
+      const full = await enquiryService.getEnquiryById(
+        item.enqId || item._id || item.enqNo,
+      );
+      setDetailEnquiry(full || fb);
+      setSelectedEnquiry(full || fb);
+      setEditStatus(getRecommendedNextStatus((full || fb)?.status || "New"));
+    } catch {
+      setDetailEnquiry(fb);
+      setSelectedEnquiry(fb);
+    }
+    try {
+      const hist = await followupService.getFollowUpHistory(
+        item.enqNo || item.enqId || item._id,
+      );
+      setDetailHistory(Array.isArray(hist) ? hist : []);
+    } catch {
+      setDetailHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  // ── Save follow-up ────────────────────────────────────────────────────────
+  const handleSaveEdit = async () => {
+    if (!selectedEnquiry) return;
+    if (!editRemarks.trim()) {
+      Alert.alert("Required", "Enter follow-up remarks");
+      return;
+    }
+    if (
+      ["New", "Contacted", "Interested"].includes(editStatus) &&
+      !editNextDate
+    ) {
+      Alert.alert("Required", "Enter next follow-up date");
+      return;
+    }
+    if (editStatus === "Converted" && !editAmount) {
+      Alert.alert("Required", "Enter amount");
+      return;
+    }
+    setIsSavingEdit(true);
+    try {
+      const remarks =
+        editStatus === "Converted"
+          ? editRemarks
+            ? `${editRemarks} | Sales: ₹${editAmount}`
+            : `Sales: ₹${editAmount}`
+          : editRemarks;
+      const rawAT =
+        selectedEnquiry.assignedTo?._id || selectedEnquiry.assignedTo;
+      const atId = typeof rawAT === "string" ? rawAT : "";
+      const effDate = editNextDate || toIso(new Date());
+      const nextAction =
+        editStatus === "Converted"
+          ? "Sales"
+          : ["Not Interested", "Closed"].includes(editStatus)
+            ? "Drop"
+            : "Followup";
+      const fuState =
+        nextAction === "Sales"
+          ? "Completed"
+          : nextAction === "Drop"
+            ? "Drop"
+            : "Scheduled";
+      await followupService.createFollowUp({
+        enqId: selectedEnquiry._id,
+        enqNo: selectedEnquiry.enqNo,
+        name: selectedEnquiry.name,
+        mobile: selectedEnquiry.mobile,
+        product: selectedEnquiry.product,
+        image: selectedEnquiry.image,
+        ...(atId ? { assignedTo: atId } : {}),
+        activityType: editActivityType,
+        type: editActivityType,
+        enquiryStatus: editStatus,
+        note: remarks,
+        remarks,
+        date: effDate,
+        ...(editNextTime ? { time: editNextTime } : {}),
+        followUpDate: effDate,
+        nextFollowUpDate: effDate,
+        nextAction,
+        status: fuState,
+        ...(editStatus === "Converted"
+          ? {
+              amount:
+                Number(editAmount.toString().replace(/[^0-9.]/g, "")) || 0,
+            }
+          : {}),
+      });
+      await enquiryService.updateEnquiry(
+        selectedEnquiry._id || selectedEnquiry.enqNo,
+        {
+          status: editStatus,
+          ...(editStatus === "Converted"
+            ? {
+                cost:
+                  Number(editAmount.toString().replace(/[^0-9.]/g, "")) || 0,
+                conversionDate: new Date(),
+              }
+            : {}),
+        },
+      );
+      lastFetch.current = 0;
+      fetchFollowUps(activeTab, true);
+      if (["Contacted", "Interested", "Converted"].includes(editStatus))
+        confettiRef.current?.play?.();
+      setEditRemarks("");
+      setEditActivityType("Phone Call");
+      setEditStatus("Contacted");
+      setEditNextDate("");
+      setEditNextTime("");
+      setEditTimeMeridian("AM");
+      setEditAmount("");
+      setSelectedEnquiry(null);
+      setDetailEnquiry(null);
+      Alert.alert("Success", "Follow-up saved successfully.");
+    } catch (e) {
+      Alert.alert("Error", e.response?.data?.message || "Could not save");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  // ── Call / call log ───────────────────────────────────────────────────────
+  const handleSaveCallLog = async (data) => {
+    try {
+      const saved = await callLogService.createCallLog(data);
+      if (!saved?._id) return;
+      setCallModalVisible(false);
+      setCallEnquiry(null);
+      setAutoCallData(null);
+      DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+      fetchFollowUps(activeTab, true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleStartContactCall = useCallback(async (enquiry) => {
+    const digits = String(enquiry?.mobile || "").replace(/\D/g, "");
+    if (!digits) {
+      Alert.alert(
+        "Missing number",
+        "This enquiry does not have a valid phone number.",
+      );
+      return;
+    }
+    setCallEnquiry(enquiry);
+    setAutoCallData(null);
+    setAutoDuration(0);
+    setCallStarted(true);
+    setCallStartTime(Date.now());
+    try {
+      if (Platform.OS === "android" && RNImmediatePhoneCall?.immediatePhoneCall) {
+        RNImmediatePhoneCall.immediatePhoneCall(digits);
+        return;
+      }
+      await Linking.openURL(`tel:${digits}`);
+    } catch (_error) {
+      setCallStarted(false);
+      setCallStartTime(null);
+      setCallEnquiry(null);
+      Alert.alert("Call failed", "Could not start the phone call.");
+    }
+  }, []);
+
+  // ── Date/time pickers ─────────────────────────────────────────────────────
+  const showDatePicker = (target = "add") => {
+    setDatePickerTarget(target);
+    const baseDate =
+      target === "filter" ? selectedDate : editNextDate || selectedDate || toIso(new Date());
+    setCalendarMonth(toMonthKey(baseDate || new Date()));
+    setDatePickerVisible(true);
+  };
+  const handleConfirmDate = (date) => {
+    const v = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    if (datePickerTarget === "filter") {
+      setSelectedDate(v);
+    } else {
+      setEditNextDate(v);
+      const now = new Date();
+      setTimePickerValue(now);
+      setEditNextTime(formatTime(now));
+      setEditTimeMeridian(now.getHours() >= 12 ? "PM" : "AM");
+      if (Platform.OS !== "web") setTimePickerVisible(true);
+    }
+    setTimeout(() => setDatePickerVisible(false), 100);
+  };
+  useEffect(() => {
+    if (!isDatePickerVisible) return;
+    let active = true;
+    const loadCalendarSummary = async () => {
+      try {
+        const [allRes, missedRes] = await Promise.all([
+          followupService.getFollowUps("All", 1, 500, ""),
+          followupService.getFollowUps("Missed", 1, 500, ""),
+        ]);
+        if (!active) return;
+        const allItems = Array.isArray(allRes?.data) ? allRes.data : [];
+        const missedItems = Array.isArray(missedRes?.data) ? missedRes.data : [];
+        const summary = {};
+        allItems.forEach((item) => {
+          const iso = getFollowUpCalendarDate(item);
+          if (!iso || toMonthKey(iso) !== calendarMonth) return;
+          if (!summary[iso]) summary[iso] = { total: 0, missed: 0 };
+          summary[iso].total += 1;
+        });
+        missedItems.forEach((item) => {
+          const iso = getFollowUpCalendarDate(item);
+          if (!iso || toMonthKey(iso) !== calendarMonth) return;
+          if (!summary[iso]) summary[iso] = { total: 0, missed: 0 };
+          summary[iso].missed += 1;
+        });
+        setCalendarDateSummary(summary);
+      } catch (_error) {
+        if (active) setCalendarDateSummary({});
+      }
+    };
+    loadCalendarSummary();
+    return () => {
+      active = false;
+    };
+  }, [isDatePickerVisible, calendarMonth]);
+  const handleConfirmTime = (event, d) => {
+    if (Platform.OS === "android") {
+      if (event?.type === "dismissed") {
+        setTimePickerVisible(false);
+        return;
+      }
+      if (d) {
+        const t = formatTime(d);
+        setEditNextTime(t);
+        setEditTimeMeridian(d.getHours() >= 12 ? "PM" : "AM");
+      }
+      setTimePickerVisible(false);
+      return;
+    }
+    if (d) {
+      const t = formatTime(d);
+      setEditNextTime(t);
+      setEditTimeMeridian(d.getHours() >= 12 ? "PM" : "AM");
+    }
+  };
+  const calMarkedDates = useMemo(() => {
+    const target =
+      datePickerTarget === "filter"
+        ? selectedDate
+        : editNextDate || selectedDate;
+    const today = toIso(new Date());
+    const m = {
+      [target]: {
+        selected: true,
+        selectedColor: C.primary,
+        selectedTextColor: "#fff",
+      },
+    };
+    if (today !== target) m[today] = { marked: true, dotColor: C.teal };
+    return m;
+  }, [selectedDate, editNextDate, datePickerTarget]);
+
+  const renderItem = useCallback(
+    ({ item, index }) => (
+      <FUCard item={item} index={index} onSwipe={openDetail} sc={sc} />
+    ),
+    [openDetail, sc],
+  );
+  const keyExtractor = useCallback(
+    (item, i) => item?._id?.toString() || `item-${i}`,
+    [],
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={["top"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+      <ConfettiBurst ref={confettiRef} topOffset={0} />
+
+      <PostCallModal
+        visible={callModalVisible}
+        enquiry={callEnquiry}
+        onSave={handleSaveCallLog}
+        initialDuration={autoDuration}
+        autoCallData={autoCallData}
+        onCancel={() => {
+          setCallModalVisible(false);
+          setCallEnquiry(null);
+          setCallStarted(false);
+          setAutoCallData(null);
+        }}
+      />
+
+      <AppSideMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        navigation={navigation}
+        user={user}
+        onLogout={() => {
+          setMenuVisible(false);
+          setShowLogoutModal(true);
+        }}
+        activeRouteName="FollowUp"
+        resolveImageUrl={getImageUrl}
+      />
+
+      {/* Logout */}
+      <Modal
+        visible={showLogoutModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowLogoutModal(false)}
+      >
+        <View style={MS.center}>
+          <MotiView
+            from={{ opacity: 0, scale: 0.88 }}
+            animate={{ opacity: 1, scale: 1 }}
+            style={MS.logoutBox}
+          >
+            <View style={MS.logoutIcon}>
+              <Ionicons name="log-out-outline" size={26} color={C.danger} />
+            </View>
+            <Text style={MS.logoutTitle}>Sign Out?</Text>
+            <Text style={MS.logoutSub}>
+              You&apos;ll need to log in again to access your data.
+            </Text>
+            <View style={{ flexDirection: "row", gap: 10, width: "100%" }}>
+              <TouchableOpacity
+                style={MS.logoutCancel}
+                onPress={() => setShowLogoutModal(false)}
+              >
+                <Text
+                  style={{
+                    fontSize: 14,
+                    fontWeight: "700",
+                    color: C.textMuted,
+                  }}
+                >
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={async () => {
+                  setShowLogoutModal(false);
+                  await logout();
+                }}
+                style={{ flex: 1 }}
+              >
+                <LinearGradient colors={GRAD.danger} style={MS.logoutConfirm}>
+                  <Text
+                    style={{ fontSize: 14, fontWeight: "700", color: "#fff" }}
+                  >
+                    Sign Out
+                  </Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          </MotiView>
+        </View>
+      </Modal>
+
+      {/* ── Header ── */}
+      <View style={[MS.header, { paddingHorizontal: sc.hPad }]}>
+        <View style={MS.headerTop}>
+          <TouchableOpacity
+            style={MS.headerBtn}
+            onPress={() => setMenuVisible(true)}
+          >
+            <Ionicons name="menu" size={21} color={C.textSub} />
+          </TouchableOpacity>
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text
+              style={{
+                fontSize: 11,
+                color: C.textMuted,
+                fontWeight: "600",
+                letterSpacing: 0.3,
+              }}
+            >
+              Follow-up Center
+            </Text>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              <Text
+                style={{
+                  fontSize: 17,
+                  color: C.text,
+                  fontWeight: "800",
+                  letterSpacing: -0.3,
+                }}
+              >
+                {user?.name || "Follow-ups"}
+              </Text>
+              <View style={MS.resultChip}>
+                <Ionicons
+                  name="layers-outline"
+                  size={11}
+                  color={C.primaryDark}
+                />
+                <Text style={MS.resultChipText}>{followUps.length}</Text>
+              </View>
+            </View>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <TouchableOpacity
+              style={MS.headerBtn}
+              onPress={() => {
+                if (activeTab !== "Missed") {
+                  handleTabChange("Missed");
+                } else {
+                  fetchFollowUps("Missed", true);
+                }
+              }}
+            >
+              <Ionicons
+                name="alert-circle-outline"
+                size={20}
+                color={missedAlertCount > 0 ? C.danger : C.textSub}
+              />
+              {missedAlertCount > 0 && (
+                <View style={MS.notifBadge}>
+                  <Text style={MS.notifBadgeText}>
+                    {missedAlertCount > 9 ? "9+" : missedAlertCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={MS.profileBtn}
+              onPress={() => navigation.navigate("ProfileScreen")}
+            >
+              {user?.logo ? (
+                <Image
+                  source={{ uri: getImageUrl(user.logo) }}
+                  style={{ width: "100%", height: "100%" }}
+                />
+              ) : (
+                <View style={MS.profileFallback}>
+                  <Text
+                    style={{
+                      color: C.primaryDark,
+                      fontWeight: "900",
+                      fontSize: 15,
+                    }}
+                  >
+                    {user?.name?.[0]?.toUpperCase() || "U"}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+        {/* Search */}
+        <View style={MS.searchBar}>
+          <Ionicons
+            name="search-outline"
+            size={17}
+            color={C.textMuted}
+            style={{ marginLeft: 12 }}
+          />
+          <TextInput
+            style={MS.searchInput}
+            placeholder="Search enquiries…"
+            placeholderTextColor={C.textLight}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+          <TouchableOpacity
+            onPress={() => showDatePicker("filter")}
+            style={MS.dateBtn}
+          >
+            <Ionicons name="calendar-outline" size={15} color={C.primary} />
+            <Text
+              style={{ fontSize: 11, color: C.primaryDark, fontWeight: "700" }}
+            >
+              {fmtDate(selectedDate)}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* ── Status pills ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={MS.tabScroll}
+        contentContainerStyle={{
+          paddingHorizontal: sc.hPad,
+          paddingVertical: 8,
+          gap: 6,
+        }}
+      >
+        {STATUS_TABS.map((t) => {
+          const active = activeTab === t.value;
+          const accent = t.color || C.primary;
+          const count = Number(tabCounts?.[t.value] || 0);
+          return (
+            <TouchableOpacity
+              key={t.value}
+              onPress={() => handleTabChange(t.value)}
+              style={[
+                MS.tabPill,
+                active && {
+                  backgroundColor: accent + "16",
+                  borderColor: accent,
+                },
+              ]}
+              activeOpacity={0.8}
+            >
+              <View
+                style={[
+                  MS.tabIconWrap,
+                  { backgroundColor: active ? accent + "24" : C.divider },
+                ]}
+              >
+                <Ionicons
+                  name={t.icon}
+                  size={12}
+                  color={active ? accent : C.textMuted}
+                />
+              </View>
+              <Text
+                style={[
+                  MS.tabText,
+                  active && { color: accent, fontWeight: "800" },
+                ]}
+              >
+                {t.label}
+              </Text>
+              <View
+                style={[
+                  MS.tabCount,
+                  { backgroundColor: active ? accent : C.divider },
+                ]}
+              >
+                <Text
+                  style={[
+                    MS.tabCountText,
+                    { color: active ? "#fff" : C.textMuted },
+                  ]}
+                >
+                  {count > 99 ? "99+" : count}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* ── List ── */}
+      <FlatList
+        data={followUps}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        contentContainerStyle={[
+          { paddingHorizontal: sc.hPad, paddingTop: 10, paddingBottom: 90 },
+          followUps.length === 0 && { flex: 1 },
+        ]}
+        refreshing={isLoading && followUps.length > 0}
+        onRefresh={() => fetchFollowUps(activeTab, true)}
+        onEndReached={() => {
+          if (!isLoading && !isLoadingMore && hasMore)
+            fetchFollowUps(activeTab, false);
+        }}
+        onEndReachedThreshold={0.5}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={10}
+        removeClippedSubviews
+        ListFooterComponent={
+          isLoadingMore ? (
+            <ActivityIndicator
+              size="small"
+              color={C.primary}
+              style={{ marginVertical: 16 }}
+            />
+          ) : null
+        }
+        ListEmptyComponent={
+          isLoading ? (
+            <FollowUpSkeleton />
+          ) : (
+            <View style={{ alignItems: "center", marginTop: 60, gap: 8 }}>
+              <View
+                style={{
+                  width: 68,
+                  height: 68,
+                  borderRadius: 20,
+                  backgroundColor: C.primarySoft,
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+              >
+                <Ionicons name="calendar-outline" size={32} color={C.primary} />
+              </View>
+              <Text
+                style={{ fontSize: 15, color: C.textSub, fontWeight: "700" }}
+              >
+                No enquiries found
+              </Text>
+              <Text style={{ fontSize: 13, color: C.textLight }}>
+                No {activeTab} enquiries for this date
+              </Text>
+            </View>
+          )
+        }
+        showsVerticalScrollIndicator={false}
+      />
+
+      {/* ── Missed modal ── */}
+      <Modal
+        visible={showMissedModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMissedModal(false)}
+      >
+        <TouchableOpacity
+          style={MS.center}
+          activeOpacity={1}
+          onPress={() => setShowMissedModal(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={MS.missedCard}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                marginBottom: 14,
+              }}
+            >
+              <View>
+                <Text
+                  style={{ fontSize: 17, fontWeight: "900", color: C.text }}
+                >
+                  Missed Activity
+                </Text>
+                <Text
+                  style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}
+                >
+                  {missedItems.length} items need attention
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowMissedModal(false)}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 15,
+                  backgroundColor: C.bg,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name="close" size={16} color={C.textMuted} />
+              </TouchableOpacity>
+            </View>
+            {missedItems.length > 0 ? (
+              <ScrollView
+                style={{ maxHeight: 300 }}
+                showsVerticalScrollIndicator={false}
+              >
+                {missedItems.map((item, i) => (
+                  <TouchableOpacity
+                    key={item?._id || i}
+                    onPress={() => {
+                      setShowMissedModal(false);
+                      openDetail(item);
+                    }}
+                    style={[
+                      {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingVertical: 11,
+                        gap: 10,
+                      },
+                      i < missedItems.length - 1 && {
+                        borderBottomWidth: 1,
+                        borderBottomColor: C.divider,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 10,
+                        backgroundColor: C.danger + "12",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Ionicons
+                        name="alert-circle"
+                        size={15}
+                        color={C.danger}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: "800",
+                          color: C.text,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {item?.name || "Untitled"}
+                      </Text>
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          color: C.textMuted,
+                          marginTop: 2,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {item?.product || "General"} ·{" "}
+                        {item?.latestFollowUpDate ||
+                          item?.nextFollowUpDate ||
+                          "No date"}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={14}
+                      color={C.textMuted}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <View
+                style={{ paddingVertical: 20, alignItems: "center", gap: 8 }}
+              >
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={28}
+                  color={C.success}
+                />
+                <Text
+                  style={{ fontSize: 14, fontWeight: "700", color: C.textSub }}
+                >
+                  No missed activity
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Calendar ── */}
+      <Modal
+        visible={isDatePickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDatePickerVisible(false)}
+      >
+        <View style={MS.center}>
+          <View style={MS.calCard}>
+            <View style={MS.dragHandle} />
+            <Text
+              style={{
+                fontSize: 16,
+                fontWeight: "800",
+                color: C.text,
+                marginBottom: 12,
+                marginTop: 4,
+              }}
+            >
+              {datePickerTarget === "filter"
+                ? "Filter by date"
+                : "Choose next date"}
+            </Text>
+            <Calendar
+              current={
+                datePickerTarget === "filter"
+                  ? selectedDate
+                  : editNextDate || selectedDate
+              }
+              markedDates={calMarkedDates}
+              onMonthChange={(month) => {
+                if (!month?.year || !month?.month) return;
+                setCalendarMonth(
+                  `${month.year}-${String(month.month).padStart(2, "0")}`,
+                );
+              }}
+              onDayPress={(day) => {
+                if (day?.dateString)
+                  handleConfirmDate(new Date(`${day.dateString}T00:00:00`));
+              }}
+              enableSwipeMonths
+              hideExtraDays
+              dayComponent={({ date, state }) => {
+                const iso = date?.dateString || "";
+                const summary = calendarDateSummary[iso] || { total: 0, missed: 0 };
+                const target =
+                  datePickerTarget === "filter"
+                    ? selectedDate
+                    : editNextDate || selectedDate;
+                const isSelected = iso && iso === target;
+                const isToday = iso === toIso(new Date());
+                const isDisabled = state === "disabled";
+                return (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    style={[
+                      MS.calDayWrap,
+                      isSelected && MS.calDayWrapSelected,
+                    ]}
+                    onPress={() => {
+                      if (!iso) return;
+                      handleConfirmDate(new Date(`${iso}T00:00:00`));
+                    }}
+                  >
+                    <Text
+                      style={[
+                        MS.calDayText,
+                        isDisabled && MS.calDayTextDisabled,
+                        isToday && !isSelected && MS.calDayTextToday,
+                        isSelected && MS.calDayTextSelected,
+                      ]}
+                    >
+                      {date?.day}
+                    </Text>
+                    <View style={MS.calCountRow}>
+                      {summary.total > 0 ? (
+                        <View
+                          style={[
+                            MS.calCountBadge,
+                            isSelected && MS.calCountBadgeSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              MS.calCountBadgeText,
+                              isSelected && MS.calCountBadgeTextSelected,
+                            ]}
+                          >
+                            F+{summary.total}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {summary.missed > 0 ? (
+                        <View
+                          style={[
+                            MS.calMissedBadge,
+                            isSelected && MS.calMissedBadgeSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              MS.calMissedBadgeText,
+                              isSelected && MS.calMissedBadgeTextSelected,
+                            ]}
+                          >
+                            M+{summary.missed}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              }}
+              theme={{
+                calendarBackground: C.card,
+                dayTextColor: C.text,
+                todayTextColor: C.primary,
+                arrowColor: C.primary,
+                textDisabledColor: "#D5DBE8",
+                selectedDayBackgroundColor: C.primary,
+                selectedDayTextColor: "#fff",
+                monthTextColor: C.text,
+                textMonthFontWeight: "800",
+                textDayHeaderFontWeight: "700",
+                textDayFontWeight: "600",
+                textMonthFontSize: 16,
+              }}
+              style={{ borderRadius: 14, overflow: "hidden" }}
+            />
+            <TouchableOpacity
+              onPress={() => setDatePickerVisible(false)}
+              style={{
+                marginTop: 14,
+                paddingVertical: 12,
+                alignItems: "center",
+                borderTopWidth: 1,
+                borderTopColor: C.divider,
+              }}
+            >
+              <Text
+                style={{ color: C.danger, fontWeight: "700", fontSize: 14 }}
+              >
+                Cancel
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Detail view overlay (full screen, replaces stack nav) ── */}
+      {detailEnquiry && (
+        <View style={StyleSheet.absoluteFill}>
+          <DetailView
+            enquiry={detailEnquiry}
+            history={detailHistory}
+            historyLoading={historyLoading}
+            onClose={() => setDetailEnquiry(null)}
+            selectedEnquiry={selectedEnquiry || detailEnquiry}
+            editRemarks={editRemarks}
+            setEditRemarks={setEditRemarks}
+            editActivityType={editActivityType}
+            setEditActivityType={setEditActivityType}
+            editStatus={editStatus}
+            setEditStatus={setEditStatus}
+            editNextDate={editNextDate}
+            editNextTime={editNextTime}
+            setEditNextTime={setEditNextTime}
+            editAmount={editAmount}
+            setEditAmount={setEditAmount}
+            isSavingEdit={isSavingEdit}
+            showDatePicker={showDatePicker}
+            setTimePickerValue={setTimePickerValue}
+            setTimePickerVisible={setTimePickerVisible}
+            isTimePickerVisible={isTimePickerVisible}
+            handleConfirmTime={handleConfirmTime}
+            setEditTimeMeridian={setEditTimeMeridian}
+            timePickerValue={timePickerValue}
+            onSaveFollowUp={handleSaveEdit}
+            onStartCall={() => handleStartContactCall(detailEnquiry)}
+            sc={sc}
+            currentStatus={selectedEnquiry?.status || detailEnquiry?.status}
+          />
+        </View>
+      )}
+    </SafeAreaView>
+  );
+}
+
+// ─── Main screen styles ───────────────────────────────────────────────────────
+const MS = StyleSheet.create({
+  center: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  header: {
+    backgroundColor: C.card,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    shadowColor: C.shadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  headerTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingTop: 8,
+    marginBottom: 10,
+  },
+  headerBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  profileBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  profileFallback: {
+    flex: 1,
+    backgroundColor: C.primarySoft,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  resultChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: C.primarySoft,
+    borderWidth: 1,
+    borderColor: C.primaryMid,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  resultChipText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: C.primaryDark,
+    minWidth: 12,
+    textAlign: "center",
+  },
+  notifDot: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: C.danger,
+    borderWidth: 1.5,
+    borderColor: C.card,
+  },
+  notifBadge: {
+    position: "absolute",
+    top: -4,
+    right: -5,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: C.danger,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: C.card,
+  },
+  notifBadgeText: {
+    fontSize: 9,
+    color: "#fff",
+    fontWeight: "800",
+    lineHeight: 11,
+  },
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: C.bg,
+    borderRadius: 12,
+    height: 42,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginBottom: 2,
+  },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: C.text },
+  dateBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: C.primarySoft,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    height: 34,
+    marginRight: 4,
+  },
+  tabScroll: {
+    backgroundColor: C.card,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    maxHeight: 52,
+  },
+  tabPill: {
+    minWidth: 90,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 18,
+    borderWidth: 1.25,
+    borderColor: C.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: C.bg,
+  },
+  tabIconWrap: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabText: { fontSize: 11, fontWeight: "700", color: C.textMuted, flex: 1 },
+  tabCount: {
+    minWidth: 22,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabCountText: {
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  logoutBox: {
+    backgroundColor: C.card,
+    borderRadius: 22,
+    padding: 22,
+    width: "90%",
+    maxWidth: 320,
+    alignItems: "center",
+  },
+  logoutIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: C.danger + "15",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  logoutTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: C.text,
+    marginBottom: 5,
+  },
+  logoutSub: {
+    fontSize: 13,
+    color: C.textMuted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  logoutCancel: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: C.bg,
+    borderWidth: 1.5,
+    borderColor: C.border,
+  },
+  logoutConfirm: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  missedCard: {
+    backgroundColor: C.card,
+    borderRadius: 20,
+    padding: 16,
+    width: "90%",
+    maxWidth: 360,
+    maxHeight: "70%",
+  },
+  dragHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.border,
+    alignSelf: "center",
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  calCard: {
+    backgroundColor: C.card,
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 24,
+    padding: 18,
+  },
+  calDayWrap: {
+    minHeight: 48,
+    minWidth: 40,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 6,
+    paddingBottom: 4,
+    borderRadius: 12,
+  },
+  calDayWrapSelected: {
+    backgroundColor: C.primary,
+  },
+  calDayText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: C.text,
+  },
+  calDayTextSelected: {
+    color: "#fff",
+  },
+  calDayTextToday: {
+    color: C.primary,
+  },
+  calDayTextDisabled: {
+    color: "#D5DBE8",
+  },
+  calCountRow: {
+    marginTop: 4,
+    alignItems: "center",
+    gap: 2,
+  },
+  calCountBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: C.primarySoft,
+  },
+  calCountBadgeSelected: {
+    backgroundColor: "rgba(255,255,255,0.16)",
+  },
+  calCountBadgeText: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: C.primaryDark,
+  },
+  calCountBadgeTextSelected: {
+    color: "#fff",
+  },
+  calMissedBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: C.dangerSoft || "#FEE2E2",
+  },
+  calMissedBadgeSelected: {
+    backgroundColor: "rgba(255,255,255,0.22)",
+  },
+  calMissedBadgeText: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: C.danger,
+  },
+  calMissedBadgeTextSelected: {
+    color: "#fff",
+  },
 });

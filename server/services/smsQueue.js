@@ -1,10 +1,7 @@
 const axios = require("axios");
+const { SIM_GATEWAY_URLS } = require("../config/smsGatewayConfig");
 
 const parseGatewayList = () => {
-  const urlsRaw = String(process.env.SMS_GATEWAY_BASE_URLS || "").trim();
-  const singleRaw = String(process.env.SMS_GATEWAY_BASE_URL || "").trim();
-  const apiKey = String(process.env.SMS_GATEWAY_API_KEY || "").trim();
-
   const normalizeBaseUrl = (input) => {
     let u = String(input || "").trim();
     if (!u) return "";
@@ -15,9 +12,8 @@ const parseGatewayList = () => {
     return u.replace(/\/+$/, "");
   };
 
-  const urls = (urlsRaw || singleRaw)
-    .split(",")
-    .map((s) => s.trim())
+  const urls = (Array.isArray(SIM_GATEWAY_URLS) ? SIM_GATEWAY_URLS : [])
+    .map((s) => String(s || "").trim())
     .filter(Boolean)
     .map((u) => normalizeBaseUrl(u))
     .filter(Boolean);
@@ -25,7 +21,6 @@ const parseGatewayList = () => {
   return urls.map((baseUrl, idx) => ({
     id: `${idx + 1}`,
     baseUrl,
-    apiKey,
     cooldownUntil: 0,
     failures: 0,
     successes: 0,
@@ -148,7 +143,6 @@ const sendViaGateway = async ({ gateway, phoneNumber, message }) => {
   }
 
   const headers = { "Content-Type": "application/json" };
-  if (gateway.apiKey) headers["x-api-key"] = gateway.apiKey;
 
   const resp = await axios.post(
     `${gateway.baseUrl}/send-otp`,
@@ -175,7 +169,7 @@ const sendViaGateway = async ({ gateway, phoneNumber, message }) => {
 
 const runJob = async (job) => {
   if (!gateways.length) {
-    return { ok: false, error: "SMS_GATEWAY_BASE_URL(S) not configured" };
+    return { ok: false, error: "Android SIM SMS gateway is not configured" };
   }
 
   const maxAttempts = Math.max(1, gateways.length * RETRY_ROUNDS);

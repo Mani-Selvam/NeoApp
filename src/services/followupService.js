@@ -1,11 +1,19 @@
+import { DeviceEventEmitter } from "react-native";
 import getApiClient from "./apiClient";
 
 // GET FOLLOWUPS (with tab filter and pagination)
-export const getFollowUps = async (tab = "Today", page = 1, limit = 20) => {
+export const getFollowUps = async (
+    tab = "Today",
+    page = 1,
+    limit = 20,
+    selectedDate = "",
+) => {
     try {
         const client = await getApiClient();
+        const params = { tab, page, limit };
+        if (selectedDate) params.date = selectedDate;
         const response = await client.get("/followups", {
-            params: { tab, page, limit },
+            params,
         });
         return response.data; // Now returns { data: [], pagination: {} }
     } catch (error) {
@@ -22,6 +30,10 @@ export const createFollowUp = async (followUpData) => {
     try {
         const client = await getApiClient();
         const response = await client.post("/followups", followUpData);
+        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+            action: "create",
+            item: response.data,
+        });
         return response.data;
     } catch (error) {
         console.error(
@@ -37,6 +49,10 @@ export const updateFollowUp = async (id, followUpData) => {
     try {
         const client = await getApiClient();
         const response = await client.put(`/followups/${id}`, followUpData);
+        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+            action: "update",
+            item: response.data,
+        });
         return response.data;
     } catch (error) {
         console.error(
@@ -52,6 +68,10 @@ export const deleteFollowUp = async (id) => {
     try {
         const client = await getApiClient();
         const response = await client.delete(`/followups/${id}`);
+        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+            action: "delete",
+            id,
+        });
         return response.data;
     } catch (error) {
         console.error(
@@ -63,23 +83,6 @@ export const deleteFollowUp = async (id) => {
 };
 
 // GET FOLLOW-UP HISTORY (all records for an enquiry)
-// GET AUTOCALL FOLLOWUPS
-export const getAutoCallFollowUps = async (startDate, endDate, filter) => {
-    try {
-        const client = await getApiClient();
-        const response = await client.get("/followups/autocall", {
-            params: { startDate, endDate, filter },
-        });
-        return response.data;
-    } catch (error) {
-        console.error(
-            "Get autocall followups error:",
-            error.response?.data || error.message,
-        );
-        throw error;
-    }
-};
-
 export const getFollowUpHistory = async (enqNoOrId) => {
     try {
         const client = await getApiClient();

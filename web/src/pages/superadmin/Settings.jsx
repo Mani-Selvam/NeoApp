@@ -199,6 +199,12 @@ export default function Settings() {
       const res = await api.updateSecurityPolicy(payload);
       const next = res?.policy || null;
       setSecurityPolicy(next);
+      setEnforce2fa(Boolean(next?.enforceSuperadmin2fa));
+      setSessionTimeoutMinutes(String(next?.superadminSessionTimeoutMinutes ?? 30));
+      setRestrictByIp(Boolean(next?.restrictSuperadminLoginsByIp));
+      setIpAllowlist(String(next?.superadminIpAllowlist ?? ""));
+      setPasswordMinLength(String(next?.passwordMinLength ?? 8));
+      setPasswordRotationDays(String(next?.passwordRotationDays ?? 90));
       setSecuritySaved(true);
     } catch (e) {
       setSecurityError(e.message || "Failed to save security policy");

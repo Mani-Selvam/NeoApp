@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -15,28 +15,32 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { FormSkeleton } from "../components/skeleton/screens";
+import { SkeletonCard, SkeletonLine, SkeletonPulse, SkeletonSpacer } from "../components/skeleton/Skeleton";
 import { getEmailSettings, saveEmailSettings } from "../services/emailService";
 
 // ─── DESIGN TOKENS (matches EmailScreen) ─────────────────────────────────────
 const T = {
-    bg: "#FAF8F5",
+    bg: "#F2F4F8",
     surface: "#FFFFFF",
-    surface2: "#F5F2EE",
-    surface3: "#EDE9E3",
-    ink: "#1A1208",
-    inkMid: "#5C4F3A",
-    inkSoft: "#9A8E7B",
-    line: "#E8E2D9",
-    lineWarm: "#D6CEBC",
-    gold: "#C07B2D",
-    goldMid: "#A0601A",
-    goldSoft: "rgba(192,123,45,0.12)",
-    goldBorder: "rgba(192,123,45,0.30)",
-    ok: "#2D7A4F",
-    okBg: "rgba(45,122,79,0.10)",
-    bad: "#B52A2A",
-    badBg: "rgba(181,42,42,0.10)",
+    surface2: "#FAFBFF",
+    surface3: "#EEF2FF",
+    ink: "#0A0F1E",
+    inkMid: "#3A4060",
+    inkSoft: "#7C85A3",
+    line: "#E8ECF4",
+    lineWarm: "#F0F2F8",
+    gold: "#1A6BFF",
+    goldMid: "#0055E5",
+    goldSoft: "rgba(26,107,255,0.12)",
+    goldBorder: "rgba(26,107,255,0.28)",
+    ok: "#00C48C",
+    okBg: "rgba(0,196,140,0.12)",
+    bad: "#FF3B5C",
+    badBg: "rgba(255,59,92,0.12)",
 };
+
+const PASSWORD_MASK = "********";
 
 // ─── ANIMATED SECTION CARD ───────────────────────────────────────────────────
 const SectionCard = ({ children, delay = 0 }) => {
@@ -58,7 +62,7 @@ const SectionCard = ({ children, delay = 0 }) => {
                 useNativeDriver: true,
             }),
         ]).start();
-    }, []);
+    }, [delay, opacity, translateY]);
 
     return (
         <Animated.View style={{ opacity, transform: [{ translateY }] }}>
@@ -68,14 +72,13 @@ const SectionCard = ({ children, delay = 0 }) => {
 };
 
 // ─── SECTION LABEL ───────────────────────────────────────────────────────────
-const SectionHeader = ({ icon, title, subtitle }) => (
+const SectionHeader = ({ icon, title }) => (
     <View style={S.sectionHeader}>
         <View style={S.sectionIconWrap}>
             <Ionicons name={icon} size={16} color={T.gold} />
         </View>
         <View style={{ flex: 1 }}>
             <Text style={S.sectionTitle}>{title}</Text>
-            {subtitle ? <Text style={S.sectionSub}>{subtitle}</Text> : null}
         </View>
     </View>
 );
@@ -90,13 +93,12 @@ const Field = ({
     keyboardType,
     icon,
     hint,
+    onToggleSecureEntry,
     last = false,
 }) => {
-    const [focused, setFocused] = useState(false);
     const borderAnim = useRef(new Animated.Value(0)).current;
 
     const onFocus = () => {
-        setFocused(true);
         Animated.timing(borderAnim, {
             toValue: 1,
             duration: 180,
@@ -104,7 +106,6 @@ const Field = ({
         }).start();
     };
     const onBlur = () => {
-        setFocused(false);
         Animated.timing(borderAnim, {
             toValue: 0,
             duration: 180,
@@ -132,6 +133,7 @@ const Field = ({
             </View>
             <Animated.View style={[S.inputWrap, { borderColor }]}>
                 <TextInput
+                    key={secureTextEntry ? "secure-on" : "secure-off"}
                     value={value}
                     onChangeText={onChangeText}
                     placeholder={placeholder}
@@ -139,18 +141,30 @@ const Field = ({
                     secureTextEntry={secureTextEntry}
                     keyboardType={keyboardType}
                     autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType={secureTextEntry ? "password" : "none"}
                     onFocus={onFocus}
                     onBlur={onBlur}
                     style={S.input}
                 />
-                {secureTextEntry && (
-                    <View style={S.inputSuffix}>
+                {(typeof onToggleSecureEntry === "function" || secureTextEntry) && (
+                    <TouchableOpacity
+                        onPress={onToggleSecureEntry}
+                        style={S.inputSuffix}
+                        activeOpacity={0.7}
+                        disabled={!onToggleSecureEntry}>
                         <Ionicons
-                            name="lock-closed-outline"
-                            size={14}
+                            name={
+                                onToggleSecureEntry
+                                    ? secureTextEntry
+                                        ? "eye-outline"
+                                        : "eye-off-outline"
+                                    : "lock-closed-outline"
+                            }
+                            size={16}
                             color={T.inkSoft}
                         />
-                    </View>
+                    </TouchableOpacity>
                 )}
             </Animated.View>
             {hint ? <Text style={S.fieldHint}>{hint}</Text> : null}
@@ -240,27 +254,6 @@ const ConnectionToggle = ({ value, onChange }) => (
 );
 
 // ─── INFO ROW ────────────────────────────────────────────────────────────────
-const InfoRow = ({ icon, text, type = "info" }) => (
-    <View
-        style={[
-            S.infoRow,
-            type === "warn" && {
-                backgroundColor: T.okBg,
-                borderColor: T.ok + "44",
-            },
-        ]}>
-        <Ionicons
-            name={icon}
-            size={14}
-            color={type === "warn" ? T.ok : T.gold}
-            style={{ marginTop: 1 }}
-        />
-        <Text style={[S.infoText, type === "warn" && { color: T.ok }]}>
-            {text}
-        </Text>
-    </View>
-);
-
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
@@ -274,6 +267,15 @@ export default function EmailSettingsScreen({ navigation }) {
     const [smtpPort, setSmtpPort] = useState("587");
     const [smtpUser, setSmtpUser] = useState("");
     const [smtpPass, setSmtpPass] = useState("");
+    const [showSmtpPass, setShowSmtpPass] = useState(false);
+    const [saveSentCopy, setSaveSentCopy] = useState(false);
+    const [imapHost, setImapHost] = useState("");
+    const [imapPort, setImapPort] = useState("993");
+    const [imapUser, setImapUser] = useState("");
+    const [imapPass, setImapPass] = useState("");
+    const [showImapPass, setShowImapPass] = useState(false);
+    const [imapSecure, setImapSecure] = useState(true);
+    const [sentFolder, setSentFolder] = useState("Sent");
     const [fromName, setFromName] = useState("");
     const [fromEmail, setFromEmail] = useState("");
     const [smtpSecure, setSmtpSecure] = useState(false);
@@ -291,7 +293,14 @@ export default function EmailSettingsScreen({ navigation }) {
                     setSmtpPort(String(s.smtpPort || 587));
                     setSmtpSecure(Boolean(s.smtpSecure));
                     setSmtpUser(s.smtpUser || "");
-                    setSmtpPass(s.hasPassword ? "••••••••" : "");
+                    setSmtpPass(s.hasPassword ? PASSWORD_MASK : "");
+                    setSaveSentCopy(Boolean(s.saveSentCopy));
+                    setImapHost(s.imapHost || "");
+                    setImapPort(String(s.imapPort || 993));
+                    setImapSecure(s.imapSecure !== false);
+                    setImapUser(s.imapUser || "");
+                    setImapPass(s.hasImapPassword ? PASSWORD_MASK : "");
+                    setSentFolder(s.sentFolder || "Sent");
                     setFromName(s.fromName || "");
                     setFromEmail(s.fromEmail || "");
                 }
@@ -316,6 +325,11 @@ export default function EmailSettingsScreen({ navigation }) {
         setSmtpPort(val ? "465" : "587");
     };
 
+    const onImapEncryptionChange = (val) => {
+        setImapSecure(val);
+        setImapPort(val ? "993" : "143");
+    };
+
     const onSave = async () => {
         try {
             if (!smtpHost.trim() || !smtpPort.trim() || !smtpUser.trim())
@@ -325,13 +339,28 @@ export default function EmailSettingsScreen({ navigation }) {
                 );
             if (!smtpPass.trim())
                 return Alert.alert("Missing", "SMTP Password is required.");
+            const normalizedPassword = smtpPass.trim();
+            const isMaskedPassword =
+                normalizedPassword === PASSWORD_MASK ||
+                /^[*•]+$/.test(normalizedPassword);
+            const normalizedImapPassword = imapPass.trim();
+            const isMaskedImapPassword =
+                normalizedImapPassword === PASSWORD_MASK ||
+                /^[*â€¢]+$/.test(normalizedImapPassword);
             setSaving(true);
             await saveEmailSettings({
                 smtpHost: smtpHost.trim(),
                 smtpPort: Number(smtpPort || 587),
                 smtpSecure: Boolean(smtpSecure),
                 smtpUser: smtpUser.trim(),
-                smtpPass: smtpPass.trim(),
+                smtpPass: isMaskedPassword ? PASSWORD_MASK : normalizedPassword,
+                saveSentCopy: Boolean(saveSentCopy),
+                imapHost: imapHost.trim(),
+                imapPort: Number(imapPort || 993),
+                imapSecure: Boolean(imapSecure),
+                imapUser: imapUser.trim(),
+                imapPass: isMaskedImapPassword ? PASSWORD_MASK : normalizedImapPassword,
+                sentFolder: sentFolder.trim() || "Sent",
                 fromName: fromName.trim(),
                 fromEmail: fromEmail.trim(),
             });
@@ -351,7 +380,7 @@ export default function EmailSettingsScreen({ navigation }) {
         <View style={S.root}>
             {/* Background */}
             <LinearGradient
-                colors={["#FAF8F5", "#F5F0E8", "#FAF8F5"]}
+                colors={[T.bg, T.bg, T.bg]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={StyleSheet.absoluteFill}
@@ -371,7 +400,6 @@ export default function EmailSettingsScreen({ navigation }) {
                 </TouchableOpacity>
                 <View style={{ alignItems: "center" }}>
                     <Text style={S.headerTitle}>Email Settings</Text>
-                    <Text style={S.headerSub}>SMTP Configuration</Text>
                 </View>
                 {/* Save shortcut */}
                 <TouchableOpacity
@@ -393,12 +421,15 @@ export default function EmailSettingsScreen({ navigation }) {
 
             {/* ── LOADING ───────────────────────────────────────────── */}
             {loading ? (
-                <View style={S.loadingWrap}>
-                    <View style={S.loadingBox}>
-                        <ActivityIndicator color={T.gold} size="large" />
-                        <Text style={S.loadingText}>Loading settings…</Text>
+                <SkeletonPulse>
+                    <View style={{ paddingHorizontal: 16, paddingTop: 14 }}>
+                        <SkeletonCard style={{ borderRadius: 20 }}>
+                            <SkeletonLine width="52%" height={14} />
+                            <SkeletonSpacer h={14} />
+                            <FormSkeleton fields={7} />
+                        </SkeletonCard>
                     </View>
-                </View>
+                </SkeletonPulse>
             ) : (
                 <KeyboardAvoidingView
                     behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -415,7 +446,6 @@ export default function EmailSettingsScreen({ navigation }) {
                             <SectionHeader
                                 icon="server-outline"
                                 title="SMTP Server"
-                                subtitle="Outgoing mail server details"
                             />
                             <View style={S.cardDivider} />
 
@@ -425,7 +455,6 @@ export default function EmailSettingsScreen({ navigation }) {
                                 value={smtpHost}
                                 onChangeText={setSmtpHost}
                                 placeholder="smtp.gmail.com"
-                                hint="Your mail provider's outgoing server address"
                             />
                             <Field
                                 label="SMTP PORT"
@@ -448,7 +477,6 @@ export default function EmailSettingsScreen({ navigation }) {
                             <SectionHeader
                                 icon="key-outline"
                                 title="Authentication"
-                                subtitle="Login credentials for your mail server"
                             />
                             <View style={S.cardDivider} />
 
@@ -465,16 +493,12 @@ export default function EmailSettingsScreen({ navigation }) {
                                 value={smtpPass}
                                 onChangeText={setSmtpPass}
                                 placeholder="App password or SMTP password"
-                                secureTextEntry
+                                secureTextEntry={!showSmtpPass}
+                                onToggleSecureEntry={() =>
+                                    setShowSmtpPass((prev) => !prev)
+                                }
                                 last
                             />
-                            <View style={{ marginTop: 16 }}>
-                                <InfoRow
-                                    icon="shield-outline"
-                                    text="Password is stored encrypted on the server — never in the app."
-                                    type="warn"
-                                />
-                            </View>
                         </SectionCard>
 
                         {/* ── SENDER IDENTITY ─────────────────────── */}
@@ -482,7 +506,6 @@ export default function EmailSettingsScreen({ navigation }) {
                             <SectionHeader
                                 icon="mail-outline"
                                 title="Sender Identity"
-                                subtitle="How recipients see your emails"
                             />
                             <View style={S.cardDivider} />
 
@@ -492,7 +515,6 @@ export default function EmailSettingsScreen({ navigation }) {
                                 value={fromName}
                                 onChangeText={setFromName}
                                 placeholder="Sales Team"
-                                hint="Displayed as the sender name"
                             />
                             <Field
                                 label="FROM EMAIL"
@@ -500,78 +522,112 @@ export default function EmailSettingsScreen({ navigation }) {
                                 value={fromEmail}
                                 onChangeText={setFromEmail}
                                 placeholder="sales@company.com"
-                                hint="Reply-to address for outgoing emails"
+                                hint="Best delivery: use the same email or same domain as the SMTP username. Leave this blank to use the SMTP email automatically."
                                 last
                             />
                         </SectionCard>
 
                         {/* ── PROVIDER HINTS ──────────────────────── */}
+                        {/* ── SAVE BUTTON ─────────────────────────── */}
                         <SectionCard delay={300}>
                             <SectionHeader
-                                icon="information-circle-outline"
-                                title="Common Providers"
-                                subtitle="Quick reference settings"
+                                icon="folder-open-outline"
+                                title="Mailbox Sent Sync"
                             />
                             <View style={S.cardDivider} />
-                            {[
-                                {
-                                    name: "Gmail",
-                                    host: "smtp.gmail.com",
-                                    port: "587 / 465",
-                                    note: "Use App Password",
-                                },
-                                {
-                                    name: "Outlook",
-                                    host: "smtp.office365.com",
-                                    port: "587",
-                                    note: "Use account password",
-                                },
-                                {
-                                    name: "Yahoo",
-                                    host: "smtp.mail.yahoo.com",
-                                    port: "587 / 465",
-                                    note: "Use App Password",
-                                },
-                                {
-                                    name: "Zoho",
-                                    host: "smtp.zoho.com",
-                                    port: "587 / 465",
-                                    note: "Use account password",
-                                },
-                            ].map((p, i) => (
-                                <View
-                                    key={p.name}
-                                    style={[
-                                        S.providerRow,
-                                        i > 0 && {
-                                            borderTopWidth: 1,
-                                            borderTopColor: T.line,
-                                        },
-                                    ]}>
-                                    <View style={S.providerDot} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={S.providerName}>
-                                            {p.name}
-                                        </Text>
-                                        <Text style={S.providerHost}>
-                                            {p.host}
-                                        </Text>
+
+                            <View style={S.fieldLabelRow}>
+                                <Ionicons
+                                    name="archive-outline"
+                                    size={12}
+                                    color={T.inkSoft}
+                                    style={{ marginRight: 5 }}
+                                />
+                                <Text style={S.fieldLabel}>SAVE TO WEBMAIL SENT</Text>
+                            </View>
+                            <View style={S.toggleRow}>
+                                <TouchableOpacity
+                                    onPress={() => setSaveSentCopy(false)}
+                                    activeOpacity={0.8}
+                                    style={[S.toggleBtn, !saveSentCopy && S.toggleBtnActive]}>
+                                    {!saveSentCopy ? (
+                                        <Ionicons name="checkmark" size={13} color={T.gold} />
+                                    ) : null}
+                                    <Text style={[S.toggleBtnText, !saveSentCopy && S.toggleBtnTextActive]}>
+                                        Off
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => setSaveSentCopy(true)}
+                                    activeOpacity={0.8}
+                                    style={[S.toggleBtn, saveSentCopy && S.toggleBtnActive]}>
+                                    {saveSentCopy ? (
+                                        <Ionicons name="checkmark" size={13} color={T.gold} />
+                                    ) : null}
+                                    <Text style={[S.toggleBtnText, saveSentCopy && S.toggleBtnTextActive]}>
+                                        On
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                            <Text style={S.toggleHint}>
+                                Turn this on to save every app-sent email into your domain mailbox Sent folder using IMAP.
+                            </Text>
+
+                            {saveSentCopy ? (
+                                <View style={{ marginTop: 18 }}>
+                                    <Field
+                                        label="IMAP HOST"
+                                        icon="cloud-outline"
+                                        value={imapHost}
+                                        onChangeText={setImapHost}
+                                        placeholder="imap.yourdomain.com"
+                                        hint="Leave blank to auto-guess from SMTP host if your provider supports it."
+                                    />
+                                    <Field
+                                        label="IMAP PORT"
+                                        icon="hardware-chip-outline"
+                                        value={imapPort}
+                                        onChangeText={setImapPort}
+                                        placeholder="993"
+                                        keyboardType="number-pad"
+                                    />
+                                    <View style={{ marginTop: 4, marginBottom: 20 }}>
+                                        <ConnectionToggle
+                                            value={imapSecure}
+                                            onChange={onImapEncryptionChange}
+                                        />
                                     </View>
-                                    <View style={{ alignItems: "flex-end" }}>
-                                        <View style={S.portChip}>
-                                            <Text style={S.portChipText}>
-                                                {p.port}
-                                            </Text>
-                                        </View>
-                                        <Text style={S.providerNote}>
-                                            {p.note}
-                                        </Text>
-                                    </View>
+                                    <Field
+                                        label="IMAP USERNAME / EMAIL"
+                                        icon="person-circle-outline"
+                                        value={imapUser}
+                                        onChangeText={setImapUser}
+                                        placeholder="Leave blank to use SMTP username"
+                                    />
+                                    <Field
+                                        label="IMAP PASSWORD"
+                                        icon="lock-closed-outline"
+                                        value={imapPass}
+                                        onChangeText={setImapPass}
+                                        placeholder="Leave blank to use SMTP password"
+                                        secureTextEntry={!showImapPass}
+                                        onToggleSecureEntry={() =>
+                                            setShowImapPass((prev) => !prev)
+                                        }
+                                    />
+                                    <Field
+                                        label="SENT FOLDER NAME"
+                                        icon="file-tray-full-outline"
+                                        value={sentFolder}
+                                        onChangeText={setSentFolder}
+                                        placeholder="Sent"
+                                        hint="Common values: Sent, Sent Items, INBOX.Sent"
+                                        last
+                                    />
                                 </View>
-                            ))}
+                            ) : null}
                         </SectionCard>
 
-                        {/* ── SAVE BUTTON ─────────────────────────── */}
                         <TouchableOpacity
                             disabled={saving}
                             onPress={onSave}
@@ -583,13 +639,13 @@ export default function EmailSettingsScreen({ navigation }) {
                                 end={{ x: 1, y: 0 }}
                                 style={S.saveBtn}>
                                 {saving ? (
-                                    <ActivityIndicator color="#FFF9F0" />
+                                    <ActivityIndicator color="#FFFFFF" />
                                 ) : (
                                     <>
                                         <Ionicons
                                             name="save-outline"
                                             size={18}
-                                            color="#FFF9F0"
+                                            color="#FFFFFF"
                                         />
                                         <Text style={S.saveBtnText}>
                                             Save Settings
@@ -651,12 +707,6 @@ const S = StyleSheet.create({
         fontSize: 17,
         fontWeight: "800",
         letterSpacing: -0.4,
-    },
-    headerSub: {
-        color: T.inkSoft,
-        fontSize: 11,
-        fontWeight: "700",
-        marginTop: 2,
     },
 
     // ── Loading ──
@@ -728,12 +778,6 @@ const S = StyleSheet.create({
         fontWeight: "900",
         letterSpacing: -0.2,
         marginTop: 2,
-    },
-    sectionSub: {
-        color: T.inkSoft,
-        fontSize: 12,
-        fontWeight: "600",
-        marginTop: 3,
     },
 
     // ── Field ──
@@ -841,38 +885,6 @@ const S = StyleSheet.create({
     },
 
     // ── Provider hints ──
-    providerRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingVertical: 13,
-        gap: 12,
-    },
-    providerDot: {
-        width: 7,
-        height: 7,
-        borderRadius: 4,
-        backgroundColor: T.gold,
-        marginTop: 2,
-    },
-    providerName: { color: T.ink, fontSize: 13, fontWeight: "800" },
-    providerHost: {
-        color: T.inkSoft,
-        fontSize: 12,
-        fontWeight: "600",
-        marginTop: 2,
-    },
-    portChip: {
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 8,
-        backgroundColor: T.goldSoft,
-        borderWidth: 1,
-        borderColor: T.goldBorder,
-        marginBottom: 4,
-    },
-    portChipText: { color: T.gold, fontSize: 11, fontWeight: "900" },
-    providerNote: { color: T.inkSoft, fontSize: 10, fontWeight: "600" },
-
     // ── Save Button ──
     saveBtn: {
         height: 56,
@@ -888,7 +900,7 @@ const S = StyleSheet.create({
         elevation: 5,
     },
     saveBtnText: {
-        color: "#FFF9F0",
+        color: "#FFFFFF",
         fontWeight: "900",
         fontSize: 16,
         letterSpacing: 0.2,

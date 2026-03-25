@@ -35,6 +35,7 @@ const followUpSchema = new mongoose.Schema({
     },
     note: { type: String },
     remarks: { type: String, required: true },
+    enquiryStatus: { type: String },
     followUpDate: { type: String }, // YYYY-MM-DD
     nextFollowUpDate: { type: String }, // YYYY-MM-DD
     activityTime: { type: Date, default: Date.now },

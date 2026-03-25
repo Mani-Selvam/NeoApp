@@ -3,6 +3,7 @@
 This Android app runs an HTTP server on the phone and sends OTP SMS using the phone SIM card.
 
 ## Features
+
 - Foreground background service listening on `http://<phone-ip>:8080`
 - API endpoint: `POST /send-otp`
 - JSON request body: `{ "phone": "...", "message": "..." }`
@@ -12,12 +13,14 @@ This Android app runs an HTTP server on the phone and sends OTP SMS using the ph
   - `{ "status": "failed" }`
 
 ## Permissions
+
 - `SEND_SMS`
 - `INTERNET`
 - `FOREGROUND_SERVICE`
 - `RECEIVE_BOOT_COMPLETED` (optional auto-start)
 
 ## Run
+
 1. Open `sms-gateway-android` in Android Studio.
 2. Build and install on an Android phone with SIM.
 3. Open app once and grant SMS permission.
@@ -25,6 +28,7 @@ This Android app runs an HTTP server on the phone and sends OTP SMS using the ph
 5. Ensure backend can reach phone IP over network.
 
 ## API Example
+
 ```http
 POST /send-otp
 Content-Type: application/json
@@ -36,14 +40,7 @@ Content-Type: application/json
 ```
 
 Response:
+
 ```json
 { "status": "sent" }
 ```
-
-## Backend Integration
-Server now supports SIM gateway first in `server/utils/otpService.js`.
-Set these env vars in backend:
-- `SMS_GATEWAY_BASE_URL=http://<phone-ip>:8080`
-- `SMS_GATEWAY_API_KEY=<optional>`
-
-If SIM gateway fails/unreachable, existing legacy providers remain as fallback.

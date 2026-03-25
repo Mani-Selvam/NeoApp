@@ -9,6 +9,9 @@ const userSchema = new mongoose.Schema({
   twoFactorEnabled: { type: Boolean, default: false },
   twoFactorSecret: { type: String },
   mobile: { type: String },
+  privacyPolicyAccepted: { type: Boolean, default: false },
+  privacyPolicyAcceptedAt: { type: Date },
+  privacyPolicyUrl: { type: String, trim: true },
   logo: { type: String }, // User profile picture or company logo
   status: {
     type: String,
@@ -63,4 +66,27 @@ userSchema.pre("save", async function () {
   this.passwordChangedAt = new Date();
 });
 
-module.exports = mongoose.model("User", userSchema);
+const User = mongoose.models.User || mongoose.model("User", userSchema);
+
+const ensureScopedUserIndexes = async () => {
+  try {
+    if (mongoose.connection.readyState !== 1) return;
+    const indexes = await User.collection.indexes();
+
+    if (indexes.some((idx) => idx.name === "email_1")) {
+      await User.collection.dropIndex("email_1").catch(() => { });
+    }
+
+    await User.syncIndexes().catch(() => { });
+  } catch (_error) {
+    // ignore startup index migration issues
+  }
+};
+
+if (mongoose.connection.readyState === 1) {
+  ensureScopedUserIndexes();
+} else {
+  mongoose.connection.once("connected", ensureScopedUserIndexes);
+}
+
+module.exports = User;

@@ -5,6 +5,8 @@ const planSchema = new mongoose.Schema(
     code: { type: String, required: true, trim: true, uppercase: true, unique: true },
     name: { type: String, required: true, trim: true },
     basePrice: { type: Number, required: true, min: 0, default: 0 },
+    extraAdminPrice: { type: Number, min: 0, default: 0 },
+    extraStaffPrice: { type: Number, min: 0, default: 0 },
     trialDays: { type: Number, min: 0, default: 0 },
     maxAdmins: { type: Number, min: 0, default: 1 },
     maxStaff: { type: Number, min: 0, default: 0 },

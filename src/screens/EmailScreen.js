@@ -32,32 +32,33 @@ import {
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
 const T = {
     // Warm ivory-cream base
-    bg: "#FAF8F5",
+    bg: "#F2F4F8",
     surface: "#FFFFFF",
-    surface2: "#F5F2EE",
-    surface3: "#EDE9E3",
+    surface2: "#FAFBFF",
+    surface3: "#EEF2FF",
 
     // Rich ink text
-    ink: "#1A1208",
-    inkMid: "#5C4F3A",
-    inkSoft: "#9A8E7B",
+    ink: "#0A0F1E",
+    inkMid: "#3A4060",
+    inkSoft: "#7C85A3",
 
     // Borders
-    line: "#E8E2D9",
-    lineWarm: "#D6CEBC",
+    line: "#E8ECF4",
+    lineWarm: "#F0F2F8",
 
     // Accent — deep amber/gold
-    gold: "#C07B2D",
-    goldSoft: "rgba(192,123,45,0.12)",
-    goldBorder: "rgba(192,123,45,0.30)",
+    gold: "#1A6BFF",
+    goldMid: "#0055E5",
+    goldSoft: "rgba(26,107,255,0.12)",
+    goldBorder: "rgba(26,107,255,0.28)",
 
     // Status
-    ok: "#2D7A4F",
-    okBg: "rgba(45,122,79,0.10)",
-    warn: "#B5621A",
-    warnBg: "rgba(181,98,26,0.10)",
-    bad: "#B52A2A",
-    badBg: "rgba(181,42,42,0.10)",
+    ok: "#00C48C",
+    okBg: "rgba(0,196,140,0.12)",
+    warn: "#FF9500",
+    warnBg: "rgba(255,149,0,0.12)",
+    bad: "#FF3B5C",
+    badBg: "rgba(255,59,92,0.12)",
 };
 
 // ─── ANIMATED TAB BUTTON ──────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ const formatDateTime = (v) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default function EmailScreen({ navigation, route }) {
+export default function EmailScreen({ navigation, route, embedded = false }) {
     const insets = useSafeAreaInsets();
     const initialTo = route?.params?.toEmail || route?.params?.email || "";
     const initialEnquiryId =
@@ -234,6 +235,7 @@ export default function EmailScreen({ navigation, route }) {
     const [logsPage, setLogsPage] = useState(1);
     const [logsHasMore, setLogsHasMore] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [selectedLog, setSelectedLog] = useState(null);
 
     const composeEnquiryIdRef = useRef(initialEnquiryId);
 
@@ -250,6 +252,18 @@ export default function EmailScreen({ navigation, route }) {
     const [templateSearch, setTemplateSearch] = useState("");
     const [templateUsage, setTemplateUsage] = useState({});
     const [showAllTemplates, setShowAllTemplates] = useState(false);
+
+    const handleBackPress = useCallback(() => {
+        if (navigation?.canGoBack?.()) {
+            navigation.goBack();
+            return;
+        }
+        if (tab !== "compose") {
+            setTab("compose");
+            return;
+        }
+        navigation?.navigate?.("Home");
+    }, [navigation, tab]);
 
     const composeVarOptions = useMemo(() => {
         if (!composeVarMatch) return [];
@@ -645,7 +659,10 @@ export default function EmailScreen({ navigation, route }) {
     );
 
     const renderLogRow = ({ item }) => (
-        <View style={S.listRow}>
+        <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setSelectedLog(item)}
+            style={S.listRow}>
             <View
                 style={[
                     S.listRowIcon,
@@ -706,8 +723,19 @@ export default function EmailScreen({ navigation, route }) {
                         {item.error}
                     </Text>
                 ) : null}
+                {item.smtpResponse ? (
+                    <Text style={[S.rowMeta, { marginTop: 2 }]} numberOfLines={2}>
+                        SMTP: {item.smtpResponse}
+                    </Text>
+                ) : null}
             </View>
-        </View>
+            <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={T.inkSoft}
+                style={{ marginLeft: 4 }}
+            />
+        </TouchableOpacity>
     );
 
     const logsStatusFilter = tab === "sent" ? "Sent" : "";
@@ -716,20 +744,21 @@ export default function EmailScreen({ navigation, route }) {
         <View style={S.root}>
             {/* Warm gradient background */}
             <LinearGradient
-                colors={["#FAF8F5", "#F5F0E8", "#FAF8F5"]}
+                colors={[T.bg, T.bg, T.bg]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={StyleSheet.absoluteFill}
             />
 
             {/* ── HEADER ─────────────────────────────────────────────── */}
-            <View
-                style={[
-                    S.header,
-                    { paddingTop: insets.top, height: 68 + (insets.top || 0) },
-                ]}>
+            {!embedded ? (
+                <View
+                    style={[
+                        S.header,
+                        { paddingTop: insets.top, height: 68 + (insets.top || 0) },
+                    ]}>
                 <TouchableOpacity
-                    onPress={() => navigation.goBack()}
+                    onPress={handleBackPress}
                     style={S.headerBtn}
                     activeOpacity={0.75}>
                     <Ionicons
@@ -754,6 +783,7 @@ export default function EmailScreen({ navigation, route }) {
                     <Ionicons name="settings-outline" size={20} color={T.ink} />
                 </TouchableOpacity>
             </View>
+            ) : null}
 
             {/* ── TABS ───────────────────────────────────────────────── */}
             <View style={S.tabBar}>
@@ -1018,9 +1048,9 @@ export default function EmailScreen({ navigation, route }) {
                                             name="close-circle"
                                             size={16}
                                             color={T.inkSoft}
-                                        />
-                                    </TouchableOpacity>
-                                </View>
+                    />
+                </TouchableOpacity>
+            </View>
                             ) : null}
                         </View>
 
@@ -1031,18 +1061,18 @@ export default function EmailScreen({ navigation, route }) {
                             activeOpacity={0.85}
                             style={{ marginTop: 24 }}>
                             <LinearGradient
-                                colors={["#C07B2D", "#A0601A"]}
+                                colors={[T.gold, T.goldMid]}
                                 start={{ x: 0, y: 0 }}
                                 end={{ x: 1, y: 0 }}
                                 style={S.sendBtn}>
                                 {loading ? (
-                                    <ActivityIndicator color="#FFF9F0" />
+                                    <ActivityIndicator color="#FFFFFF" />
                                 ) : (
                                     <>
                                         <Ionicons
                                             name="paper-plane-outline"
                                             size={18}
-                                            color="#FFF9F0"
+                                            color="#FFFFFF"
                                         />
                                         <Text style={S.sendText}>
                                             Send Email
@@ -1064,14 +1094,14 @@ export default function EmailScreen({ navigation, route }) {
                         activeOpacity={0.85}
                         style={{ marginBottom: 14 }}>
                         <LinearGradient
-                            colors={["#C07B2D", "#A0601A"]}
+                            colors={[T.gold, T.goldMid]}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 0 }}
                             style={S.addBtn}>
                             <Ionicons
                                 name="add-circle-outline"
                                 size={18}
-                                color="#FFF9F0"
+                                color="#FFFFFF"
                             />
                             <Text style={S.addText}>New Template</Text>
                         </LinearGradient>
@@ -1154,6 +1184,93 @@ export default function EmailScreen({ navigation, route }) {
             ) : null}
 
             {/* ── TEMPLATE PICKER MODAL ────────────────────────────── */}
+            <Modal
+                visible={Boolean(selectedLog)}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setSelectedLog(null)}>
+                <TouchableOpacity
+                    activeOpacity={1}
+                    onPress={() => setSelectedLog(null)}
+                    style={S.overlay}>
+                    <TouchableOpacity
+                        activeOpacity={1}
+                        onPress={() => {}}
+                        style={S.sheet}>
+                        <View style={S.sheetHandle} />
+                        <View style={S.sheetHeaderRow}>
+                            <Text style={S.sheetTitle}>Delivery Details</Text>
+                            <View
+                                style={[
+                                    S.badge,
+                                    {
+                                        backgroundColor: statusBg(selectedLog?.status),
+                                        borderColor:
+                                            statusColor(selectedLog?.status) + "44",
+                                    },
+                                ]}>
+                                <Text
+                                    style={[
+                                        S.badgeText,
+                                        { color: statusColor(selectedLog?.status) },
+                                    ]}>
+                                    {selectedLog?.status || "Log"}
+                                </Text>
+                            </View>
+                        </View>
+                        <ScrollView
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={{ paddingBottom: 8 }}>
+                            <View style={S.detailCard}>
+                                <Text style={S.detailLabel}>To</Text>
+                                <Text style={S.detailValue}>{selectedLog?.to || "â€“"}</Text>
+                                <Text style={S.detailLabel}>Subject</Text>
+                                <Text style={S.detailValue}>{selectedLog?.subject || "â€“"}</Text>
+                                <Text style={S.detailLabel}>Sent At</Text>
+                                <Text style={S.detailValue}>
+                                    {formatDateTime(
+                                        selectedLog?.sentAt || selectedLog?.createdAt,
+                                    )}
+                                </Text>
+                                <Text style={S.detailLabel}>Message ID</Text>
+                                <Text style={S.detailCode}>
+                                    {selectedLog?.messageId || "â€“"}
+                                </Text>
+                                <Text style={S.detailLabel}>SMTP Response</Text>
+                                <Text style={S.detailCode}>
+                                    {selectedLog?.smtpResponse || "â€“"}
+                                </Text>
+                                <Text style={S.detailLabel}>Accepted</Text>
+                                <Text style={S.detailValue}>
+                                    {(selectedLog?.acceptedRecipients || []).length
+                                        ? selectedLog.acceptedRecipients.join(", ")
+                                        : "â€“"}
+                                </Text>
+                                <Text style={S.detailLabel}>Rejected</Text>
+                                <Text style={S.detailValue}>
+                                    {(selectedLog?.rejectedRecipients || []).length
+                                        ? selectedLog.rejectedRecipients.join(", ")
+                                        : "â€“"}
+                                </Text>
+                                <Text style={S.detailLabel}>Error</Text>
+                                <Text
+                                    style={[
+                                        S.detailValue,
+                                        selectedLog?.error ? { color: T.bad } : null,
+                                    ]}>
+                                    {selectedLog?.error || "â€“"}
+                                </Text>
+                            </View>
+                        </ScrollView>
+                        <TouchableOpacity
+                            onPress={() => setSelectedLog(null)}
+                            style={S.sheetClose}>
+                            <Text style={S.sheetCloseText}>Close</Text>
+                        </TouchableOpacity>
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </Modal>
+
             <Modal
                 visible={tplModal}
                 transparent
@@ -1345,7 +1462,7 @@ export default function EmailScreen({ navigation, route }) {
                                     S.emptyHint,
                                     { textAlign: "center", marginVertical: 16 },
                                 ]}>
-                                Tap "All" to browse all templates
+                                Tap All to browse all templates
                             </Text>
                         )}
 
@@ -1473,12 +1590,12 @@ export default function EmailScreen({ navigation, route }) {
                             activeOpacity={0.85}
                             style={{ marginTop: 14 }}>
                             <LinearGradient
-                                colors={["#C07B2D", "#A0601A"]}
+                                colors={[T.gold, T.goldMid]}
                                 start={{ x: 0, y: 0 }}
                                 end={{ x: 1, y: 0 }}
                                 style={S.saveBtn}>
                                 {loading ? (
-                                    <ActivityIndicator color="#FFF9F0" />
+                                    <ActivityIndicator color="#FFFFFF" />
                                 ) : (
                                     <Text style={S.saveBtnText}>
                                         Save Template
@@ -1507,7 +1624,7 @@ const S = StyleSheet.create({
 
     // Header
     header: {
-        height: 68,
+        height: 98,
         paddingHorizontal: 18,
         paddingVertical: 10,
         flexDirection: "row",
@@ -1515,7 +1632,7 @@ const S = StyleSheet.create({
         justifyContent: "space-between",
         borderBottomWidth: 1,
         borderBottomColor: T.line,
-        backgroundColor: T.bg,
+        backgroundColor: T.surface,
         zIndex: 10,
     },
     headerBtn: {
@@ -1550,19 +1667,20 @@ const S = StyleSheet.create({
 
     // Tabs
     tabBar: {
+        height: 80,
         flexDirection: "row",
         gap: 10,
         paddingHorizontal: 18,
         paddingTop: 14,
-        paddingBottom: 34,
-        backgroundColor: T.bg,
+        paddingBottom: 14,
+        backgroundColor: T.surface,
         zIndex: 10,
-        borderBottomWidth: 3,
-        borderBottomColor: T.gold,
+        borderBottomWidth: 1,
+        borderBottomColor: T.line,
     },
     tabBtn: {
         flex: 1,
-        paddingVertical: 10,
+        paddingVertical: 1,
         minHeight: 46,
         borderRadius: 13,
         alignItems: "center",
@@ -1578,7 +1696,7 @@ const S = StyleSheet.create({
         elevation: 1,
     },
     tabBtnActive: {
-        backgroundColor: T.goldSoft,
+        backgroundColor: "#ffffff",
         borderColor: T.goldBorder,
     },
     tabText: {
@@ -1727,14 +1845,14 @@ const S = StyleSheet.create({
         justifyContent: "center",
         flexDirection: "row",
         gap: 10,
-        shadowColor: "#A0601A",
+        shadowColor: T.goldMid,
         shadowOpacity: 0.35,
         shadowRadius: 16,
         shadowOffset: { width: 0, height: 6 },
         elevation: 5,
     },
     sendText: {
-        color: "#FFF9F0",
+        color: "#FFFFFF",
         fontWeight: "900",
         fontSize: 16,
         letterSpacing: 0.2,
@@ -1748,13 +1866,13 @@ const S = StyleSheet.create({
         justifyContent: "center",
         flexDirection: "row",
         gap: 8,
-        shadowColor: "#A0601A",
+        shadowColor: T.goldMid,
         shadowOpacity: 0.28,
         shadowRadius: 14,
         shadowOffset: { width: 0, height: 5 },
         elevation: 4,
     },
-    addText: { color: "#FFF9F0", fontWeight: "900", fontSize: 15 },
+    addText: { color: "#FFFFFF", fontWeight: "900", fontSize: 15 },
 
     // List rows
     listRow: {
@@ -1787,6 +1905,32 @@ const S = StyleSheet.create({
         color: T.inkSoft,
         fontWeight: "600",
         fontSize: 12,
+        marginTop: 4,
+    },
+    detailCard: {
+        padding: 14,
+        borderRadius: 16,
+        backgroundColor: T.surface2,
+        borderWidth: 1,
+        borderColor: T.line,
+    },
+    detailLabel: {
+        color: T.inkSoft,
+        fontSize: 11,
+        fontWeight: "900",
+        letterSpacing: 0.6,
+        marginTop: 12,
+    },
+    detailValue: {
+        color: T.ink,
+        fontSize: 14,
+        fontWeight: "700",
+        marginTop: 4,
+    },
+    detailCode: {
+        color: T.inkMid,
+        fontSize: 13,
+        fontWeight: "700",
         marginTop: 4,
     },
     iconBtn: {
@@ -2004,13 +2148,13 @@ const S = StyleSheet.create({
         borderRadius: 14,
         alignItems: "center",
         justifyContent: "center",
-        shadowColor: "#A0601A",
+        shadowColor: T.goldMid,
         shadowOpacity: 0.25,
         shadowRadius: 12,
         shadowOffset: { width: 0, height: 5 },
         elevation: 4,
     },
-    saveBtnText: { color: "#FFF9F0", fontWeight: "900", fontSize: 15 },
+    saveBtnText: { color: "#FFFFFF", fontWeight: "900", fontSize: 15 },
 
     // Variables hint
     varsHintBox: {

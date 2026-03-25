@@ -2,15 +2,20 @@ const express = require("express");
 const router = express.Router();
 const ChatMessage = require("../models/ChatMessage");
 const Enquiry = require("../models/Enquiry");
+const FollowUp = require("../models/FollowUp");
 const MessageTemplate = require("../models/MessageTemplate");
+const WhatsAppConfig = require("../models/WhatsAppConfig");
 const { verifyToken } = require("../middleware/auth");
 const aiService = require("../utils/aiService");
+const cache = require("../utils/responseCache");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const {
+  clearWhatsappConfigCache,
   extractProviderMessageMeta,
   getConfigSummary,
+  isWhatsappEditVerified,
   loadWhatsappConfig,
   normalizePhoneNumber,
   saveWhatsappConfig,
@@ -33,6 +38,67 @@ const upload = multer({
   storage,
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
 });
+
+const toLocalIsoDate = (value = new Date()) => {
+  const dt = value instanceof Date ? value : new Date(value);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, "0");
+  const d = String(dt.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const recordWhatsappActivity = async ({
+  req,
+  ownerId,
+  enquiry,
+  content,
+  fileName,
+  messageType,
+}) => {
+  if (!enquiry?._id || !ownerId) return;
+
+  const activityAt = new Date();
+  const date = toLocalIsoDate(activityAt);
+  const baseText =
+    messageType === "image"
+      ? `WhatsApp image sent${fileName ? `: ${fileName}` : ""}`
+      : messageType === "document"
+        ? `WhatsApp document sent${fileName ? `: ${fileName}` : ""}`
+        : `WhatsApp message sent${content ? `: ${String(content).slice(0, 220)}` : ""}`;
+
+  await FollowUp.create({
+    enqId: enquiry._id,
+    enqNo: String(enquiry.enqNo || "").trim(),
+    userId: ownerId,
+    assignedTo: req.userId,
+    name: enquiry.name || "Enquiry",
+    mobile: enquiry.mobile || "",
+    image: enquiry.image || "",
+    product: enquiry.product || "",
+    date,
+    followUpDate: date,
+    nextFollowUpDate: date,
+    activityType: "WhatsApp",
+    type: "WhatsApp",
+    note: baseText,
+    remarks: baseText,
+    staffName: req.user?.name || "Staff",
+    nextAction: "Followup",
+    status: "Completed",
+    activityTime: activityAt,
+  });
+
+  await Enquiry.findByIdAndUpdate(enquiry._id, {
+    $set: {
+      lastContactedAt: activityAt,
+      status: "Contacted",
+    },
+  }).catch(() => null);
+
+  cache.invalidate("followups");
+  cache.invalidate("dashboard");
+  cache.invalidate("enquiries");
+};
 
 // 1. GET CHAT HISTORY FOR A NUMBER
 router.get("/webhook", (req, res) => {
@@ -108,11 +174,21 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
         : req.userId;
+    const enquiry = enquiryId
+      ? await Enquiry.findOne({ _id: enquiryId, userId: ownerId })
+          .select("enqNo name mobile image product")
+          .lean()
+      : null;
+    const companyId = req.user.company_id || null;
+    const configScope = companyId
+      ? { companyId }
+      : { ownerUserId: ownerId };
 
     let finalContent = content;
     let fileName = "";
     let mimeType = "";
     let providerResp = null;
+    let providerError = null;
 
     // If file is uploaded, use its path
     if (req.file) {
@@ -121,7 +197,7 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       mimeType = req.file.mimetype;
     }
     try {
-      const cfg = await loadWhatsappConfig({ ownerUserId: ownerId });
+      const cfg = await loadWhatsappConfig(configScope);
       if (!cfg) {
         console.warn(`Missing WhatsAppConfig for owner ${ownerId}`);
         return res.status(400).json({
@@ -132,6 +208,7 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
 
       const sendResult = await sendWhatsAppMessage({
         ownerUserId: ownerId,
+        companyId,
         phoneNumber,
         content: finalContent,
         filePath: req.file?.path,
@@ -144,13 +221,17 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       );
     } catch (providerErr) {
       const providerMessage = providerErr.response?.data || providerErr.message;
+      providerError =
+        typeof providerMessage === "string"
+          ? providerMessage
+          : JSON.stringify(providerMessage);
       console.error(
         "WhatsApp provider error (message still saved locally):",
         providerMessage,
       );
     }
 
-    const cfg = await loadWhatsappConfig({ ownerUserId: ownerId });
+    const cfg = await loadWhatsappConfig(configScope);
     const normalizedPhone = normalizePhoneNumber(
       phoneNumber,
       cfg?.defaultCountry || "91",
@@ -176,10 +257,20 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       externalId: providerMeta.externalId,
       providerTicketId: providerMeta.providerTicketId,
       providerResponse: providerResp ? JSON.stringify(providerResp.data) : null,
+      providerError,
       timestamp: new Date(),
     });
 
     await newMessage.save();
+
+    await recordWhatsappActivity({
+      req,
+      ownerId,
+      enquiry,
+      content: req.file ? "" : finalContent,
+      fileName,
+      messageType: newMessage.type,
+    });
 
     // Emit via Socket.io (emit with multiple formats for reliable matching)
     if (req.app.get("io")) {
@@ -667,8 +758,7 @@ router.get("/config", verifyToken, async (req, res) => {
       req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
         : req.userId;
-    // Allow optional companyId query to fetch company-scoped config
-    const companyId = req.query.companyId || null;
+    const companyId = req.query.companyId || req.user.company_id || null;
     const cfg = await loadWhatsappConfig(
       companyId ? { companyId } : { ownerUserId: ownerId },
     );
@@ -682,7 +772,97 @@ router.get("/config", verifyToken, async (req, res) => {
   }
 });
 
+router.post("/config/mark-verified", verifyToken, async (req, res) => {
+  try {
+    const ownerId =
+      req.user.role === "Staff" && req.user.parentUserId
+        ? req.user.parentUserId
+        : req.userId;
+    const companyId = req.user.company_id || null;
+    const matches = await WhatsAppConfig.find({
+      $or: [
+        ...(companyId ? [{ companyId }] : []),
+        { ownerUserId: ownerId },
+      ],
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .select("_id ownerUserId companyId");
+
+    const existing =
+      matches.find((item) => String(item?.companyId || "") === String(companyId || "")) ||
+      matches.find((item) => String(item?.ownerUserId || "") === String(ownerId || "")) ||
+      matches[0] ||
+      null;
+
+    if (existing?._id) {
+      const duplicateIds = matches
+        .map((item) => String(item?._id || ""))
+        .filter((id) => id && id !== String(existing._id));
+      if (duplicateIds.length) {
+        await WhatsAppConfig.deleteMany({ _id: { $in: duplicateIds } });
+      }
+
+      await WhatsAppConfig.updateOne(
+        { _id: existing._id },
+        {
+          $set: {
+            editOtpVerifiedAt: new Date(),
+          },
+        },
+      );
+    } else {
+      await WhatsAppConfig.create({
+        ownerUserId: ownerId,
+        ...(companyId ? { companyId } : {}),
+        editOtpVerifiedAt: new Date(),
+      });
+    }
+
+    clearWhatsappConfigCache({ ownerUserId: ownerId, companyId });
+
+    return res.json({ ok: true, editVerificationActive: true });
+  } catch (e) {
+    console.error("Error marking WhatsApp config verified:", e.message);
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 // PUT /api/whatsapp/config  (protected) — body: { apiUrl, apiToken, provider, ... }
+router.get("/config/debug", verifyToken, async (req, res) => {
+  try {
+    const ownerId =
+      req.user.role === "Staff" && req.user.parentUserId
+        ? req.user.parentUserId
+        : req.userId;
+    const companyId = req.query.companyId || req.user.company_id || null;
+    const cfg = await loadWhatsappConfig(
+      companyId ? { companyId } : { ownerUserId: ownerId },
+    );
+
+    if (!cfg) {
+      return res.status(404).json({
+        ok: false,
+        message: "No WhatsApp configuration found",
+      });
+    }
+
+    return res.json({
+      ok: true,
+      config: getConfigSummary(cfg),
+      debug: {
+        provider: cfg.provider || "",
+        configSource: cfg.source || "unknown",
+        isFallback: Boolean(cfg.isFallback),
+        companyId: companyId ? String(companyId) : null,
+        ownerUserId: ownerId ? String(ownerId) : null,
+      },
+    });
+  } catch (e) {
+    console.error("Error fetching WhatsApp debug config:", e.message);
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 router.put("/config", verifyToken, async (req, res) => {
   try {
     const payload = req.body || {};
@@ -690,10 +870,38 @@ router.put("/config", verifyToken, async (req, res) => {
       req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
         : req.userId;
+    const companyId = req.user.company_id || null;
+    const matches = await WhatsAppConfig.find({
+      $or: [
+        ...(companyId ? [{ companyId }] : []),
+        { ownerUserId: ownerId },
+      ],
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean();
+
+    const verifiedConfig =
+      matches.find((item) => isWhatsappEditVerified(item)) ||
+      null;
+    const existing = verifiedConfig || (await loadWhatsappConfig(
+      companyId ? { companyId } : { ownerUserId: ownerId },
+    ));
+
+    if (!isWhatsappEditVerified(existing)) {
+      return res.status(403).json({
+        ok: false,
+        code: "OTP_REQUIRED",
+        message: "WhatsApp settings verification is required before editing.",
+      });
+    }
 
     const updated = await saveWhatsappConfig({
       ownerUserId: ownerId,
-      payload,
+      payload: {
+        ...payload,
+        companyId,
+        editOtpVerifiedAt: verifiedConfig?.editOtpVerifiedAt || existing?.editOtpVerifiedAt || null,
+      },
     });
     return res.json({ ok: true, config: getConfigSummary(updated) });
   } catch (e) {

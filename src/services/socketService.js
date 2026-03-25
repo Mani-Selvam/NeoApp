@@ -50,6 +50,11 @@ export const initSocket = (userId) => {
         DeviceEventEmitter.emit("FORCE_LOGOUT", payload);
     });
 
+    socket.on("SUBSCRIPTION_UPDATED", (payload) => {
+        console.log("Subscription update via socket:", payload);
+        DeviceEventEmitter.emit("SUBSCRIPTION_UPDATED", payload);
+    });
+
     socket.on("disconnect", () => {
         console.log("Socket disconnected");
     });

@@ -1,20 +1,9 @@
-const nodemailer = require("nodemailer");
-
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
-
-const hasRealCredentials = () => {
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
-  if (!user || !pass) return false;
-  if (user.startsWith("your_") || pass.startsWith("your_")) return false;
-  return true;
-};
+const {
+  createTransporter,
+  getMailConfig,
+  hasRealCredentials,
+  verifyTransporter,
+} = require("./mailTransport");
 
 const sendEmail = async ({ to, subject, text, html }) => {
   try {
@@ -28,12 +17,25 @@ const sendEmail = async ({ to, subject, text, html }) => {
       return true;
     }
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+    const transporter = createTransporter();
+    const { from } = getMailConfig();
+    await verifyTransporter();
+
+    const info = await transporter.sendMail({
+      from,
       to,
       subject,
       text,
       html,
+    });
+
+    console.log("[Email] SMTP accepted message", {
+      to,
+      from,
+      messageId: info?.messageId || "",
+      accepted: info?.accepted || [],
+      rejected: info?.rejected || [],
+      response: info?.response || "",
     });
 
     return true;
@@ -44,4 +46,3 @@ const sendEmail = async ({ to, subject, text, html }) => {
 };
 
 module.exports = { sendEmail };
-

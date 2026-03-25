@@ -15,6 +15,8 @@ import {
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ListSkeleton } from "../components/skeleton/screens";
+import { SkeletonPulse } from "../components/skeleton/Skeleton";
 import { useAuth } from "../contexts/AuthContext";
 import * as supportService from "../services/supportService";
 
@@ -185,10 +187,11 @@ export default function SupportHelpScreen({ navigation }) {
                 {error ? <Text style={styles.error}>{error}</Text> : null}
 
                 {loading ? (
-                    <View style={styles.loadingBox}>
-                        <ActivityIndicator size="large" color={COLORS.primary} />
-                        <Text style={styles.loadingText}>Loading messages…</Text>
-                    </View>
+                    <SkeletonPulse>
+                        <View style={{ paddingTop: 10 }}>
+                            <ListSkeleton count={6} itemHeight={70} withAvatar />
+                        </View>
+                    </SkeletonPulse>
                 ) : (
                     <FlatList
                         contentContainerStyle={styles.list}
@@ -280,4 +283,3 @@ const styles = StyleSheet.create({
     emptyTitle: { fontSize: 15, fontWeight: "900", color: COLORS.text },
     emptyText: { marginTop: 6, fontSize: 12, color: COLORS.textMuted, textAlign: "center" },
 });
-

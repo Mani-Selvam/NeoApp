@@ -6,9 +6,9 @@ import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
-    Dimensions,
     Image,
     KeyboardAvoidingView,
+    Linking,
     Modal,
     Platform,
     ScrollView,
@@ -18,12 +18,14 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
+import Constants from "expo-constants";
 import { useAuth } from "../contexts/AuthContext";
+import getApiClient from "../services/apiClient";
 import { getImageUrl } from "../services/apiConfig";
+import { getEmailSettings } from "../services/emailService";
 import * as userService from "../services/userService";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-const { width } = Dimensions.get("window");
+import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
 
 const COLORS = {
     primary: "#4F46E5",
@@ -36,12 +38,42 @@ const COLORS = {
     border: "#E2E8F0",
     danger: "#EF4444",
     success: "#10B981",
+    warningSoft: "#FEF2F2",
 };
+
+const resolveAccountCreatedLabel = (user) => {
+    const rawValue =
+        user?.createdAt ||
+        user?.created_at ||
+        user?.createdOn ||
+        user?.createdDate ||
+        user?.joinedAt ||
+        "";
+
+    const parsed = rawValue ? new Date(rawValue) : null;
+    if (parsed && !Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString();
+    }
+
+    const objectId = String(user?._id || user?.id || "");
+    if (/^[a-f\d]{24}$/i.test(objectId)) {
+        const timestampHex = objectId.slice(0, 8);
+        const timestamp = parseInt(timestampHex, 16) * 1000;
+        const fromId = new Date(timestamp);
+        if (!Number.isNaN(fromId.getTime())) {
+            return fromId.toLocaleDateString();
+        }
+    }
+
+    return "N/A";
+};
+
+const APP_EXTRA = Constants.expoConfig?.extra || {};
+const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "").trim();
 
 const ProfileScreen = ({ navigation }) => {
     const insets = useSafeAreaInsets();
-    const { user, updateUser } = useAuth();
-    const [loading, setLoading] = useState(false);
+    const { user, updateUser, logout, localLogout } = useAuth();
     const [profile, setProfile] = useState({
         name: "",
         email: "",
@@ -51,7 +83,7 @@ const ProfileScreen = ({ navigation }) => {
 
     // Update States
     const [editName, setEditName] = useState("");
-    const [isSaving, setIsSaving] = useState(false);
+    const [, setIsSaving] = useState(false);
 
     // OTP Modal States
     const [showOtpModal, setShowOtpModal] = useState(false);
@@ -60,6 +92,14 @@ const ProfileScreen = ({ navigation }) => {
     const [otpValue, setOtpValue] = useState("");
     const [newValue, setNewValue] = useState("");
     const [otpLoading, setOtpLoading] = useState(false);
+    const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
+    const isAdminUser = String(user?.role || "").toLowerCase() === "admin";
+    const [settingsStatus, setSettingsStatus] = useState({
+        whatsappConfigured: false,
+        emailConfigured: false,
+    });
+    const [isDisablingAccount, setIsDisablingAccount] = useState(false);
+    const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
     useEffect(() => {
         if (user) {
@@ -73,10 +113,83 @@ const ProfileScreen = ({ navigation }) => {
         }
     }, [user]);
 
+    useEffect(() => {
+        if (isStaffUser) return;
+
+        const loadSettingsStatus = async () => {
+            try {
+                const client = await getApiClient();
+                const [waResp, emailResp] = await Promise.allSettled([
+                    client.get("/whatsapp/config"),
+                    getEmailSettings(),
+                ]);
+
+                const waConfig =
+                    waResp.status === "fulfilled" ? waResp.value?.data?.config || {} : {};
+                const emailConfig =
+                    emailResp.status === "fulfilled" ? emailResp.value || {} : {};
+
+                const whatsappConfigured = (() => {
+                    const provider = String(waConfig?.provider || "").toUpperCase();
+                    if (provider === "WATI") {
+                        return Boolean(waConfig?.watiBaseUrl && waConfig?.apiToken);
+                    }
+                    if (provider === "META") {
+                        return Boolean(
+                            waConfig?.metaWhatsappToken && waConfig?.metaPhoneNumberId,
+                        );
+                    }
+                    if (provider === "NEO") {
+                        return Boolean(
+                            waConfig?.neoAccountName &&
+                                waConfig?.neoApiKey &&
+                                waConfig?.neoPhoneNumber,
+                        );
+                    }
+                    if (provider === "TWILIO") {
+                        return Boolean(
+                            waConfig?.twilioAccountSid &&
+                                waConfig?.twilioAuthToken &&
+                                waConfig?.twilioWhatsappNumber,
+                        );
+                    }
+                    return false;
+                })();
+
+                const emailConfigured = Boolean(
+                    emailConfig?.smtpHost &&
+                        emailConfig?.smtpPort &&
+                        emailConfig?.smtpUser &&
+                        (emailConfig?.hasPassword || emailConfig?.smtpPass),
+                );
+
+                setSettingsStatus({
+                    whatsappConfigured,
+                    emailConfigured,
+                });
+            } catch (_error) {
+                setSettingsStatus({
+                    whatsappConfigured: false,
+                    emailConfigured: false,
+                });
+            }
+        };
+
+        loadSettingsStatus();
+    }, [isStaffUser]);
+
     const handlePickImage = async () => {
+        const confirmed = await confirmPermissionRequest({
+            title: "Allow photo access?",
+            message:
+                "Photo access is only used when you choose a logo or profile image from your gallery.",
+            confirmText: "Continue",
+        });
+        if (!confirmed) return;
+
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== 'granted') {
-            Alert.alert('Permission Denied', 'We need access to your gallery to update your logo.');
+            Alert.alert('Permission denied', 'Gallery access is needed only to pick a logo image.');
             return;
         }
 
@@ -104,7 +217,7 @@ const ProfileScreen = ({ navigation }) => {
                 Alert.alert("Success", res.message);
             }
         } catch (err) {
-            Alert.alert("Error", err.response?.data?.message || err.message);
+            Alert.alert("Error", getUserFacingError(err, "Failed to update profile"));
         } finally {
             setIsSaving(false);
         }
@@ -120,10 +233,10 @@ const ProfileScreen = ({ navigation }) => {
         setOtpLoading(true);
         try {
             if (mode === 'email') await userService.initiateEmailChange();
-            else await userService.initiateMobileChange();
+            else await userService.initiateMobileChange("whatsapp");
             setShowOtpModal(true);
         } catch (err) {
-            Alert.alert("Error", err.response?.data?.message || "Failed to initiate change");
+            Alert.alert("Error", getUserFacingError(err, "Failed to initiate change"));
         } finally {
             setOtpLoading(false);
         }
@@ -137,7 +250,7 @@ const ProfileScreen = ({ navigation }) => {
 
             setOtpStep(2);
             setOtpValue("");
-        } catch (err) {
+        } catch (_err) {
             Alert.alert("Error", "Invalid OTP code");
         } finally {
             setOtpLoading(false);
@@ -148,12 +261,12 @@ const ProfileScreen = ({ navigation }) => {
         setOtpLoading(true);
         try {
             if (otpMode === 'email') await userService.initiateNewEmail(newValue);
-            else await userService.initiateNewMobile(newValue);
+            else await userService.initiateNewMobile(newValue, "whatsapp");
 
             setOtpStep(3);
             setOtpValue("");
         } catch (err) {
-            Alert.alert("Error", err.response?.data?.message || "Failed to send OTP to new contact");
+            Alert.alert("Error", getUserFacingError(err, "Failed to send OTP to new contact"));
         } finally {
             setOtpLoading(false);
         }
@@ -171,12 +284,166 @@ const ProfileScreen = ({ navigation }) => {
                 setShowOtpModal(false);
                 Alert.alert("Success", `${otpMode === 'email' ? 'Email' : 'Mobile'} updated successfully!`);
             }
-        } catch (err) {
+        } catch (_err) {
             Alert.alert("Error", "Invalid OTP code for new verification");
         } finally {
             setOtpLoading(false);
         }
     };
+
+    const handleLogoutPress = () => {
+        Alert.alert(
+            "Logout",
+            "Are you sure you want to logout?",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Logout",
+                    style: "destructive",
+                    onPress: async () => {
+                        await logout();
+                    },
+                },
+            ],
+        );
+    };
+
+    const handleDeleteAccountPress = () => {
+        Alert.alert(
+            "Delete company account?",
+            "This will permanently remove your company, staff, admins, enquiries, follow-ups, plans, payments, and related workspace data. This action cannot be undone.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Continue",
+                    style: "destructive",
+                    onPress: () => {
+                        Alert.alert(
+                            "Final confirmation",
+                            "Are you sure you want to permanently delete this company account and all related records?",
+                            [
+                                { text: "No", style: "cancel" },
+                                {
+                                    text: "Delete permanently",
+                                    style: "destructive",
+                                    onPress: async () => {
+                                        setIsDeletingAccount(true);
+                                        try {
+                                            await userService.deleteCompanyAccount();
+                                            Alert.alert(
+                                                "Company deleted",
+                                                "Your company account and all related data have been permanently removed.",
+                                                [
+                                                    {
+                                                        text: "OK",
+                                                        onPress: async () => {
+                                                            await localLogout();
+                                                        },
+                                                    },
+                                                ],
+                                            );
+                                        } catch (error) {
+                                            Alert.alert(
+                                                "Delete failed",
+                                                getUserFacingError(
+                                                    error,
+                                                    "Unable to delete the company account right now",
+                                                ),
+                                            );
+                                        } finally {
+                                            setIsDeletingAccount(false);
+                                        }
+                                    },
+                                },
+                            ],
+                        );
+                    },
+                },
+            ],
+        );
+    };
+
+    const handleDisableAccountPress = () => {
+        Alert.alert(
+            "Disable company account?",
+            "This will block login access for this company. Existing users will be logged out, and the app will use the current restricted-account flow until you reactivate it later.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Disable",
+                    style: "destructive",
+                    onPress: async () => {
+                        setIsDisablingAccount(true);
+                        try {
+                            await userService.disableCompanyAccount();
+                            Alert.alert(
+                                "Account disabled",
+                                "This company is now blocked. Users will see the restricted access flow on login.",
+                                [
+                                    {
+                                        text: "OK",
+                                        onPress: async () => {
+                                            await localLogout();
+                                        },
+                                    },
+                                ],
+                            );
+                        } catch (error) {
+                            Alert.alert(
+                                "Disable failed",
+                                getUserFacingError(
+                                    error,
+                                    "Unable to disable the company account right now",
+                                ),
+                            );
+                        } finally {
+                            setIsDisablingAccount(false);
+                        }
+                    },
+                },
+            ],
+        );
+    };
+
+    const openManagedUrl = async (url, label) => {
+        if (!url) {
+            Alert.alert("Link unavailable", `${label} link is not configured yet.`);
+            return;
+        }
+
+        if (/example\.com/i.test(url)) {
+            Alert.alert(
+                "Setup needed",
+                `Replace the placeholder ${label.toLowerCase()} URL before publishing to Google Play.`,
+            );
+            return;
+        }
+
+        try {
+            const supported = await Linking.canOpenURL(url);
+            if (!supported) {
+                Alert.alert("Link unavailable", `Unable to open ${label.toLowerCase()} on this device.`);
+                return;
+            }
+            await Linking.openURL(url);
+        } catch (_error) {
+            Alert.alert("Link unavailable", `Unable to open ${label.toLowerCase()} right now.`);
+        }
+    };
+
+    const renderStatusBadge = (configured) => (
+        <View
+            style={[
+                styles.statusBadge,
+                configured ? styles.statusBadgeOk : styles.statusBadgeOff,
+            ]}>
+            <Ionicons
+                name={configured ? "checkmark-circle" : "close-circle"}
+                size={16}
+                color={configured ? COLORS.success : COLORS.danger}
+            />
+        </View>
+    );
 
     const renderOtpModal = () => (
         <Modal visible={showOtpModal} transparent animationType="slide">
@@ -199,9 +466,9 @@ const ProfileScreen = ({ navigation }) => {
                     </View>
 
                     <Text style={styles.modalSubtitle}>
-                        {otpStep === 1 && `Verification code sent to your current ${otpMode}.`}
+                        {otpStep === 1 && `Verification code sent to your current ${otpMode === 'mobile' ? 'WhatsApp mobile' : otpMode}.`}
                         {otpStep === 2 && `Enter your new ${otpMode} below.`}
-                        {otpStep === 3 && `Verification code sent to your new ${otpMode}.`}
+                        {otpStep === 3 && `Verification code sent to your new ${otpMode === 'mobile' ? 'WhatsApp mobile' : otpMode}.`}
                     </Text>
 
                     {otpStep !== 2 ? (
@@ -322,9 +589,150 @@ const ProfileScreen = ({ navigation }) => {
                     </View>
                 </View>
 
+                <View style={styles.section}>
+                    <Text style={styles.label}>Major Settings</Text>
+                    <View style={styles.settingsCard}>
+                        {!isStaffUser ? (
+                            <>
+                                <TouchableOpacity
+                                    style={styles.settingsRow}
+                                    onPress={() => navigation.navigate("WhatsAppSettings")}
+                                >
+                                    <View style={styles.settingsIconWrap}>
+                                        <Ionicons name="logo-whatsapp" size={18} color={COLORS.primary} />
+                                    </View>
+                                    <View style={styles.settingsContent}>
+                                        <Text style={styles.settingsTitle}>WhatsApp Settings</Text>
+                                        <Text style={styles.settingsSub}>Manage business number and templates</Text>
+                                    </View>
+                                    {renderStatusBadge(settingsStatus.whatsappConfigured)}
+                                    <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.settingsRow}
+                                    onPress={() => navigation.navigate("EmailSettingsScreen")}
+                                >
+                                    <View style={styles.settingsIconWrap}>
+                                        <Ionicons name="mail-open-outline" size={18} color={COLORS.primary} />
+                                    </View>
+                                    <View style={styles.settingsContent}>
+                                        <Text style={styles.settingsTitle}>Email Settings</Text>
+                                        <Text style={styles.settingsSub}>Configure SMTP and mailbox sync</Text>
+                                    </View>
+                                    {renderStatusBadge(settingsStatus.emailConfigured)}
+                                    <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                </TouchableOpacity>
+                            </>
+                        ) : null}
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.label}>Privacy & Legal</Text>
+                    <View style={styles.settingsCard}>
+                        <TouchableOpacity
+                            style={styles.settingsRow}
+                            onPress={() => navigation.navigate("AboutScreen")}
+                        >
+                            <View style={styles.settingsIconWrap}>
+                                <Ionicons name="information-circle-outline" size={18} color={COLORS.primary} />
+                            </View>
+                            <View style={styles.settingsContent}>
+                                <Text style={styles.settingsTitle}>About App</Text>
+                                <Text style={styles.settingsSub}>Learn about NeoApp, version details, support, and privacy</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.settingsRow}
+                            onPress={() => openManagedUrl(PRIVACY_POLICY_URL, "Privacy Policy")}
+                        >
+                            <View style={styles.settingsIconWrap}>
+                                <Ionicons name="shield-checkmark-outline" size={18} color={COLORS.primary} />
+                            </View>
+                            <View style={styles.settingsContent}>
+                                <Text style={styles.settingsTitle}>Privacy Policy</Text>
+                                <Text style={styles.settingsSub}>Review how account and enquiry data is handled</Text>
+                            </View>
+                            <Ionicons name="open-outline" size={18} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+
+                        {isAdminUser ? (
+                            <>
+                                <TouchableOpacity
+                                    style={styles.settingsRow}
+                                    onPress={handleDisableAccountPress}
+                                    disabled={isDisablingAccount}
+                                >
+                                    <View style={[styles.settingsIconWrap, styles.warningIconWrap]}>
+                                        <Ionicons name="pause-circle-outline" size={18} color="#D97706" />
+                                    </View>
+                                    <View style={styles.settingsContent}>
+                                        <Text style={[styles.settingsTitle, styles.warningTitle]}>
+                                            Disable Company Account
+                                        </Text>
+                                        <Text style={styles.settingsSub}>
+                                            Primary admin only. Block login access and use the existing restricted-account flow
+                                        </Text>
+                                    </View>
+                                    {isDisablingAccount ? (
+                                        <ActivityIndicator size="small" color="#D97706" />
+                                    ) : (
+                                        <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                    )}
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                    style={styles.settingsRow}
+                                    onPress={handleDeleteAccountPress}
+                                    disabled={isDeletingAccount}
+                                >
+                                    <View style={[styles.settingsIconWrap, styles.dangerIconWrap]}>
+                                        <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
+                                    </View>
+                                    <View style={styles.settingsContent}>
+                                        <Text style={[styles.settingsTitle, styles.dangerTitle]}>
+                                            Delete Company Account
+                                        </Text>
+                                        <Text style={styles.settingsSub}>
+                                            Primary admin only. Permanently remove the company, staff, admins, enquiries, follow-ups, plans, and related data
+                                        </Text>
+                                    </View>
+                                    {isDeletingAccount ? (
+                                        <ActivityIndicator size="small" color={COLORS.danger} />
+                                    ) : (
+                                        <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                    )}
+                                </TouchableOpacity>
+                            </>
+                        ) : null}
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.label}>Session</Text>
+                    <View style={styles.settingsCard}>
+                        <TouchableOpacity
+                            style={[styles.settingsRow, styles.logoutRow]}
+                            onPress={handleLogoutPress}
+                        >
+                            <View style={[styles.settingsIconWrap, styles.logoutIconWrap]}>
+                                <Ionicons name="log-out-outline" size={18} color={COLORS.danger} />
+                            </View>
+                            <View style={styles.settingsContent}>
+                                <Text style={[styles.settingsTitle, styles.logoutTitle]}>Logout</Text>
+                                <Text style={styles.settingsSub}>Sign out from this account</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>
-                        Account created on {user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
+                        Account created on {resolveAccountCreatedLabel(user)}
                     </Text>
                 </View>
             </ScrollView>
@@ -474,6 +882,78 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: COLORS.primary,
         fontWeight: '700',
+    },
+    settingsCard: {
+        backgroundColor: '#fff',
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        overflow: 'hidden',
+    },
+    settingsRow: {
+        minHeight: 68,
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+        gap: 12,
+    },
+    settingsIconWrap: {
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        backgroundColor: COLORS.primary + '12',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    settingsContent: {
+        flex: 1,
+    },
+    statusBadge: {
+        width: 28,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 2,
+    },
+    statusBadgeOk: {
+        opacity: 1,
+    },
+    statusBadgeOff: {
+        opacity: 0.9,
+    },
+    settingsTitle: {
+        fontSize: 15,
+        color: COLORS.text,
+        fontWeight: '700',
+    },
+    settingsSub: {
+        fontSize: 12,
+        color: COLORS.textMuted,
+        marginTop: 3,
+        lineHeight: 18,
+    },
+    logoutRow: {
+        borderBottomWidth: 0,
+    },
+    logoutIconWrap: {
+        backgroundColor: COLORS.warningSoft,
+    },
+    dangerIconWrap: {
+        backgroundColor: COLORS.warningSoft,
+    },
+    warningIconWrap: {
+        backgroundColor: "#FEF3C7",
+    },
+    logoutTitle: {
+        color: COLORS.danger,
+    },
+    warningTitle: {
+        color: "#B45309",
+    },
+    dangerTitle: {
+        color: COLORS.danger,
     },
     inlineUpdateBtn: {
         paddingVertical: 8,

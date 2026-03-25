@@ -1,16 +1,34 @@
 import { Ionicons } from "@expo/vector-icons";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { NavigationContainer, TabActions } from "@react-navigation/native";
+import {
+  DefaultTheme,
+  NavigationContainer,
+  TabActions,
+} from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, BackHandler, DeviceEventEmitter, Modal, Text, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  AppState,
+  BackHandler,
+  DeviceEventEmitter,
+  Keyboard,
+  Modal,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
 import AddEnquiryScreen from "../screens/AddEnquiryScreen";
 import ForgotPasswordScreen from "../screens/Auth/ForgotPasswordScreen";
 import LoginScreen from "../screens/Auth/LoginScreen";
+import OtpVerificationScreen from "../screens/Auth/OtpVerificationScreen";
 import SignupScreen from "../screens/Auth/SignupScreen";
-import AutoCallScreen from "../screens/AutoCallScreen";
 import CallLogScreen from "../screens/CallLogScreen";
+import CommunicationScreen from "../screens/CommunicationScreen";
 import EnquiryScreen from "../screens/EnquiryScreen";
 import FollowUpScreen from "../screens/FollowUpScreen";
 import Home from "../screens/HomeScreen";
@@ -24,6 +42,7 @@ import RazorpayCheckoutScreen from "../screens/RazorpayCheckoutScreen";
 import PaymentSuccessScreen from "../screens/PaymentSuccessScreen";
 import EnterpriseContactScreen from "../screens/EnterpriseContactScreen";
 import ProfileScreen from "../screens/ProfileScreen";
+import AboutScreen from "../screens/AboutScreen";
 import SupportHelpScreen from "../screens/SupportHelpScreen";
 import ReportScreen from "../screens/ReportScreen";
 import StaffScreen from "../screens/StaffScreen";
@@ -32,11 +51,13 @@ import TargetsScreen from "../screens/TargetsScreen";
 import EmailScreen from "../screens/EmailScreen";
 import EmailSettingsScreen from "../screens/EmailSettingsScreen";
 import {
-    startCallMonitoring,
-    stopCallMonitoring,
+  startCallMonitoring,
+  stopCallMonitoring,
 } from "../services/CallMonitorService";
+import { getCommunicationThreads } from "../services/communicationService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
+import { getSocket } from "../services/socketService";
 import { navigationRef } from "./navigationRef";
 
 import ChatScreen from "../screens/ChatScreen";
@@ -45,7 +66,21 @@ import MessageTemplateScreen from "../screens/MessageTemplateScreen";
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-const TAB_ROUTE_NAMES = ["Home", "Enquiry", "FollowUp", "CallLog", "Report"];
+const TAB_ROUTE_NAMES = [
+  "Home",
+  "Enquiry",
+  "FollowUp",
+  "Communication",
+  "CallLog",
+];
+const APP_NAV_THEME = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: "#FFFFFF",
+    card: "#FFFFFF",
+  },
+};
 
 const getMainRoute = (state: any) => {
   if (!state?.routes?.length) return null;
@@ -70,66 +105,256 @@ function EnquiryStackNavigator() {
 }
 
 function MainTabNavigator() {
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const selfId = String(user?.id || user?._id || "");
+  const currentTabRef = useRef("Home");
+  const [chatBadgeCount, setChatBadgeCount] = useState(0);
+  const [followUpBadgeCount, setFollowUpBadgeCount] = useState(0);
+  const [callBadgeCount, setCallBadgeCount] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return undefined;
+
+    const showSub = Keyboard.addListener("keyboardDidShow", () => {
+      setKeyboardVisible(true);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardVisible(false);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadChatBadge = async () => {
+      try {
+        const threads = await getCommunicationThreads();
+        if (!active) return;
+        const unread = (Array.isArray(threads) ? threads : []).reduce(
+          (sum, item) => sum + Number(item?.unreadCount || 0),
+          0,
+        );
+        setChatBadgeCount(unread);
+      } catch (_error) {}
+    };
+    loadChatBadge();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket || !selfId) return undefined;
+
+    const onNewMessage = (payload: any) => {
+      const receiverId = String(
+        payload?.receiverId?._id || payload?.receiverId || "",
+      );
+      const senderId = String(payload?.senderId?._id || payload?.senderId || "");
+      if (receiverId !== selfId || senderId === selfId) return;
+      if (currentTabRef.current === "Communication") return;
+      setChatBadgeCount((prev) => prev + 1);
+    };
+
+    socket.on("COMMUNICATION_MESSAGE_CREATED", onNewMessage);
+    return () => {
+      socket.off("COMMUNICATION_MESSAGE_CREATED", onNewMessage);
+    };
+  }, [selfId]);
+
+  useEffect(() => {
+    const callSub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
+      if (currentTabRef.current !== "CallLog") {
+        setCallBadgeCount((prev) => prev + 1);
+      }
+      if (currentTabRef.current !== "FollowUp") {
+        setFollowUpBadgeCount((prev) => prev + 1);
+      }
+    });
+
+    const followupSub = DeviceEventEmitter.addListener(
+      "FOLLOWUP_CHANGED",
+      (payload) => {
+        if (currentTabRef.current === "FollowUp") return;
+        if (payload?.action === "delete") return;
+        setFollowUpBadgeCount((prev) => prev + 1);
+      },
+    );
+
+    return () => {
+      callSub.remove();
+      followupSub.remove();
+    };
+  }, []);
+
+  const baseTabBarStyle = {
+    height: 68 + Math.min(insets.bottom, 10),
+    paddingTop: 8,
+    paddingBottom: Math.max(insets.bottom, 8),
+    paddingHorizontal: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#E5EAF3",
+    backgroundColor: "#FCFDFE",
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: -2 },
+    elevation: 8,
+  };
+
+  const getTabOptions = (
+    label: string,
+    iconName: React.ComponentProps<typeof Ionicons>["name"],
+    badgeCount = 0,
+  ) => ({
+    tabBarLabel: label,
+    tabBarLabelStyle: navStyles.tabLabel,
+    tabBarItemStyle: navStyles.tabItem,
+    tabBarBadge: badgeCount > 0 ? (badgeCount > 99 ? "99+" : badgeCount) : undefined,
+    tabBarBadgeStyle: navStyles.badge,
+    tabBarIcon: ({
+      color,
+      focused,
+    }: {
+      color: string;
+      focused: boolean;
+      size: number;
+    }) => (
+      <View style={[navStyles.iconWrap, focused && navStyles.iconWrapActive]}>
+        <Ionicons
+          name={iconName}
+          color={focused ? "#2563EB" : color}
+          size={focused ? 21 : 20}
+        />
+      </View>
+    ),
+  });
+
   return (
     <Tab.Navigator
       backBehavior="history"
       screenOptions={{
         headerShown: false,
         popToTopOnBlur: false,
+        tabBarHideOnKeyboard: false,
+        tabBarActiveTintColor: "#2563EB",
+        tabBarInactiveTintColor: "#64748B",
+        tabBarAllowFontScaling: false,
+        tabBarStyle: keyboardVisible
+          ? { display: "none" }
+          : baseTabBarStyle,
       }}
     >
       <Tab.Screen
         name="Home"
         component={Home}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" color={color} size={size} />
-          ),
+        options={getTabOptions("Home", "home-outline")}
+        listeners={{
+          focus: () => {
+            currentTabRef.current = "Home";
+          },
         }}
       />
       <Tab.Screen
         name="Enquiry"
         component={EnquiryStackNavigator}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="help-circle-outline" color={color} size={size} />
-          ),
+        options={getTabOptions("Enquiry", "help-circle-outline")}
+        listeners={{
+          focus: () => {
+            currentTabRef.current = "Enquiry";
+          },
         }}
       />
       <Tab.Screen
         name="FollowUp"
         component={FollowUpScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="calendar-outline" color={color} size={size} />
-          ),
+        options={getTabOptions("FollowUp", "calendar-outline", followUpBadgeCount)}
+        listeners={{
+          focus: () => {
+            currentTabRef.current = "FollowUp";
+            setFollowUpBadgeCount(0);
+          },
+        }}
+      />
+      <Tab.Screen
+        name="Communication"
+        component={CommunicationScreen}
+        options={getTabOptions("Chat", "chatbubbles-outline", chatBadgeCount)}
+        listeners={{
+          focus: () => {
+            currentTabRef.current = "Communication";
+            setChatBadgeCount(0);
+          },
         }}
       />
       <Tab.Screen
         name="CallLog"
         component={CallLogScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="call-outline" color={color} size={size} />
-          ),
-          tabBarLabel: "Call Logs",
-        }}
-      />
-      <Tab.Screen
-        name="Report"
-        component={ReportScreen}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bar-chart-outline" color={color} size={size} />
-          ),
+        options={getTabOptions("Calls", "call-outline", callBadgeCount)}
+        listeners={{
+          focus: () => {
+            currentTabRef.current = "CallLog";
+            setCallBadgeCount(0);
+          },
         }}
       />
     </Tab.Navigator>
   );
 }
 
+function StaffRestrictedScreen({ navigation, title }: { navigation: any; title: string }) {
+  return (
+    <View style={guardStyles.root}>
+      <View style={guardStyles.card}>
+        <View style={guardStyles.iconWrap}>
+          <Ionicons name="lock-closed-outline" size={24} color="#DC2626" />
+        </View>
+        <Text style={guardStyles.title}>Access restricted</Text>
+        <Text style={guardStyles.text}>
+          {title} is available only for admin users in this company.
+        </Text>
+        <TouchableOpacity
+          style={guardStyles.button}
+          onPress={() => navigation.navigate("Main")}
+        >
+          <Text style={guardStyles.buttonText}>Back To Dashboard</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function makeStaffRestricted(title: string) {
+  return function RestrictedScreen(props: any) {
+    return <StaffRestrictedScreen {...props} title={title} />;
+  };
+}
+
 export default function AppNavigator() {
-  const { isLoggedIn, onboardingCompleted, isLoading, user, billingPlan, billingLoading } = useAuth();
+  const {
+    isLoggedIn,
+    onboardingCompleted,
+    isLoading,
+    user,
+    billingPlan,
+    billingInfo,
+    billingLoading,
+    billingAlert,
+    billingPrompt,
+    dismissBillingPrompt,
+  } = useAuth();
+  const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
+  const PricingAccessScreen = isStaffUser ? makeStaffRestricted("Pricing") : (PricingScreen as any);
+  const EmailSettingsAccessScreen = isStaffUser ? makeStaffRestricted("Email Settings") : (EmailSettingsScreen as any);
+  const MessageTemplateAccessScreen = isStaffUser ? makeStaffRestricted("Templates") : (MessageTemplateScreen as any);
+  const WhatsAppSettingsAccessScreen = isStaffUser ? makeStaffRestricted("WhatsApp Settings") : (WhatsAppSettingsScreen as any);
   const tabHistoryRef = useRef<string[]>(["Home"]);
   const lastTabRef = useRef<string>("Home");
   const [incomingMatch, setIncomingMatch] = useState<any>(null);
@@ -171,16 +396,26 @@ export default function AppNavigator() {
         }
 
         const res: any = await followupService.getFollowUps("Today", 1, 200);
-        const list = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+        const list = Array.isArray(res?.data)
+          ? res.data
+          : Array.isArray(res)
+            ? res
+            : [];
 
-        await notificationService.scheduleHourlyFollowUpRemindersForToday(list, {
-          endHour: 21,
-          channelId: "followups",
-        });
-        await notificationService.scheduleTimeFollowUpRemindersForToday?.(list, {
-          channelId: "followups",
-          missedAfterMinutes: 20,
-        });
+        await notificationService.scheduleHourlyFollowUpRemindersForToday(
+          list,
+          {
+            endHour: 21,
+            channelId: "followups",
+          },
+        );
+        await notificationService.scheduleTimeFollowUpRemindersForToday?.(
+          list,
+          {
+            channelId: "followups",
+            missedAfterMinutes: 20,
+          },
+        );
       } catch (e) {
         console.warn("[Notifications] Hourly follow-up sync failed", e);
       } finally {
@@ -194,9 +429,14 @@ export default function AppNavigator() {
       if (state === "active") syncHourlyFollowUps();
     });
 
-    const callLogSub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-      Promise.resolve(notificationService.acknowledgeHourlyFollowUpReminders?.()).catch(() => {});
-    });
+    const callLogSub = DeviceEventEmitter.addListener(
+      "CALL_LOG_CREATED",
+      () => {
+        Promise.resolve(
+          notificationService.acknowledgeHourlyFollowUpReminders?.(),
+        ).catch(() => {});
+      },
+    );
 
     return () => {
       disposed = true;
@@ -216,10 +456,13 @@ export default function AppNavigator() {
 
   useEffect(() => {
     if (!isLoggedIn) return undefined;
-    const sub = DeviceEventEmitter.addListener("INCOMING_CRM_MATCH", (payload) => {
-      if (!payload?.details) return;
-      setIncomingMatch(payload);
-    });
+    const sub = DeviceEventEmitter.addListener(
+      "INCOMING_CRM_MATCH",
+      (payload) => {
+        if (!payload?.details) return;
+        setIncomingMatch(payload);
+      },
+    );
     return () => sub.remove();
   }, [isLoggedIn]);
 
@@ -269,6 +512,7 @@ export default function AppNavigator() {
       <View
         style={{
           flex: 1,
+          backgroundColor: "#FFFFFF",
           justifyContent: "center",
           alignItems: "center",
         }}
@@ -278,11 +522,12 @@ export default function AppNavigator() {
     );
   }
 
-  if (isLoggedIn && billingLoading && !billingPlan) {
+  if (isLoggedIn && billingLoading && !billingPlan && !billingInfo?.reason) {
     return (
       <View
         style={{
           flex: 1,
+          backgroundColor: "#FFFFFF",
           justifyContent: "center",
           alignItems: "center",
         }}
@@ -295,6 +540,7 @@ export default function AppNavigator() {
   return (
     <NavigationContainer
       ref={navigationRef}
+      theme={APP_NAV_THEME}
       onStateChange={(state) => {
         const mainRoute = getMainRoute(state);
         if (mainRoute?.name !== "Main") {
@@ -312,7 +558,9 @@ export default function AppNavigator() {
           return;
         }
 
-        const history = tabHistoryRef.current.filter((name) => name !== currentTab);
+        const history = tabHistoryRef.current.filter(
+          (name) => name !== currentTab,
+        );
         tabHistoryRef.current = [...history, currentTab];
         lastTabRef.current = currentTab;
       }}
@@ -352,22 +600,35 @@ export default function AppNavigator() {
               {incomingMatch?.details?.name || "Enquiry"}
             </Text>
             {incomingMatch?.details?.enqNo ? (
-              <Text style={{ marginTop: 4, color: "#64748B", fontWeight: "700" }}>
+              <Text
+                style={{ marginTop: 4, color: "#64748B", fontWeight: "700" }}
+              >
                 Enquiry: {incomingMatch.details.enqNo}
               </Text>
             ) : null}
             {incomingMatch?.details?.status ? (
-              <Text style={{ marginTop: 4, color: "#64748B", fontWeight: "700" }}>
+              <Text
+                style={{ marginTop: 4, color: "#64748B", fontWeight: "700" }}
+              >
                 Status: {incomingMatch.details.status}
               </Text>
             ) : null}
             {incomingMatch?.phoneNumber ? (
-              <Text style={{ marginTop: 8, color: "#0F172A", fontWeight: "800" }}>
+              <Text
+                style={{ marginTop: 8, color: "#0F172A", fontWeight: "800" }}
+              >
                 {incomingMatch.phoneNumber}
               </Text>
             ) : null}
 
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
+            <View
+              style={{
+                flexDirection: "row",
+                gap: 10,
+                marginTop: 14,
+                justifyContent: "flex-end",
+              }}
+            >
               <TouchableOpacity
                 onPress={() => setIncomingMatch(null)}
                 style={{
@@ -378,7 +639,9 @@ export default function AppNavigator() {
                   borderColor: "#E2E8F0",
                 }}
               >
-                <Text style={{ fontWeight: "900", color: "#334155" }}>Dismiss</Text>
+                <Text style={{ fontWeight: "900", color: "#334155" }}>
+                  Dismiss
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => {
@@ -394,12 +657,132 @@ export default function AppNavigator() {
                   backgroundColor: "#4F46E5",
                 }}
               >
-                <Text style={{ fontWeight: "900", color: "#fff" }}>Open Enquiries</Text>
+                <Text style={{ fontWeight: "900", color: "#fff" }}>
+                  Open Enquiries
+                </Text>
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      <Modal
+        visible={Boolean(billingPrompt?.visible)}
+        transparent
+        animationType="fade"
+        onRequestClose={dismissBillingPrompt}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={dismissBillingPrompt}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(10,15,30,0.45)",
+            justifyContent: "center",
+            alignItems: "center",
+            padding: 20,
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              backgroundColor: "#fff",
+              borderRadius: 18,
+              padding: 18,
+            }}
+          >
+            <Text style={{ fontSize: 17, fontWeight: "900", color: "#0F172A" }}>
+              {billingPrompt?.title || "Upgrade required"}
+            </Text>
+            <Text style={{ marginTop: 8, color: "#475569", lineHeight: 21 }}>
+              {billingPrompt?.message || "Please upgrade your current plan to continue."}
+            </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "flex-end",
+                gap: 10,
+                marginTop: 18,
+              }}
+            >
+              <TouchableOpacity
+                onPress={dismissBillingPrompt}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: "#E2E8F0",
+                }}
+              >
+                <Text style={{ fontWeight: "900", color: "#334155" }}>Later</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  dismissBillingPrompt();
+                  if (!isStaffUser) {
+                    navigationRef.navigate("PricingScreen" as never);
+                  }
+                }}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 14,
+                  borderRadius: 12,
+                  backgroundColor: "#2563EB",
+                }}
+              >
+                <Text style={{ fontWeight: "900", color: "#fff" }}>Upgrade</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {isLoggedIn && billingAlert ? (
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 20,
+            paddingHorizontal: 14,
+            paddingTop: Platform.OS === "android" ? 42 : 54,
+          }}
+        >
+          <TouchableOpacity
+            activeOpacity={0.92}
+            onPress={() => navigationRef.navigate("PricingScreen" as never)}
+            style={{
+              backgroundColor:
+                billingAlert.level === "expired"
+                  ? "#7F1D1D"
+                  : billingAlert.level === "warning"
+                    ? "#92400E"
+                    : "#1D4ED8",
+              borderRadius: 14,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              shadowColor: "#000",
+              shadowOpacity: 0.15,
+              shadowRadius: 10,
+              shadowOffset: { width: 0, height: 4 },
+              elevation: 4,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
+              {billingAlert.title}
+            </Text>
+            <Text style={{ color: "rgba(255,255,255,0.92)", marginTop: 2, fontSize: 12 }}>
+              {billingAlert.message}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {!isLoggedIn ? (
         // Auth Stack
@@ -412,23 +795,13 @@ export default function AppNavigator() {
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Signup" component={SignupScreen} />
           <Stack.Screen
+            name="OtpVerification"
+            component={OtpVerificationScreen}
+          />
+          <Stack.Screen
             name="ForgotPassword"
             component={ForgotPasswordScreen}
           />
-        </Stack.Navigator>
-      ) : !billingPlan ? (
-        // Billing-only Stack (trial expired / no active plan)
-        <Stack.Navigator
-          screenOptions={{ headerShown: false }}
-          initialRouteName="PricingScreen"
-        >
-          <Stack.Screen name="PricingScreen" component={PricingScreen as any} />
-          <Stack.Screen name="CheckoutScreen" component={CheckoutScreen as any} />
-          <Stack.Screen name="RazorpayCheckoutScreen" component={RazorpayCheckoutScreen as any} />
-          <Stack.Screen name="PaymentSuccessScreen" component={PaymentSuccessScreen as any} />
-          <Stack.Screen name="EnterpriseContactScreen" component={EnterpriseContactScreen as any} />
-          <Stack.Screen name="ProfileScreen" component={ProfileScreen as any} />
-          <Stack.Screen name="SupportHelp" component={SupportHelpScreen as any} />
         </Stack.Navigator>
       ) : (
         // App Stack (logged in + active plan)
@@ -440,31 +813,138 @@ export default function AppNavigator() {
           <Stack.Screen name="LeadSourceScreen" component={LeadSourceScreen} />
           <Stack.Screen name="ProductScreen" component={ProductScreen} />
           <Stack.Screen name="StaffScreen" component={StaffScreen} />
+          <Stack.Screen
+            name="CommunicationScreen"
+            component={CommunicationScreen as any}
+          />
           <Stack.Screen name="TargetsScreen" component={TargetsScreen as any} />
           <Stack.Screen name="EmailScreen" component={EmailScreen as any} />
-          <Stack.Screen name="EmailSettingsScreen" component={EmailSettingsScreen as any} />
+          <Stack.Screen
+            name="EmailSettingsScreen"
+            component={EmailSettingsAccessScreen}
+          />
           <Stack.Screen
             name="MessageTemplateScreen"
-            component={MessageTemplateScreen as any}
+            component={MessageTemplateAccessScreen}
           />
           <Stack.Screen name="WhatsAppChat" component={ChatScreen as any} />
           <Stack.Screen
             name="WhatsAppSettings"
-            component={WhatsAppSettingsScreen as any}
-          />
-          <Stack.Screen
-            name="AutoCallScreen"
-            component={AutoCallScreen as any}
+            component={WhatsAppSettingsAccessScreen}
           />
           <Stack.Screen name="ProfileScreen" component={ProfileScreen as any} />
-          <Stack.Screen name="SupportHelp" component={SupportHelpScreen as any} />
-          <Stack.Screen name="PricingScreen" component={PricingScreen as any} />
-          <Stack.Screen name="CheckoutScreen" component={CheckoutScreen as any} />
-          <Stack.Screen name="RazorpayCheckoutScreen" component={RazorpayCheckoutScreen as any} />
-          <Stack.Screen name="PaymentSuccessScreen" component={PaymentSuccessScreen as any} />
-          <Stack.Screen name="EnterpriseContactScreen" component={EnterpriseContactScreen as any} />
+          <Stack.Screen name="AboutScreen" component={AboutScreen as any} />
+          <Stack.Screen
+            name="SupportHelp"
+            component={SupportHelpScreen as any}
+          />
+          <Stack.Screen name="PricingScreen" component={PricingAccessScreen} />
+          <Stack.Screen
+            name="CheckoutScreen"
+            component={CheckoutScreen as any}
+          />
+          <Stack.Screen
+            name="RazorpayCheckoutScreen"
+            component={RazorpayCheckoutScreen as any}
+          />
+          <Stack.Screen
+            name="PaymentSuccessScreen"
+            component={PaymentSuccessScreen as any}
+          />
+          <Stack.Screen
+            name="EnterpriseContactScreen"
+            component={EnterpriseContactScreen as any}
+          />
+          <Stack.Screen name="Report" component={ReportScreen as any} />
         </Stack.Navigator>
       )}
     </NavigationContainer>
   );
 }
+
+const guardStyles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  card: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 24,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  iconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: "#FEF2F2",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: "#0F172A",
+  },
+  text: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 21,
+    color: "#475569",
+    textAlign: "center",
+  },
+  button: {
+    marginTop: 18,
+    backgroundColor: "#2563EB",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  buttonText: {
+    color: "#FFFFFF",
+    fontWeight: "900",
+  },
+});
+
+const navStyles = StyleSheet.create({
+  tabItem: {
+    paddingHorizontal: 0,
+    paddingTop: 2,
+  },
+  tabLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    marginBottom: 0,
+    letterSpacing: 0.1,
+  },
+  iconWrap: {
+    width: 40,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconWrapActive: {
+    backgroundColor: "#EAF2FF",
+  },
+  badge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: "#DC2626",
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "900",
+    lineHeight: 12,
+    top: 4,
+  },
+});

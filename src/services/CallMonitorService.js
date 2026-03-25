@@ -12,9 +12,9 @@ if (Platform.OS !== 'web') {
         const lib = require('react-native-call-detector');
         CallDetectorManager = lib?.default || lib;
         // Check if the native module is actually present
-        isCallDetectorAvailable = !!NativeModules.CallDetectorManager && !!CallDetectorManager;
-    } catch (e) {
-        console.log('CallDetector library not found or native module missing:', e.message);
+        isCallDetectorAvailable = !!NativeModules.CallDetector && !!CallDetectorManager;
+    } catch (_e) {
+        console.log('CallDetector library not found or native module missing');
         isCallDetectorAvailable = false;
     }
 }
@@ -29,6 +29,12 @@ let lastIncomingLookup = { num: null, ts: 0 };
 let deviceSyncIntervalId = null;
 let lastDeviceSyncTs = 0;
 
+const isPlayStoreSafeMode = () =>
+    Constants.expoConfig?.extra?.playStoreSafeMode === true;
+
+export const isRestrictedCallMonitoringEnabled = () =>
+    Platform.OS === "android" && !isPlayStoreSafeMode() && !isExpoGo();
+
 const isExpoGo = () =>
     Constants.executionEnvironment === "storeClient" ||
     Constants.appOwnership === "expo";
@@ -36,16 +42,60 @@ const isExpoGo = () =>
 const requestPermissions = async () => {
     if (Platform.OS === 'android') {
         try {
-            const permissions = [
+            if (isPlayStoreSafeMode()) {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+                );
+                return granted === PermissionsAndroid.RESULTS.GRANTED;
+            }
+
+            const criticalPermissions = [
                 PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
                 PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
-                PermissionsAndroid.PERMISSIONS.PROCESS_OUTGOING_CALLS,
                 PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
-                PermissionsAndroid.PERMISSIONS.CALL_PHONE
-            ];
-            const granted = await PermissionsAndroid.requestMultiple(permissions);
+                PermissionsAndroid.PERMISSIONS.CALL_PHONE,
+            ].filter(Boolean);
+            const optionalPermissions = [
+                PermissionsAndroid.PERMISSIONS.PROCESS_OUTGOING_CALLS,
+                PermissionsAndroid.PERMISSIONS.ANSWER_PHONE_CALLS,
+                PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS,
+            ].filter(Boolean);
+
+            const granted = await PermissionsAndroid.requestMultiple([
+                ...criticalPermissions,
+                ...optionalPermissions,
+            ]);
             console.log('Call Logger Permissions:', granted);
-            return Object.values(granted).every(status => status === PermissionsAndroid.RESULTS.GRANTED);
+
+            const hasCriticalPermissions = criticalPermissions.every(
+                (permission) =>
+                    granted[permission] === PermissionsAndroid.RESULTS.GRANTED,
+            );
+            if (!hasCriticalPermissions) {
+                const deniedCritical = criticalPermissions.filter(
+                    (permission) =>
+                        granted[permission] !== PermissionsAndroid.RESULTS.GRANTED,
+                );
+                console.warn(
+                    '[CallMonitor] Missing critical permissions:',
+                    deniedCritical,
+                );
+                return false;
+            }
+
+            const deniedOptional = optionalPermissions.filter(
+                (permission) =>
+                    granted[permission] &&
+                    granted[permission] !== PermissionsAndroid.RESULTS.GRANTED,
+            );
+            if (deniedOptional.length) {
+                console.log(
+                    '[CallMonitor] Optional permissions denied:',
+                    deniedOptional,
+                );
+            }
+
+            return true;
         } catch (err) {
             console.warn(err);
             return false;
@@ -56,6 +106,7 @@ const requestPermissions = async () => {
 
 const syncDeviceLogsIfPossible = async ({ force = false } = {}) => {
     if (Platform.OS !== "android") return;
+    if (isPlayStoreSafeMode()) return;
     if (isExpoGo()) return;
 
     const now = Date.now();
@@ -91,7 +142,7 @@ export const isImmediateCallAvailable = () => {
     try {
         const RNImmediatePhoneCall = require('react-native-immediate-phone-call').default;
         return !!RNImmediatePhoneCall;
-    } catch (e) {
+    } catch (_e) {
         return false;
     }
 };
@@ -99,6 +150,11 @@ export const isImmediateCallAvailable = () => {
 export const startCallMonitoring = async (userData = null) => {
     if (Platform.OS === 'web') {
         process.env.NODE_ENV !== 'production' && console.log('Call Monitoring: Not supported on Web');
+        return;
+    }
+
+    if (isPlayStoreSafeMode()) {
+        console.log("Call Monitoring: Play Store safe mode is enabled; restricted call log features are disabled");
         return;
     }
 
@@ -129,10 +185,16 @@ export const startCallMonitoring = async (userData = null) => {
         console.log('Call Monitoring: CallDetector native module not available; using device log sync only');
     } else {
         callDetector = new CallDetectorManager(
-        (event, phoneNumber) => {
+        'neoapp-call-monitor',
+        async (event) => {
             const ev = String(event || "").trim().toLowerCase();
-            // Normalize incoming number (remove + and spaces)
-            const cleanNum = phoneNumber ? phoneNumber.replace(/\D/g, "") : null;
+            let cleanNum = currentNumber;
+
+            // This detector package emits call state but not the phone number.
+            // Pull the latest number from device call logs when possible.
+            if (!cleanNum) {
+                cleanNum = await getFallbackNumberFromDeviceLog();
+            }
             if (cleanNum) currentNumber = cleanNum;
 
             console.log(`[CallMonitor] EVENT: ${event} | NUM: ${cleanNum || 'Unknown'}`);
@@ -207,12 +269,6 @@ export const startCallMonitoring = async (userData = null) => {
                     break;
             }
         },
-        true, // readPhoneNumber
-        () => { console.warn("Call Monitor: Permission Denied by User"); },
-        {
-            title: 'Phone State Permission',
-            message: 'This app needs access to your phone state to log calls automatically.',
-        }
     );
     }
 
@@ -233,6 +289,7 @@ let isProcessing = false;
 
 const getFallbackNumberFromDeviceLog = async () => {
     if (Platform.OS !== 'android') return null;
+    if (isPlayStoreSafeMode()) return null;
     if (isExpoGo()) return null;
     try {
         const mod = require('react-native-call-log');
@@ -254,7 +311,7 @@ const getFallbackNumberFromDeviceLog = async () => {
             if (digits) return digits;
         }
         return null;
-    } catch (error) {
+    } catch (_error) {
         if (!hasWarnedUnavailableCallLog) {
             console.log(
                 "[CallMonitor] react-native-call-log unavailable; skipping fallback number lookup",
@@ -360,6 +417,12 @@ const handleCallEnd = async (phoneNumber) => {
             }
         }
 
+        try {
+            await syncDeviceLogsIfPossible({ force: true });
+        } catch (_syncError) {
+            // keep manual log result even if device sync fails
+        }
+
         // Reset everything
         callStartTime = null;
         dialStartTime = null;
@@ -375,11 +438,17 @@ export const stopCallMonitoring = () => {
     if (callDetector) {
         callDetector.dispose();
         callDetector = null;
-        if (deviceSyncIntervalId) {
-            clearInterval(deviceSyncIntervalId);
-            deviceSyncIntervalId = null;
-        }
-        console.log('🛑 Call Monitoring Service Stopped');
     }
+    if (deviceSyncIntervalId) {
+        clearInterval(deviceSyncIntervalId);
+        deviceSyncIntervalId = null;
+    }
+    callStartTime = null;
+    dialStartTime = null;
+    currentNumber = null;
+    currentCallType = "Unknown";
+    lastIncomingLookup = { num: null, ts: 0 };
+    isProcessing = false;
+    console.log('🛑 Call Monitoring Service Stopped');
 };
 

@@ -1,10 +1,10 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import getApiClient from "./apiClient";
 import { API_URL } from "./apiConfig";
+import { getAuthToken } from "./secureTokenStorage";
 
 const getAuthHeader = async (isMultipart = false) => {
-    const token = await AsyncStorage.getItem("token");
+    const token = await getAuthToken();
     return {
         headers: {
             Authorization: `Bearer ${token}`,

@@ -10,8 +10,22 @@ const Enquiry = require("../models/Enquiry");
 const EmailLog = require("../models/EmailLog");
 const EmailSettings = require("../models/EmailSettings");
 const EmailTemplate = require("../models/EmailTemplate");
-const { encrypt } = require("../utils/crypto");
-const { getCompanyEmailSettings, sendEmail } = require("../services/emailService");
+const FollowUp = require("../models/FollowUp");
+const cache = require("../utils/responseCache");
+const { decrypt, encrypt } = require("../utils/crypto");
+const {
+    ensureCompatibleFromEmail,
+    getCompanyEmailSettings,
+    sendEmail,
+    verifySentCopySettings,
+    verifyEmailSettings,
+} = require("../services/emailService");
+
+const isMaskedPasswordValue = (value) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return false;
+    return normalized === "********" || /^[*•]+$/.test(normalized);
+};
 
 const DEFAULT_EMAIL_TEMPLATES = [
     {
@@ -175,6 +189,58 @@ const getCompanyIdFromReq = (req) => {
     return companyId ? String(companyId) : null;
 };
 
+const toLocalIsoDate = (value = new Date()) => {
+    const dt = value instanceof Date ? value : new Date(value);
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const d = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+};
+
+const recordEmailActivity = async ({ req, ownerId, enquiry, subject, message }) => {
+    if (!enquiry?._id || !ownerId) return;
+
+    const activityAt = new Date();
+    const date = toLocalIsoDate(activityAt);
+    const summaryParts = [];
+    if (subject) summaryParts.push(`Subject: ${String(subject).trim()}`);
+    if (message) summaryParts.push(String(message).trim().slice(0, 220));
+    const remarks = summaryParts.join(" | ").trim() || "Email sent to enquiry";
+
+    await FollowUp.create({
+        enqId: enquiry._id,
+        enqNo: String(enquiry.enqNo || "").trim(),
+        userId: ownerId,
+        assignedTo: req.userId,
+        name: enquiry.name || "Enquiry",
+        mobile: enquiry.mobile || "",
+        image: enquiry.image || "",
+        product: enquiry.product || "",
+        date,
+        followUpDate: date,
+        nextFollowUpDate: date,
+        activityType: "Email",
+        type: "Email",
+        note: remarks,
+        remarks,
+        staffName: req.user?.name || "Staff",
+        nextAction: "Followup",
+        status: "Completed",
+        activityTime: activityAt,
+    });
+
+    await Enquiry.findByIdAndUpdate(enquiry._id, {
+        $set: {
+            lastContactedAt: activityAt,
+            status: "Contacted",
+        },
+    }).catch(() => null);
+
+    cache.invalidate("followups");
+    cache.invalidate("dashboard");
+    cache.invalidate("enquiries");
+};
+
 const escapeHtml = (raw) => {
     const s = String(raw || "");
     return s
@@ -286,6 +352,14 @@ router.get("/settings", async (req, res) => {
                 smtpUser: settings.smtpUser || "",
                 smtpPass: settings.smtpPassEncrypted ? "********" : "",
                 hasPassword: Boolean(settings.smtpPassEncrypted),
+                saveSentCopy: Boolean(settings.saveSentCopy),
+                imapHost: settings.imapHost || "",
+                imapPort: settings.imapPort || 993,
+                imapSecure: settings.imapSecure !== false,
+                imapUser: settings.imapUser || "",
+                imapPass: settings.imapPassEncrypted ? "********" : "",
+                hasImapPassword: Boolean(settings.imapPassEncrypted),
+                sentFolder: settings.sentFolder || "Sent",
                 fromName: settings.fromName || "",
                 fromEmail: settings.fromEmail || "",
                 updatedAt: settings.updatedAt || null,
@@ -307,6 +381,13 @@ router.put("/settings", async (req, res) => {
             smtpSecure = false,
             smtpUser = "",
             smtpPass = "",
+            saveSentCopy = false,
+            imapHost = "",
+            imapPort = 993,
+            imapSecure = true,
+            imapUser = "",
+            imapPass = "",
+            sentFolder = "Sent",
             fromName = "",
             fromEmail = "",
         } = req.body || {};
@@ -317,6 +398,12 @@ router.put("/settings", async (req, res) => {
             smtpPort: Number(smtpPort || 587),
             smtpSecure: Boolean(smtpSecure),
             smtpUser: String(smtpUser || "").trim(),
+            saveSentCopy: Boolean(saveSentCopy),
+            imapHost: String(imapHost || "").trim(),
+            imapPort: Number(imapPort || 993),
+            imapSecure: Boolean(imapSecure),
+            imapUser: String(imapUser || "").trim(),
+            sentFolder: String(sentFolder || "Sent").trim() || "Sent",
             fromName: String(fromName || "").trim(),
             fromEmail: String(fromEmail || "").trim(),
             updatedBy: req.userId,
@@ -326,16 +413,56 @@ router.put("/settings", async (req, res) => {
             return res.status(400).json({ ok: false, message: "SMTP Host, Port, and Username are required" });
         }
 
+        ensureCompatibleFromEmail({
+            smtpUser: next.smtpUser,
+            fromEmail: next.fromEmail,
+        });
+
         const existing = await EmailSettings.findOne({ companyId }).lean();
         const passValue = String(smtpPass || "").trim();
-        if (passValue && passValue !== "********") {
+        let smtpPassPlain = "";
+        if (passValue && !isMaskedPasswordValue(passValue)) {
             next.smtpPassEncrypted = encrypt(passValue);
+            smtpPassPlain = passValue;
         } else if (existing?.smtpPassEncrypted) {
             next.smtpPassEncrypted = existing.smtpPassEncrypted;
+            smtpPassPlain = decrypt(existing.smtpPassEncrypted);
         }
 
         if (!next.smtpPassEncrypted) {
             return res.status(400).json({ ok: false, message: "SMTP Password is required" });
+        }
+
+        const imapPassValue = String(imapPass || "").trim();
+        let imapPassPlain = "";
+        if (imapPassValue && !isMaskedPasswordValue(imapPassValue)) {
+            next.imapPassEncrypted = encrypt(imapPassValue);
+            imapPassPlain = imapPassValue;
+        } else if (existing?.imapPassEncrypted) {
+            next.imapPassEncrypted = existing.imapPassEncrypted;
+            imapPassPlain = decrypt(existing.imapPassEncrypted);
+        }
+
+        await verifyEmailSettings({
+            smtpHost: next.smtpHost,
+            smtpPort: next.smtpPort,
+            smtpSecure: next.smtpSecure,
+            smtpUser: next.smtpUser,
+            smtpPass: smtpPassPlain,
+        });
+
+        if (next.saveSentCopy) {
+            await verifySentCopySettings({
+                smtpHost: next.smtpHost,
+                smtpUser: next.smtpUser,
+                smtpPass: smtpPassPlain,
+                imapHost: next.imapHost,
+                imapPort: next.imapPort,
+                imapSecure: next.imapSecure,
+                imapUser: next.imapUser,
+                imapPass: imapPassPlain,
+                sentFolder: next.sentFolder,
+            });
         }
 
         await EmailSettings.updateOne(
@@ -493,9 +620,10 @@ router.post("/send", upload.single("file"), async (req, res) => {
         let usedTemplateId = templateId || null;
 
         let enquiry = null;
+        const ownerId = req.user?.parentUserId || req.userId;
         if (enquiryId) {
-            enquiry = await Enquiry.findOne({ _id: enquiryId, userId: req.user.parentUserId || req.userId })
-                .select("name email product")
+            enquiry = await Enquiry.findOne({ _id: enquiryId, userId: ownerId })
+                .select("enqNo name email mobile image product")
                 .lean();
         }
 
@@ -575,16 +703,35 @@ router.post("/send", upload.single("file"), async (req, res) => {
                         status: "Sent",
                         sentAt: new Date(),
                         messageId: result?.messageId || "",
+                        smtpResponse: String(result?.response || ""),
+                        acceptedRecipients: Array.isArray(result?.accepted) ? result.accepted : [],
+                        rejectedRecipients: Array.isArray(result?.rejected) ? result.rejected : [],
                         bodyHtml,
                     },
                 },
             );
 
+            await recordEmailActivity({
+                req,
+                ownerId,
+                enquiry,
+                subject: finalSubject,
+                message: finalBody,
+            });
+
             return res.json({ ok: true, logId: log._id, status: "Sent" });
         } catch (sendErr) {
             await EmailLog.updateOne(
                 { _id: log._id },
-                { $set: { status: "Failed", error: sendErr.message || "Send failed", bodyHtml } },
+                {
+                    $set: {
+                        status: "Failed",
+                        error: sendErr.message || "Send failed",
+                        smtpResponse: String(sendErr?.response || ""),
+                        rejectedRecipients: Array.isArray(sendErr?.rejected) ? sendErr.rejected : [],
+                        bodyHtml,
+                    },
+                },
             );
             return res.status(502).json({ ok: false, message: sendErr.message || "Send failed", logId: log._id });
         }

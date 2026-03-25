@@ -1100,7 +1100,7 @@ export default function TargetsScreen({ navigation }) {
                                 fontSize: 12,
                                 fontWeight: "700",
                             }}>
-                            Converted
+                            Sales
                         </Text>
                     </View>
 

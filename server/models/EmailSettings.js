@@ -14,6 +14,13 @@ const emailSettingsSchema = new mongoose.Schema(
         smtpSecure: { type: Boolean, default: false }, // true for 465, false for 587/STARTTLS
         smtpUser: { type: String, default: "", trim: true },
         smtpPassEncrypted: { type: String, default: "" },
+        saveSentCopy: { type: Boolean, default: false },
+        imapHost: { type: String, default: "", trim: true },
+        imapPort: { type: Number, default: 993 },
+        imapSecure: { type: Boolean, default: true },
+        imapUser: { type: String, default: "", trim: true },
+        imapPassEncrypted: { type: String, default: "" },
+        sentFolder: { type: String, default: "Sent", trim: true },
         fromName: { type: String, default: "", trim: true },
         fromEmail: { type: String, default: "", trim: true },
         updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -22,4 +29,3 @@ const emailSettingsSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("EmailSettings", emailSettingsSchema);
-

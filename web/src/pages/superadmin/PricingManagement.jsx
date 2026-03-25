@@ -13,6 +13,8 @@ const PLAN_PRESETS = {
     trialDays: "14",
     maxAdmins: "1",
     maxStaff: "1",
+    extraAdminPrice: "0",
+    extraStaffPrice: "0",
     features: ["Basic CRM", "Lead Capture"],
   },
   basic: {
@@ -22,6 +24,8 @@ const PLAN_PRESETS = {
     trialDays: "7",
     maxAdmins: "1",
     maxStaff: "2",
+    extraAdminPrice: "12",
+    extraStaffPrice: "8",
     features: ["Basic CRM", "Lead Capture", "Follow-ups"],
   },
   pro: {
@@ -31,6 +35,8 @@ const PLAN_PRESETS = {
     trialDays: "7",
     maxAdmins: "2",
     maxStaff: "10",
+    extraAdminPrice: "15",
+    extraStaffPrice: "10",
     features: ["Basic CRM", "Lead Capture", "Follow-ups", "Call Logs", "Reports"],
   },
   enterprise: {
@@ -40,6 +46,8 @@ const PLAN_PRESETS = {
     trialDays: "14",
     maxAdmins: "5",
     maxStaff: "100",
+    extraAdminPrice: "20",
+    extraStaffPrice: "12",
     features: ["Basic CRM", "Lead Capture", "Follow-ups", "Call Logs", "Reports", "Priority Support"],
   },
 };
@@ -55,6 +63,25 @@ const FEATURE_OPTIONS = [
   "API Access",
 ];
 
+const PRESET_CARD_META = {
+  free: {
+    label: "Free",
+    description: "Starter setup for trials and small teams.",
+  },
+  basic: {
+    label: "Basic",
+    description: "Balanced setup for everyday company usage.",
+  },
+  pro: {
+    label: "Pro",
+    description: "Built for growing teams with higher limits.",
+  },
+  enterprise: {
+    label: "Enterprise",
+    description: "Large-scale plan with premium capacity.",
+  },
+};
+
 const emptyForm = {
   code: "",
   name: "",
@@ -62,6 +89,8 @@ const emptyForm = {
   trialDays: "",
   maxAdmins: "",
   maxStaff: "",
+  extraAdminPrice: "",
+  extraStaffPrice: "",
   features: "",
   isActive: true,
 };
@@ -72,6 +101,8 @@ const toPayload = (form) => ({
   trialDays: Number(form.trialDays || 0),
   maxAdmins: Number(form.maxAdmins || 0),
   maxStaff: Number(form.maxStaff || 0),
+  extraAdminPrice: Number(form.extraAdminPrice || 0),
+  extraStaffPrice: Number(form.extraStaffPrice || 0),
   features: (form.features || "")
     .split(",")
     .map((x) => x.trim())
@@ -132,6 +163,8 @@ export default function PricingManagement() {
       trialDays: next.trialDays,
       maxAdmins: next.maxAdmins,
       maxStaff: next.maxStaff,
+      extraAdminPrice: next.extraAdminPrice,
+      extraStaffPrice: next.extraStaffPrice,
       features: next.features.join(", "),
     }));
   };
@@ -176,6 +209,8 @@ export default function PricingManagement() {
       trialDays: String(plan.trialDays ?? ""),
       maxAdmins: String(plan.maxAdmins ?? ""),
       maxStaff: String(plan.maxStaff ?? ""),
+      extraAdminPrice: String(plan.extraAdminPrice ?? ""),
+      extraStaffPrice: String(plan.extraStaffPrice ?? ""),
       features: (plan.features || []).join(", "),
       isActive: Boolean(plan.isActive),
     });
@@ -234,6 +269,7 @@ export default function PricingManagement() {
     { key: "code", label: "Code" },
     { key: "name", label: "Plan Name" },
     { key: "basePriceLabel", label: "Base Price" },
+    { key: "addonPriceLabel", label: "Add-on Pricing" },
     { key: "limitsLabel", label: "Limits" },
     { key: "trialDaysLabel", label: "Trial" },
     { key: "featuresLabel", label: "Features" },
@@ -268,6 +304,7 @@ export default function PricingManagement() {
 	  const rows = plans.map((p) => ({
 	    ...p,
 	    basePriceLabel: formatPrice(p.basePrice),
+	    addonPriceLabel: `Admin ${formatPrice(p.extraAdminPrice)} / Staff ${formatPrice(p.extraStaffPrice)}`,
 	    limitsLabel: `${Number(p.maxAdmins || 0)} admins / ${Number(p.maxStaff || 0)} staff`,
 	    trialDaysLabel: `${Number(p.trialDays || 0)} days`,
 	    featuresLabel: (p.features || []).slice(0, 3).join(", ") || "-",
@@ -328,16 +365,35 @@ export default function PricingManagement() {
 
               <form className="pm-form-grid" onSubmit={submit}>
                 {!editingId ? (
-                  <label className="pm-field pm-field-full">
+                  <div className="pm-field pm-field-full">
                     <span>Preset Template</span>
-                    <select aria-label="Plan preset" value={preset} onChange={(e) => applyPreset(e.target.value)}>
-                      <option value="">Choose plan type</option>
-                      <option value="free">Free</option>
-                      <option value="basic">Basic</option>
-                      <option value="pro">Pro</option>
-                      <option value="enterprise">Enterprise</option>
-                    </select>
-                  </label>
+                    <div className="pm-preset-grid" role="list" aria-label="Plan preset">
+                      {Object.entries(PRESET_CARD_META).map(([key, meta]) => {
+                        const presetPlan = PLAN_PRESETS[key];
+                        const selectedPreset = preset === key;
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            role="listitem"
+                            className={`pm-preset-card ${selectedPreset ? "is-selected" : ""}`}
+                            onClick={() => applyPreset(key)}
+                          >
+                            <div className="pm-preset-top">
+                              <strong>{meta.label}</strong>
+                              <span>{presetPlan?.code}</span>
+                            </div>
+                            <p>{meta.description}</p>
+                            <div className="pm-preset-stats">
+                              <span>{presetPlan?.maxStaff || 0} Staff</span>
+                              <span>{presetPlan?.maxAdmins || 0} Admin</span>
+                              <span>{presetPlan?.trialDays || 0} Trial Days</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ) : null}
 
                 <label className="pm-field">
@@ -372,33 +428,58 @@ export default function PricingManagement() {
                   />
                 </label>
 
+                <div className="pm-field pm-field-full">
+                  <span>Plan Limits</span>
+                  <div className="pm-limit-grid">
+                    <label className="pm-field pm-limit-card">
+                      <span>Max Staff</span>
+                      <input
+                        type="number"
+                        placeholder="10"
+                        value={form.maxStaff}
+                        onChange={(e) => setForm({ ...form, maxStaff: e.target.value })}
+                      />
+                    </label>
+
+                    <label className="pm-field pm-limit-card">
+                      <span>Max Admins</span>
+                      <input
+                        type="number"
+                        placeholder="2"
+                        value={form.maxAdmins}
+                        onChange={(e) => setForm({ ...form, maxAdmins: e.target.value })}
+                      />
+                    </label>
+
+                    <label className="pm-field pm-limit-card">
+                      <span>Trial Days</span>
+                      <input
+                        type="number"
+                        placeholder="7"
+                        value={form.trialDays}
+                        onChange={(e) => setForm({ ...form, trialDays: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                </div>
+
                 <label className="pm-field">
-                  <span>Trial Days</span>
+                  <span>Extra Admin Price (USD)</span>
                   <input
                     type="number"
-                    placeholder="7"
-                    value={form.trialDays}
-                    onChange={(e) => setForm({ ...form, trialDays: e.target.value })}
+                    placeholder="15"
+                    value={form.extraAdminPrice}
+                    onChange={(e) => setForm({ ...form, extraAdminPrice: e.target.value })}
                   />
                 </label>
 
                 <label className="pm-field">
-                  <span>Max Admins</span>
-                  <input
-                    type="number"
-                    placeholder="2"
-                    value={form.maxAdmins}
-                    onChange={(e) => setForm({ ...form, maxAdmins: e.target.value })}
-                  />
-                </label>
-
-                <label className="pm-field">
-                  <span>Max Staff</span>
+                  <span>Extra Staff Price (USD)</span>
                   <input
                     type="number"
                     placeholder="10"
-                    value={form.maxStaff}
-                    onChange={(e) => setForm({ ...form, maxStaff: e.target.value })}
+                    value={form.extraStaffPrice}
+                    onChange={(e) => setForm({ ...form, extraStaffPrice: e.target.value })}
                   />
                 </label>
 

@@ -1,8 +1,9 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, SafeAreaView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, SafeAreaView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SkeletonCard, SkeletonCircle, SkeletonLine, SkeletonPulse, SkeletonSpacer } from "../components/skeleton/Skeleton";
 import { verifyRazorpayPayment } from "../services/userService";
 
 export default function RazorpayCheckoutScreen({ navigation, route }) {
@@ -18,6 +19,8 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
         amountInr,
         planId,
         couponCode = "",
+        adminCount = 0,
+        staffCount = 0,
         displayCurrency = "INR",
         usdInrRate = 83,
         prefill = {},
@@ -48,6 +51,8 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
                     const res = await verifyRazorpayPayment({
                         planId,
                         couponCode,
+                        adminCount,
+                        staffCount,
                         razorpay_order_id: payload.razorpay_order_id,
                         razorpay_payment_id: payload.razorpay_payment_id,
                         razorpay_signature: payload.razorpay_signature,
@@ -57,6 +62,7 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
                         planName: res?.plan?.name || notes?.planName || "Selected",
                         finalPrice: res?.pricing?.finalPrice,
                         renewDate: res?.renewDate,
+                        receipt: res?.receipt || null,
                         displayCurrency,
                         usdInrRate,
                     });
@@ -68,7 +74,7 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
                 }
             }
         },
-        [couponCode, displayCurrency, navigation, notes?.planName, planId, usdInrRate, verifying],
+        [adminCount, couponCode, displayCurrency, navigation, notes?.planName, planId, staffCount, usdInrRate, verifying],
     );
 
     const html = useMemo(() => {
@@ -168,7 +174,13 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
 	                />
 	                {loading || verifying ? (
 	                    <View style={styles.loadingOverlay}>
-	                        <ActivityIndicator size="large" color="#0E5E6F" />
+	                        <SkeletonPulse>
+	                            <SkeletonCard style={{ width: 240, alignItems: "center", borderRadius: 22 }}>
+	                                <SkeletonCircle size={40} />
+	                                <SkeletonSpacer h={14} />
+	                                <SkeletonLine width="72%" height={12} />
+	                            </SkeletonCard>
+	                        </SkeletonPulse>
 	                    </View>
 	                ) : null}
 	            </View>

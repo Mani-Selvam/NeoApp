@@ -3,9 +3,11 @@ const router = express.Router();
 const CallLog = require("../models/CallLog");
 const CallSession = require("../models/CallSession");
 const Enquiry = require("../models/Enquiry");
+const FollowUp = require("../models/FollowUp");
 const User = require("../models/User");
 const { verifyToken } = require("../middleware/auth");
 const mongoose = require("mongoose");
+const cache = require("../utils/responseCache");
 
 const uniq = (arr) => [...new Set(arr.filter(Boolean))];
 const buildLooseDigitRegex = (digits = "") => {
@@ -37,7 +39,7 @@ const findEnquiryByPhone = async (baseQuery = {}, cleanNumber = "") => {
         ...baseQuery,
         $or: phoneOr,
     })
-        .select("_id name enqNo status userId")
+        .select("_id name enqNo status userId mobile image product enqBy")
         .lean();
 };
 
@@ -98,9 +100,30 @@ const normalizeCallType = (raw) => {
         .trim()
         .toLowerCase();
     if (!value) return null;
-    if (value === "1" || value.includes("incoming")) return "Incoming";
-    if (value === "2" || value.includes("outgoing")) return "Outgoing";
-    if (value === "3" || value.includes("missed")) return "Missed";
+    if (
+        value === "1" ||
+        value.includes("incoming") ||
+        value.includes("received") ||
+        value.includes("inbound") ||
+        value.includes("answered")
+    ) {
+        return "Incoming";
+    }
+    if (
+        value === "2" ||
+        value.includes("outgoing") ||
+        value.includes("dialed") ||
+        value.includes("outbound")
+    ) {
+        return "Outgoing";
+    }
+    if (
+        value === "3" ||
+        value.includes("missed") ||
+        value.includes("unanswered")
+    ) {
+        return "Missed";
+    }
     if (value.includes("rejected") || value.includes("blocked"))
         return "Missed";
     if (value.includes("notattended") || value.includes("not attended"))
@@ -135,6 +158,17 @@ const pickCallTimeMs = (entry) => {
     return Date.now();
 };
 
+const pickDurationSeconds = (entry) => {
+    const raw =
+        entry?.callDuration ??
+        entry?.duration ??
+        entry?.durationSeconds ??
+        entry?.dur ??
+        0;
+    const asNum = Number(raw);
+    return Number.isFinite(asNum) && asNum > 0 ? Math.floor(asNum) : 0;
+};
+
 const pickDeviceLogId = (entry, digits, callTimeMs, callType) => {
     const id =
         entry?.id ||
@@ -152,6 +186,76 @@ const getOwnerId = (req) =>
     req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
         : req.userId;
+
+const toLocalIsoDate = (value = new Date()) => {
+    const dt = value instanceof Date ? value : new Date(value);
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const d = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+};
+
+const recordCallActivity = async ({
+    enquiry,
+    ownerId,
+    staffId,
+    staffName,
+    callType,
+    duration,
+    note,
+    activityAt,
+}) => {
+    if (!enquiry?._id || !ownerId) return;
+
+    const at = activityAt instanceof Date ? activityAt : new Date(activityAt || Date.now());
+    const date = toLocalIsoDate(at);
+    const parts = [
+        `Call: ${callType || "Phone Call"}`,
+        Number(duration || 0) > 0 ? `Duration ${Math.floor(Number(duration || 0))} sec` : "",
+        String(note || "").trim(),
+    ].filter(Boolean);
+    const remarks = parts.join(" | ").slice(0, 260);
+
+    await FollowUp.create({
+        enqId: enquiry._id,
+        enqNo: String(enquiry.enqNo || "").trim(),
+        userId: ownerId,
+        assignedTo: staffId || ownerId,
+        name: enquiry.name || "Enquiry",
+        mobile: enquiry.mobile || "",
+        image: enquiry.image || "",
+        product: enquiry.product || "",
+        date,
+        followUpDate: date,
+        nextFollowUpDate: date,
+        activityType: "Phone Call",
+        type: "Phone Call",
+        note: remarks || "Phone call activity",
+        remarks: remarks || "Phone call activity",
+        staffName: staffName || "Staff",
+        nextAction: "Followup",
+        status: "Completed",
+        activityTime: at,
+    });
+
+    await Enquiry.findByIdAndUpdate(enquiry._id, {
+        $set: { lastContactedAt: at, status: "Contacted" },
+    }).catch(() => null);
+
+    cache.invalidate("followups");
+    cache.invalidate("dashboard");
+    cache.invalidate("enquiries");
+};
+
+const buildEnquiryLookupScope = (req) => {
+    if (req.user.role === "Staff" && req.user.parentUserId) {
+        return {
+            userId: req.user.parentUserId,
+            assignedTo: req.userId,
+        };
+    }
+    return { userId: req.userId };
+};
 
 // GET ALL CALL LOGS (With Search/Filter & Pagination)
 router.post("/debug", (req, res) => {
@@ -173,7 +277,7 @@ router.post("/session", verifyToken, async (req, res) => {
 
         if (!linkedEnquiryId) {
             const existingEnquiry = await findEnquiryByPhone(
-                { userId: ownerId },
+                buildEnquiryLookupScope(req),
                 cleanNum,
             );
             if (existingEnquiry) {
@@ -409,6 +513,16 @@ router.post("/webhook", async (req, res) => {
         });
 
         await newLog.save();
+        await recordCallActivity({
+            enquiry,
+            ownerId: targetUserId,
+            staffId: targetUserId,
+            staffName: enquiry?.enqBy || "Admin",
+            callType: newLog.callType,
+            duration: newLog.duration,
+            note: newLog.note,
+            activityAt: newLog.callTime,
+        });
 
         // Emit to owner/staff rooms only (tenant-safe)
         emitCallLogCreated(req, newLog, targetUserId, targetUserId);
@@ -514,13 +628,12 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
         let skippedCount = 0;
 
         for (const log of logs) {
-            // Normalize number for comparison
-            const cleanNum = (log.phoneNumber || "").replace(/\D/g, "");
+            const cleanNum = pickDigits(log);
             if (!cleanNum) continue;
 
             // 🔒 SECURITY/PRIVACY CHECK: Only sync if number exists in Enquiry DB
             const existingEnquiry = await findEnquiryByPhone(
-                { userId: ownerId },
+                buildEnquiryLookupScope(req),
                 cleanNum,
             );
 
@@ -530,39 +643,70 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
             }
 
             // Check if this log ID already exists to prevent duplicates
+            const rawCallType =
+                log.callType ||
+                log.type ||
+                log.callTypeName ||
+                log.cachedType ||
+                "";
+            const callTimeMs = pickCallTimeMs(log);
+            const deviceLogId = pickDeviceLogId(
+                log,
+                cleanNum,
+                callTimeMs,
+                rawCallType,
+            );
+
             const existingLog = await CallLog.findOne({
                 userId: ownerId,
-                id: log.id, // Use device log ID as uniqueness check
+                id: deviceLogId,
             });
 
             if (existingLog) continue;
 
             // determine proper call type rather than blindly defaulting
-            let callTypeToSave = normalizeCallType(log.callType);
+            let callTypeToSave = normalizeCallType(rawCallType);
             if (!callTypeToSave) {
                 // if device didn't supply a type we can infer based on duration
-                const dur = parseInt(log.callDuration) || 0;
+                const dur = pickDurationSeconds(log);
                 callTypeToSave = dur > 0 ? "Incoming" : "Missed";
             }
+
+            const durationSeconds = pickDurationSeconds(log);
 
             const newLog = new CallLog({
                 userId: ownerId,
                 staffId: req.userId,
-                id: log.id,
+                id: deviceLogId,
                 phoneNumber: cleanNum,
                 contactName: existingEnquiry.name,
                 enquiryId: existingEnquiry._id,
                 callType: callTypeToSave,
-                duration: parseInt(log.callDuration) || 0,
-                callTime: new Date(parseInt(log.callDateTime)),
+                duration: durationSeconds,
+                callTime: new Date(callTimeMs),
                 isVideoCall: !!log.isVideoCall,
-                simSlot: log.simSlot,
+                simSlot:
+                    log.simSlot ||
+                    log.phoneAccountId ||
+                    log.subscriptionId ||
+                    log.sim_id ||
+                    "",
                 isRead: log.isRead !== false,
                 countryCode: log.countryCode,
-                note: `Synced from Device (${log.callType})`,
+                note: `Synced from Device (${rawCallType || "unknown"})`,
             });
 
             await newLog.save();
+            await recordCallActivity({
+                enquiry: existingEnquiry,
+                ownerId,
+                staffId: req.userId,
+                staffName: req.user?.name || "Staff",
+                callType: newLog.callType,
+                duration: newLog.duration,
+                note: newLog.note,
+                activityAt: newLog.callTime,
+            });
             syncCount++;
         }
 
@@ -597,10 +741,11 @@ router.post("/", verifyToken, async (req, res) => {
         // Try to find an existing enquiry for this phone number if not provided
         let linkedEnquiryId = enquiryId;
         let contactName = req.body.contactName;
+        const normalizedCallType = normalizeCallType(callType) || callType;
 
         if (!linkedEnquiryId) {
             const existingEnquiry = await findEnquiryByPhone(
-                { userId: ownerId },
+                buildEnquiryLookupScope(req),
                 cleanNum,
             );
 
@@ -626,7 +771,7 @@ router.post("/", verifyToken, async (req, res) => {
             phoneNumber: cleanNum,
             contactName,
             enquiryId: linkedEnquiryId,
-            callType,
+            callType: normalizedCallType,
             duration: duration || 0,
             businessNumber:
                 req.user.mobile ||
@@ -635,11 +780,28 @@ router.post("/", verifyToken, async (req, res) => {
             note,
             callTime: callTime || new Date(),
             followUpCreated: req.body.followUpCreated || false,
-            isPendingCallback: callType === "Missed",
+            isPendingCallback: normalizedCallType === "Missed",
             isPersonal: false,
         });
 
         const savedLog = await newCallLog.save();
+        const linkedEnquiry =
+            linkedEnquiryId
+                ? await Enquiry.findById(linkedEnquiryId)
+                    .select("enqNo name mobile image product")
+                    .lean()
+                : null;
+
+        await recordCallActivity({
+            enquiry: linkedEnquiry,
+            ownerId,
+            staffId: req.userId,
+            staffName: req.user?.name || "Staff",
+            callType: savedLog.callType,
+            duration: savedLog.duration,
+            note: savedLog.note,
+            activityAt: savedLog.callTime,
+        });
 
         emitCallLogCreated(req, savedLog, ownerId, req.userId);
 

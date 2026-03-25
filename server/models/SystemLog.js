@@ -7,7 +7,7 @@ const systemLogSchema = new mongoose.Schema(
     ip: { type: String, default: "unknown" },
     category: {
       type: String,
-      enum: ["auth", "admin_action", "api", "error"],
+      enum: ["auth", "admin_action", "api", "error", "billing"],
       default: "api",
       index: true,
     },

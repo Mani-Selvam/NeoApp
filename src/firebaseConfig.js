@@ -1,12 +1,10 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
-import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import firebase from "firebase/compat/app";
-import "firebase/compat/auth";
+import { getApp, getApps, initializeApp } from "firebase/app";
+import { getAuth, getReactNativePersistence, initializeAuth } from "firebase/auth";
 
-console.log("🔥 Initializing Firebase...");
-
-const firebaseConfig = Constants.expoConfig?.extra?.firebase ||
+const firebaseConfig =
+  Constants.expoConfig?.extra?.firebase ||
   Constants.appConfig?.extra?.firebase || {
     apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
     authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -16,33 +14,20 @@ const firebaseConfig = Constants.expoConfig?.extra?.firebase ||
     appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
   };
 
-if (!firebaseConfig || !firebaseConfig.apiKey) {
-  console.error("❌ Firebase configuration is still missing after checks!");
+if (!firebaseConfig?.apiKey) {
+  console.warn("[Firebase] Missing Firebase configuration.");
 }
 
-// Initialize Firebase modular (v9+)
-let app;
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+let auth;
 try {
-  app = initializeApp(firebaseConfig);
-  console.log("✅ Firebase Modular App initialized");
-} catch (e) {
-  console.error("❌ Firebase Modular initialization failed:", e.message);
+  auth = initializeAuth(app, {
+    persistence: getReactNativePersistence(AsyncStorage),
+  });
+} catch (_error) {
+  auth = getAuth(app);
 }
 
-export const auth = app ? getAuth(app) : null;
-
-// Initialize Firebase compat (needed for expo-firebase-recaptcha on web)
-if (!firebase.apps.length && firebaseConfig) {
-  try {
-    firebase.initializeApp(firebaseConfig);
-    console.log("✅ Firebase Compat App initialized (Web)");
-  } catch (e) {
-    console.error("❌ Firebase Compat initialization failed:", e.message);
-  }
-}
-
-export default firebase;
-// Export the resolved firebase config so UI components (e.g. recaptcha) can
-// receive a concrete object even if Constants.expoConfig is unavailable.
-export { firebaseConfig };
-
+export { app, auth, firebaseConfig };
+export default app;

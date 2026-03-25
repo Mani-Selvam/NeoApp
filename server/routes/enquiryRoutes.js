@@ -49,11 +49,77 @@ const normalizeEnquiryStatus = (raw) => {
   return ENQUIRY_STATUS_MAP[key] || raw;
 };
 
+const deriveFollowUpEnquiryStatus = (followUp, currentEnquiryStatus) => {
+  const explicitStatus = normalizeEnquiryStatus(followUp?.enquiryStatus);
+  if (explicitStatus && explicitStatus !== "New") return explicitStatus;
+  if (followUp?.enquiryStatus) return explicitStatus;
+
+  const typeText = String(followUp?.activityType || followUp?.type || "").trim().toLowerCase();
+  const noteText = String(followUp?.note || followUp?.remarks || "").trim().toLowerCase();
+  const nextAction = String(followUp?.nextAction || "").trim().toLowerCase();
+
+  if (typeText === "system" || noteText === "enquiry created") {
+    return "New";
+  }
+  if (nextAction === "sales") return "Converted";
+  if (nextAction === "drop") return "Not Interested";
+
+  return normalizeEnquiryStatus(currentEnquiryStatus || "New");
+};
+
 const toIsoDate = (value) => {
   if (!value) return null;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString().split("T")[0];
+};
+
+const getEnquiryAccessScope = async (req) => {
+  const normalizedRole = String(req.user?.role || "").trim().toLowerCase();
+
+  if (normalizedRole === "staff" && req.user?.parentUserId) {
+    return {
+      ownerUserIds: [req.user.parentUserId],
+      scopingFilter: { assignedTo: req.userId },
+    };
+  }
+
+  const companyId = req.user?.company_id;
+  if (companyId) {
+    const companyUsers = await User.find({ company_id: companyId })
+      .select("_id")
+      .lean();
+
+    const ownerUserIds = companyUsers
+      .map((item) => item?._id)
+      .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
+
+    if (ownerUserIds.length > 0) {
+      return {
+        ownerUserIds,
+        scopingFilter: {},
+      };
+    }
+  }
+
+  return {
+    ownerUserIds: [req.userId],
+    scopingFilter: {},
+  };
+};
+
+const buildOwnerScopedFilter = (scope) => {
+  const ownerUserIds = Array.isArray(scope?.ownerUserIds)
+    ? scope.ownerUserIds.filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
+    : [];
+
+  const userId =
+    ownerUserIds.length <= 1 ? ownerUserIds[0] || null : { $in: ownerUserIds };
+
+  return {
+    userId,
+    ...(scope?.scopingFilter || {}),
+  };
 };
 
 // Configure multer for image uploads
@@ -130,6 +196,7 @@ router.get("/", verifyToken, async (req, res) => {
       search,
       status,
       date,
+      followUpDate,
       dateFrom,
       dateTo,
       assignedTo,
@@ -137,14 +204,8 @@ router.get("/", verifyToken, async (req, res) => {
       limit = 20,
     } = req.query;
     const response = await (async () => {
-      let query = {};
-
-      if (req.user.role === "Staff" && req.user.parentUserId) {
-        query.userId = req.user.parentUserId;
-        query.assignedTo = req.userId;
-      } else {
-        query.userId = req.userId;
-      }
+      const scope = await getEnquiryAccessScope(req);
+      let query = buildOwnerScopedFilter(scope);
 
       if (!query.userId) {
         if (req.user.role === "Staff")
@@ -171,6 +232,40 @@ router.get("/", verifyToken, async (req, res) => {
         query.assignedTo = assignedTo;
       }
 
+      if (followUpDate) {
+        const followUpScope = {
+          userId: query.userId,
+          date: followUpDate,
+        };
+        if (query.assignedTo) followUpScope.assignedTo = query.assignedTo;
+
+        const matchingFollowUps = await FollowUp.find(followUpScope)
+          .select("enqId")
+          .lean();
+
+        const followUpEnquiryIds = [
+          ...new Set(
+            matchingFollowUps
+              .map((item) => item.enqId)
+              .filter((id) => mongoose.Types.ObjectId.isValid(String(id))),
+          ),
+        ];
+
+        if (followUpEnquiryIds.length === 0) {
+          return {
+            data: [],
+            pagination: {
+              total: 0,
+              page: 1,
+              limit: Number(limit),
+              pages: 0,
+            },
+          };
+        }
+
+        query._id = { $in: followUpEnquiryIds };
+      }
+
       if (search) {
         query.$or = [
           { name: { $regex: search, $options: "i" } },
@@ -180,10 +275,12 @@ router.get("/", verifyToken, async (req, res) => {
         ];
       }
 
-      if (status && status !== "All") {
-        const normalizedStatus = normalizeEnquiryStatus(status);
+      const selectedStatusFilter =
+        status && status !== "All" ? normalizeEnquiryStatus(status) : "";
+
+      if (selectedStatusFilter && !followUpDate) {
         const acceptedStatuses =
-          ENQUIRY_STATUS_QUERY_MAP[normalizedStatus] || [normalizedStatus];
+          ENQUIRY_STATUS_QUERY_MAP[selectedStatusFilter] || [selectedStatusFilter];
         query.status = { $in: acceptedStatuses };
       }
 
@@ -210,9 +307,10 @@ router.get("/", verifyToken, async (req, res) => {
           enqId: { $in: enquiryIds },
         };
         if (query.assignedTo) followUpScope.assignedTo = query.assignedTo;
+        if (followUpDate) followUpScope.date = followUpDate;
 
         const latestFollowUps = await FollowUp.find(followUpScope)
-          .select("enqId nextFollowUpDate followUpDate date activityTime createdAt")
+          .select("enqId nextFollowUpDate followUpDate date activityTime createdAt enquiryStatus nextAction activityType type note remarks")
           .sort({ activityTime: -1, createdAt: -1 })
           .lean();
 
@@ -229,7 +327,24 @@ router.get("/", verifyToken, async (req, res) => {
           item.latestFollowUpDate =
             latest.nextFollowUpDate || latest.followUpDate || latest.date || null;
           item.latestFollowUpAt = latest.activityTime || latest.createdAt || null;
+          item.selectedFollowUpDate =
+            latest.date || latest.nextFollowUpDate || latest.followUpDate || null;
+          item.selectedEnquiryStatus = deriveFollowUpEnquiryStatus(latest, item.status);
+          if (followUpDate) {
+            item.currentEnquiryStatus = item.status;
+            item.status = item.selectedEnquiryStatus;
+          }
         });
+
+        if (selectedStatusFilter && followUpDate) {
+          const acceptedStatuses =
+            ENQUIRY_STATUS_QUERY_MAP[selectedStatusFilter] || [selectedStatusFilter];
+          for (let i = enquiries.length - 1; i >= 0; i -= 1) {
+            if (!acceptedStatuses.includes(normalizeEnquiryStatus(enquiries[i]?.status))) {
+              enquiries.splice(i, 1);
+            }
+          }
+        }
       }
 
       const hasMore = enquiries.length > limitNum;
@@ -254,42 +369,6 @@ router.get("/", verifyToken, async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
-// Helper to create an initial follow-up for an enquiry
-const createInitialFollowUp = async (enquiry, ownerId, assignedToId) => {
-  try {
-    const todayStr = new Date().toISOString().split("T")[0];
-    const now = new Date();
-    const initialFollowUp = new FollowUp({
-      enqId: enquiry._id,
-      userId: ownerId,
-      assignedTo: assignedToId || ownerId, // Default to owner if no assignment
-      enqNo: enquiry.enqNo,
-      name: enquiry.name,
-      mobile: enquiry.mobile,
-      image: enquiry.image,
-      product: enquiry.product,
-      date: todayStr,
-      followUpDate: todayStr,
-      nextFollowUpDate: todayStr,
-      time: new Date().toLocaleTimeString("en-US", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-      type: "System",
-      activityType: "System",
-      note: "Enquiry created",
-      remarks: "Enquiry created",
-      nextAction: "Followup",
-      status: "Scheduled",
-      activityTime: now,
-    });
-    await initialFollowUp.save();
-  } catch (err) {
-    console.error("❌ Failed to create initial follow-up:", err.message);
-  }
-};
 
 const resolveAssignee = async ({ requestedAssignedTo, ownerId, actorId, actor }) => {
   if (requestedAssignedTo) return requestedAssignedTo;
@@ -363,15 +442,15 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
 
     const savedEnquiry = await newEnquiry.save();
 
-    // Create initial follow-up with explicit IDs
-    await createInitialFollowUp(savedEnquiry, ownerId, assignedTo);
-
     // --- AUTO-SEND INTRO TEMPLATE (if available) ---
     try {
       const cleanMobile = (savedEnquiry.mobile || "").replace(/\D/g, "");
       const short10 =
         cleanMobile.length > 10 ? cleanMobile.slice(-10) : cleanMobile;
-      const cfg = await loadWhatsappConfig({ ownerUserId: ownerId });
+      const companyId = req.user?.company_id || null;
+      const cfg = await loadWhatsappConfig(
+        companyId ? { companyId } : { ownerUserId: ownerId },
+      );
       const normalizedPhone = normalizePhoneNumber(
         cleanMobile,
         cfg?.defaultCountry || "91",
@@ -392,6 +471,7 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
         try {
           const sendResult = await sendWhatsAppMessage({
             ownerUserId: ownerId,
+            companyId,
             phoneNumber: normalizedPhone,
             content: introTemplate.content,
           });
@@ -438,8 +518,8 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
     }
 
     cache.invalidate("enquiries"); // Clear list cache
-    cache.invalidate("followups"); // Follow-up was also created
-    cache.invalidate("dashboard"); // Dashboard stats changed
+    cache.invalidate("followups");
+    cache.invalidate("dashboard");
     res.status(201).json(savedEnquiry);
   } catch (err) {
     if (err.code === 11000 && err.keyPattern?.enqNo) {
@@ -473,19 +553,6 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
         });
         const savedEnquiry = await retryEnquiry.save();
 
-        // Use the same ownerId/assignedTo logic as above for retry
-        const retryOwnerId =
-          req.user.role === "Staff" && req.user.parentUserId
-            ? req.user.parentUserId
-            : req.userId;
-        const retryAssignedTo = req.body.assignedTo || req.userId;
-
-        await createInitialFollowUp(
-          savedEnquiry,
-          retryOwnerId,
-          retryAssignedTo,
-        );
-
         return res.status(201).json(savedEnquiry);
       } catch (retryErr) {
         return res.status(400).json({
@@ -502,23 +569,23 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
 router.get("/:id", verifyToken, async (req, res) => {
   try {
     let enquiry;
-    // Scoping Logic
-    let filterUserId = req.userId;
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-    }
-    const filter = { userId: filterUserId };
+    const scope = await getEnquiryAccessScope(req);
+    const filter = buildOwnerScopedFilter(scope);
 
     if (mongoose.Types.ObjectId.isValid(req.params.id)) {
       enquiry = await Enquiry.findOne({
         _id: req.params.id,
         ...filter,
-      }).lean();
+      })
+        .populate("assignedTo", "name email mobile role")
+        .lean();
     } else {
       enquiry = await Enquiry.findOne({
         enqNo: req.params.id,
         ...filter,
-      }).lean();
+      })
+        .populate("assignedTo", "name email mobile role")
+        .lean();
     }
 
     if (!enquiry) {
@@ -536,14 +603,8 @@ router.get("/:id", verifyToken, async (req, res) => {
 router.get("/:id/detail", verifyToken, async (req, res) => {
   try {
     const id = req.params.id;
-    let filterUserId = req.userId;
-    let scopingFilter = {};
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-      scopingFilter = { assignedTo: req.userId };
-    }
-
-    const baseFilter = { userId: filterUserId, ...scopingFilter };
+    const scope = await getEnquiryAccessScope(req);
+    const baseFilter = buildOwnerScopedFilter(scope);
     const query = mongoose.Types.ObjectId.isValid(id)
       ? { _id: id, ...baseFilter }
       : { enqNo: id, ...baseFilter };
@@ -556,7 +617,13 @@ router.get("/:id/detail", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Enquiry not found or unauthorized" });
     }
 
-    const timeline = await FollowUp.find({ enqId: enquiry._id, userId: filterUserId, ...scopingFilter })
+    const timeline = await FollowUp.find({ enqId: enquiry._id, ...baseFilter })
+      .find({
+        activityType: { $ne: "System" },
+        type: { $ne: "System" },
+        note: { $ne: "Enquiry created" },
+        remarks: { $ne: "Enquiry created" },
+      })
       .sort({ activityTime: 1, createdAt: 1 })
       .select(
         "activityType type note remarks followUpDate nextFollowUpDate date staffName assignedTo status nextAction createdAt activityTime",
@@ -588,16 +655,12 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
     const nextStatus = normalizeEnquiryStatus(req.body.status);
     if (!nextStatus) return res.status(400).json({ message: "status is required" });
 
-    let filterUserId = req.userId;
-    let scopingFilter = {};
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-      scopingFilter = { assignedTo: req.userId };
-    }
+    const scope = await getEnquiryAccessScope(req);
+    const baseFilter = buildOwnerScopedFilter(scope);
 
     const query = mongoose.Types.ObjectId.isValid(req.params.id)
-      ? { _id: req.params.id, userId: filterUserId, ...scopingFilter }
-      : { enqNo: req.params.id, userId: filterUserId, ...scopingFilter };
+      ? { _id: req.params.id, ...baseFilter }
+      : { enqNo: req.params.id, ...baseFilter };
 
     const update = { status: nextStatus };
     if (nextStatus === "Converted") update.conversionDate = new Date();
@@ -621,17 +684,12 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
 // UPCOMING FOLLOW-UP REMINDERS LIST
 router.get("/meta/reminders", verifyToken, async (req, res) => {
   try {
-    let filterUserId = req.userId;
-    let scopingFilter = {};
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-      scopingFilter = { assignedTo: req.userId };
-    }
+    const scope = await getEnquiryAccessScope(req);
+    const baseFilter = buildOwnerScopedFilter(scope);
 
     const today = new Date().toISOString().split("T")[0];
     const reminders = await FollowUp.find({
-      userId: filterUserId,
-      ...scopingFilter,
+      ...baseFilter,
       status: { $nin: ["Completed", "Drop", "Dropped"] },
       $or: [
         { nextFollowUpDate: { $gte: today } },
@@ -650,19 +708,75 @@ router.get("/meta/reminders", verifyToken, async (req, res) => {
   }
 });
 
+router.get("/meta/followup-status-summary", verifyToken, async (req, res) => {
+  try {
+    const selectedDate = String(req.query.followUpDate || toIsoDate(new Date()) || "").trim();
+    const counts = {
+      All: 0,
+      New: 0,
+      Contacted: 0,
+      Interested: 0,
+      "Not Interested": 0,
+      Converted: 0,
+      Closed: 0,
+    };
+
+    if (!selectedDate) {
+      return res.json({ date: null, total: 0, counts });
+    }
+
+    const scope = await getEnquiryAccessScope(req);
+    const baseFilter = buildOwnerScopedFilter(scope);
+
+    const followUps = await FollowUp.find({
+      ...baseFilter,
+      date: selectedDate,
+    })
+      .select("enqId")
+      .lean();
+
+    const enquiryIds = [
+      ...new Set(
+        followUps
+          .map((item) => item.enqId)
+          .filter((id) => mongoose.Types.ObjectId.isValid(String(id))),
+      ),
+    ];
+
+    if (enquiryIds.length === 0) {
+      return res.json({ date: selectedDate, total: 0, counts });
+    }
+
+    const enquiries = await Enquiry.find({
+      userId: baseFilter.userId,
+      _id: { $in: enquiryIds },
+    })
+      .select("status")
+      .lean();
+
+    enquiries.forEach((item) => {
+      const normalizedStatus = normalizeEnquiryStatus(item?.status);
+      const summaryKey = counts[normalizedStatus] !== undefined ? normalizedStatus : "New";
+      counts[summaryKey] += 1;
+      counts.All += 1;
+    });
+
+    res.json({ date: selectedDate, total: counts.All, counts });
+  } catch (err) {
+    console.error("Follow-up status summary error:", err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // REPORT SUMMARY (total, converted, pending/missed followups)
 router.get("/meta/report-summary", verifyToken, async (req, res) => {
   try {
-    let filterUserId = req.userId;
-    let scopingFilter = {};
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-      scopingFilter = { assignedTo: req.userId };
-    }
+    const scope = await getEnquiryAccessScope(req);
+    const baseFilter = buildOwnerScopedFilter(scope);
 
     const today = new Date().toISOString().split("T")[0];
-    const enquiryFilter = { userId: filterUserId, ...scopingFilter };
-    const followFilter = { userId: filterUserId, ...scopingFilter };
+    const enquiryFilter = { ...baseFilter };
+    const followFilter = { ...baseFilter };
 
     const [totalEnquiries, convertedEnquiries, pendingFollowUps, missedFollowUps] = await Promise.all([
       Enquiry.countDocuments(enquiryFilter),
@@ -696,11 +810,8 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
     // Handle image - either from file upload or base64 string
     let updateData = { ...req.body };
 
-    let filterUserId = req.userId;
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-    }
-    const filter = { userId: filterUserId };
+    const scope = await getEnquiryAccessScope(req);
+    const filter = buildOwnerScopedFilter(scope);
 
     // PROTECT USERID: Ensure users can't change who the record belongs to
     delete updateData.userId;
@@ -785,11 +896,8 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
 // DELETE ENQUIRY
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
-    let filterUserId = req.userId;
-    if (req.user.role === "Staff" && req.user.parentUserId) {
-      filterUserId = req.user.parentUserId;
-    }
-    const filter = { _id: req.params.id, userId: filterUserId };
+    const scope = await getEnquiryAccessScope(req);
+    const filter = { _id: req.params.id, ...buildOwnerScopedFilter(scope) };
     const enquiry = await Enquiry.findOneAndDelete(filter);
     if (!enquiry) {
       return res
@@ -799,7 +907,7 @@ router.delete("/:id", verifyToken, async (req, res) => {
 
     // Remove related follow-ups so deleted enquiries do not appear in Follow-up screens.
     await FollowUp.deleteMany({
-      userId: filterUserId,
+      ...buildOwnerScopedFilter(scope),
       $or: [{ enqId: enquiry._id }, { enqNo: enquiry.enqNo }],
     });
 

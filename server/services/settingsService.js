@@ -72,19 +72,26 @@ const readRazorpayFromEnv = () => ({
 });
 
 const mergeRazorpayConfig = ({ db, env }) => {
+  const dbHasPair = Boolean(db?.keyId && db?.keySecret);
+  const envHasPair = Boolean(env?.keyId && env?.keySecret);
+
+  const pairSource = dbHasPair ? "db" : envHasPair ? "env" : "none";
   const merged = {
-    keyId: db?.keyId || env?.keyId || "",
-    keySecret: db?.keySecret || env?.keySecret || "",
+    keyId: pairSource === "db" ? db.keyId : pairSource === "env" ? env.keyId : "",
+    keySecret: pairSource === "db" ? db.keySecret : pairSource === "env" ? env.keySecret : "",
     webhookSecret: db?.webhookSecret || env?.webhookSecret || "",
   };
 
   const sources = {
-    keyId: db?.keyId ? "db" : env?.keyId ? "env" : "none",
-    keySecret: db?.keySecret ? "db" : env?.keySecret ? "env" : "none",
+    keyPair: pairSource,
+    keyId: pairSource,
+    keySecret: pairSource,
     webhookSecret: db?.webhookSecret ? "db" : env?.webhookSecret ? "env" : "none",
   };
 
-  const used = new Set(Object.values(sources).filter((s) => s !== "none"));
+  const used = new Set(
+    [pairSource, sources.webhookSecret].filter((source) => source && source !== "none"),
+  );
   const source = used.size === 1 ? [...used][0] : used.size === 0 ? "none" : "mixed";
 
   return { ...merged, source, sources };

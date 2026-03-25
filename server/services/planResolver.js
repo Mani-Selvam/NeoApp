@@ -2,6 +2,7 @@
 const Coupon = require("../models/Coupon");
 const CompanySubscription = require("../models/CompanySubscription");
 const CompanyPlanOverride = require("../models/CompanyPlanOverride");
+const User = require("../models/User");
 
 const calcDiscount = (price, coupon) => {
   if (!coupon) return { discountAmount: 0, finalPrice: price };
@@ -60,10 +61,27 @@ const resolveEffectivePlan = async (companyId) => {
   }
 
   const basePrice = canUseOverride && typeof override?.customPrice === "number" ? override.customPrice : plan.basePrice;
-  const maxStaff = canUseOverride && typeof override?.customMaxStaff === "number" ? override.customMaxStaff : plan.maxStaff;
+  const planMaxStaff =
+    canUseOverride && typeof override?.customMaxStaff === "number" ? override.customMaxStaff : plan.maxStaff;
   const trialDays = canUseOverride && typeof override?.customTrialDays === "number" ? override.customTrialDays : plan.trialDays;
-  const effectiveExpiry =
+  const maxAdmins = Number(subscription.allocatedAdmins || plan.maxAdmins || 0);
+  const maxStaff = Number(subscription.allocatedStaff || planMaxStaff || 0);
+  let effectiveExpiry =
     (canUseOverride ? override?.customExpiry : null) || subscription.manualOverrideExpiry || subscription.endDate;
+
+  // Trial subscriptions should follow the current plan's trial-day duration in real time
+  // unless a manual/custom expiry was explicitly set.
+  if (
+    String(subscription.status || "").toLowerCase() === "trial" &&
+    !subscription.manualOverrideExpiry &&
+    !(canUseOverride && override?.customExpiry) &&
+    subscription.startDate
+  ) {
+    const trialStart = new Date(subscription.startDate);
+    const dynamicTrialEnd = new Date(trialStart);
+    dynamicTrialEnd.setDate(dynamicTrialEnd.getDate() + Number(trialDays || 0));
+    effectiveExpiry = dynamicTrialEnd;
+  }
 
   if (effectiveExpiry) {
     const expiry = new Date(effectiveExpiry);
@@ -73,7 +91,40 @@ const resolveEffectivePlan = async (companyId) => {
     }
   }
 
-  const { discountAmount, finalPrice } = calcDiscount(basePrice, coupon);
+  const includedAdmins = Number(plan.maxAdmins || 0);
+  const includedStaff = Number(planMaxStaff || 0);
+  const extraAdminPrice = Number(subscription.extraAdminPrice || plan.extraAdminPrice || 0);
+  const extraStaffPrice = Number(subscription.extraStaffPrice || plan.extraStaffPrice || 0);
+  const extraAdminsPurchased = Math.max(
+    Number(subscription.extraAdminsPurchased || 0),
+    Math.max(0, maxAdmins - includedAdmins),
+  );
+  const extraStaffPurchased = Math.max(
+    Number(subscription.extraStaffPurchased || 0),
+    Math.max(0, maxStaff - includedStaff),
+  );
+  const originalPrice = Number(
+    (
+      Number(basePrice || 0) +
+      extraAdminsPurchased * extraAdminPrice +
+      extraStaffPurchased * extraStaffPrice
+    ).toFixed(2),
+  );
+  const computedPricing = calcDiscount(originalPrice, coupon);
+  const finalPrice = Number(subscription.finalPrice || computedPricing.finalPrice || 0);
+  const discountAmount = Number(
+    Math.max(0, originalPrice - finalPrice).toFixed(2),
+  );
+  const [adminsUsed, staffUsed] = await Promise.all([
+    User.countDocuments({
+      company_id: companyId,
+      role: { $in: ["Admin", "admin"] },
+    }),
+    User.countDocuments({
+      company_id: companyId,
+      role: { $in: ["Staff", "staff"] },
+    }),
+  ]);
 
   return {
     hasPlan: true,
@@ -83,10 +134,17 @@ const resolveEffectivePlan = async (companyId) => {
       code: plan.code,
       name: plan.name,
       features: plan.features || [],
-      maxAdmins: plan.maxAdmins,
+      maxAdmins,
       maxStaff,
       trialDays,
       basePrice,
+      originalPrice,
+      extraAdminPrice,
+      extraStaffPrice,
+      extraAdminsPurchased,
+      extraStaffPurchased,
+      adminsUsed: Number(adminsUsed || 0),
+      staffUsed: Number(staffUsed || 0),
       finalPrice,
       discountAmount,
       couponCode: coupon?.code || null,
@@ -96,8 +154,13 @@ const resolveEffectivePlan = async (companyId) => {
       status: subscription.status,
       startDate: subscription.startDate,
       endDate: effectiveExpiry,
+      effectiveEndDate: effectiveExpiry,
       originalEndDate: subscription.endDate,
       manualOverrideExpiry: subscription.manualOverrideExpiry || null,
+      allocatedAdmins: maxAdmins,
+      allocatedStaff: maxStaff,
+      extraAdminsPurchased,
+      extraStaffPurchased,
     },
     override: override || null,
   };

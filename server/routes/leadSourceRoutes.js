@@ -3,13 +3,37 @@ const router = express.Router();
 const LeadSource = require("../models/LeadSource");
 const { verifyToken } = require("../middleware/auth");
 
+const DEFAULT_LEAD_SOURCE_NAMES = ["Direct", "Walking", "Website"];
+
+const getLeadSourceOwnerId = (req) =>
+    req.user.role === "Staff" && req.user.parentUserId
+        ? req.user.parentUserId
+        : req.userId;
+
+const ensureDefaultLeadSources = async (ownerId) => {
+    if (!ownerId) return;
+    const existing = await LeadSource.find({ createdBy: ownerId })
+        .select("name")
+        .lean();
+    const existingNames = new Set(
+        (existing || []).map((item) => String(item?.name || "").trim().toLowerCase()),
+    );
+    const missing = DEFAULT_LEAD_SOURCE_NAMES.filter(
+        (name) => !existingNames.has(name.toLowerCase()),
+    ).map((name) => ({
+        name,
+        createdBy: ownerId,
+    }));
+
+    if (!missing.length) return;
+    await LeadSource.insertMany(missing, { ordered: false }).catch(() => { });
+};
+
 // GET ALL LEAD SOURCES
 router.get("/", verifyToken, async (req, res) => {
     try {
-        let filterUserId = req.userId;
-        if (req.user.role === "Staff" && req.user.parentUserId) {
-            filterUserId = req.user.parentUserId;
-        }
+        const filterUserId = getLeadSourceOwnerId(req);
+        await ensureDefaultLeadSources(filterUserId);
 
         const leadSources = await LeadSource.find({ createdBy: filterUserId }).lean();
         res.status(200).json(leadSources);
@@ -21,10 +45,7 @@ router.get("/", verifyToken, async (req, res) => {
 // GET SINGLE LEAD SOURCE
 router.get("/:id", verifyToken, async (req, res) => {
     try {
-        let filterUserId = req.userId;
-        if (req.user.role === "Staff" && req.user.parentUserId) {
-            filterUserId = req.user.parentUserId;
-        }
+        const filterUserId = getLeadSourceOwnerId(req);
 
         const leadSource = await LeadSource.findOne({ _id: req.params.id, createdBy: filterUserId }).lean();
         if (!leadSource) {
@@ -39,25 +60,24 @@ router.get("/:id", verifyToken, async (req, res) => {
 // CREATE LEAD SOURCE
 router.post("/", verifyToken, async (req, res) => {
     try {
-        const { name, sources } = req.body;
+        const { name } = req.body;
 
         // Validate input
-        if (!name || !Array.isArray(sources) || sources.length === 0) {
+        if (!name?.trim()) {
             return res.status(400).json({
-                error: "Lead source name and at least one source are required",
+                error: "Lead source name is required",
             });
         }
 
         // Determine Owner ID (Main User)
         // If Staff creates it, assign ownership to Main User (parentUserId)
-        const ownerId = (req.user.role === "Staff" && req.user.parentUserId)
-            ? req.user.parentUserId
-            : req.userId;
+        const ownerId = getLeadSourceOwnerId(req);
+
+        await ensureDefaultLeadSources(ownerId);
 
         const newLeadSource = new LeadSource({
-            name,
-            sources,
-            createdBy: ownerId
+            name: name.trim(),
+            createdBy: ownerId,
         });
 
         const savedLeadSource = await newLeadSource.save();
@@ -70,20 +90,24 @@ router.post("/", verifyToken, async (req, res) => {
 // UPDATE LEAD SOURCE
 router.put("/:id", verifyToken, async (req, res) => {
     try {
-        const { name, sources } = req.body;
+        const { name } = req.body;
 
-        let filterUserId = req.userId;
-        if (req.user.role === "Staff" && req.user.parentUserId) {
-            filterUserId = req.user.parentUserId;
+        if (!name?.trim()) {
+            return res.status(400).json({ error: "Lead source name is required" });
         }
+
+        const filterUserId = getLeadSourceOwnerId(req);
 
         const leadSource = await LeadSource.findOneAndUpdate(
             { _id: req.params.id, createdBy: filterUserId },
             {
                 $set: {
-                    name,
-                    sources,
+                    name: name.trim(),
                     updatedAt: new Date(),
+                },
+                $unset: {
+                    sources: 1,
+                    enquiryFields: 1,
                 },
             },
             { returnDocument: "after", runValidators: true },
@@ -102,10 +126,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 // DELETE LEAD SOURCE
 router.delete("/:id", verifyToken, async (req, res) => {
     try {
-        let filterUserId = req.userId;
-        if (req.user.role === "Staff" && req.user.parentUserId) {
-            filterUserId = req.user.parentUserId;
-        }
+        const filterUserId = getLeadSourceOwnerId(req);
 
         const leadSource = await LeadSource.findOneAndDelete({ _id: req.params.id, createdBy: filterUserId });
 

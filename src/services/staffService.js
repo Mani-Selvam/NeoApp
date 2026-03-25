@@ -3,12 +3,22 @@ import getApiClient from "./apiClient";
 const shouldSuppressAuthLog = (error) => {
     const status = error?.response?.status;
     const code = error?.response?.data?.code;
+    const message = String(
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        "",
+    );
     return (
         error?.isAuthError === true ||
         status === 401 ||
         status === 403 ||
+        status === 400 ||
+        status === 409 ||
         code === "COMPANY_NOT_ACTIVE" ||
-        code === "COMPANY_NOT_FOUND"
+        code === "COMPANY_NOT_FOUND" ||
+        /email already exists/i.test(message) ||
+        /email already used/i.test(message) ||
+        /mobile number is already used/i.test(message)
     );
 };
 

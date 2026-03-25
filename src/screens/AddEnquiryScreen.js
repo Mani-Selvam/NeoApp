@@ -2,2174 +2,1900 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useEffect, useRef, useState } from "react";
+import * as Location from "expo-location";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
-    ActivityIndicator,
-    Animated,
-    Dimensions,
-    Image,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StatusBar,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  useWindowDimensions,
+  View,
 } from "react-native";
 import {
-    SafeAreaView,
-    useSafeAreaInsets,
+  SafeAreaView,
+  useSafeAreaInsets,
 } from "react-native-safe-area-context";
+import ConfettiBurst from "../components/ConfettiBurst";
 import * as addressService from "../services/addressService";
 import { API_URL as GLOBAL_API_URL } from "../services/apiConfig";
 import * as leadSourceService from "../services/leadSourceService";
 import notificationService from "../services/notificationService";
 import * as productService from "../services/productService";
+import { getAuthToken } from "../services/secureTokenStorage";
 import * as staffService from "../services/staffService";
+import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../utils/imageHelper";
-import ConfettiBurst from "../components/ConfettiBurst";
 
 const API_URL = `${GLOBAL_API_URL}/enquiries`;
 
-// Modern palette (aligned with Pricing/Checkout)
-const COLORS = {
-    primary: "#1A6BFF",
-    primaryDark: "#0055E5",
-    secondary: "#7B61FF",
-    success: "#00C48C",
-    warning: "#FF9500",
-    danger: "#FF3B5C",
-    dark: "#0A0F1E",
-    gray: {
-        50: "#F2F4F8",
-        100: "#FAFBFF",
-        200: "#E8ECF4",
-        300: "#D7DEEF",
-        400: "#7C85A3",
-        500: "#3A4060",
-        600: "#2A2F49",
-        700: "#1E2238",
-        800: "#121526",
-        900: "#0A0F1E",
-    },
-    white: "#FFFFFF",
-    gradient: ["#1A6BFF", "#7B61FF"],
+const getOrdinalAdminLabel = (position) => {
+  const labels = {
+    1: "Main Admin",
+    2: "Secondary Admin",
+    3: "Third Admin",
+    4: "Fourth Admin",
+    5: "Fifth Admin",
+  };
+  return labels[position] || `${position}th Admin`;
 };
 
-export default function AddEnquiryScreen({ route, navigation }) {
-    const insets = useSafeAreaInsets();
-    const editingEnquiry = route?.params?.enquiry; // Get enquiry from navigation params
-    const isEditMode = !!editingEnquiry; // Determine if we're in edit mode
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const C = {
+  primary: "#2563EB",
+  primarySoft: "#EFF6FF",
+  primaryMid: "rgba(37,99,235,0.12)",
+  success: "#059669",
+  warning: "#D97706",
+  danger: "#DC2626",
+  bg: "#F1F5F9",
+  card: "#FFFFFF",
+  border: "#E2E8F0",
+  borderFocus: "#2563EB",
+  text: "#0F172A",
+  textSub: "#334155",
+  textMuted: "#64748B",
+  textLight: "#94A3B8",
+  navBg: "#FFFFFF",
+  gradient: ["#2563EB", "#4F46E5"],
+};
 
-    const [form, setForm] = useState({
-        enqType: "Normal",
-        source: "",
-        name: "",
-        mobile: "",
-        email: "",
-        address: "",
-        product: "",
-        cost: "",
-        image: null,
-        assignedTo: "", // Store Staff ID
+// ─── Responsive scale ─────────────────────────────────────────────────────────
+const useScale = () => {
+  const { width, height } = useWindowDimensions();
+  return useMemo(() => {
+    const isTablet = width >= 768;
+    const isLarge = width >= 414 && width < 768;
+    const isMedium = width >= 375 && width < 414;
+    const isSmall = width < 375;
+
+    const base = isTablet ? 16 : isLarge ? 15 : isMedium ? 14 : 13;
+
+    return {
+      isTablet,
+      isLarge,
+      isMedium,
+      isSmall,
+      width,
+      height,
+      // Font sizes — all relative to base
+      f: {
+        xs: base - 3, // 10–13
+        sm: base - 1, // 12–15
+        base: base, // 13–16
+        md: base + 1, // 14–17
+        lg: base + 2, // 15–18
+        xl: base + 4, // 17–20
+        xxl: base + 7, // 20–23
+      },
+      // Spacing — tighter on small screens
+      sp: {
+        xs: isTablet ? 6 : 4,
+        sm: isTablet ? 8 : 6,
+        md: isTablet ? 14 : 10,
+        lg: isTablet ? 20 : 14,
+        xl: isTablet ? 28 : 20,
+        xxl: isTablet ? 36 : 26,
+      },
+      // Component sizes
+      inputH: isTablet ? 56 : isLarge ? 50 : isMedium ? 48 : 46,
+      radius: isTablet ? 16 : 12,
+      cardR: isTablet ? 20 : 14,
+      iconBox: isTablet ? 36 : 32,
+      hPad: isTablet ? 24 : isLarge ? 18 : 16,
+    };
+  }, [width, height]);
+};
+
+// ─── Field component ──────────────────────────────────────────────────────────
+const Field = React.memo(
+  ({
+    label,
+    value,
+    onChange,
+    placeholder,
+    icon,
+    keyboardType = "default",
+    error,
+    autoCapitalize = "sentences",
+    multiline = false,
+    onBlur,
+  }) => {
+    const sc = useScale();
+    const [focused, setFocused] = useState(false);
+    const anim = useRef(new Animated.Value(0)).current;
+
+    const onFocus = () => {
+      setFocused(true);
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: false,
+      }).start();
+    };
+    const handleBlur = () => {
+      setFocused(false);
+      Animated.timing(anim, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: false,
+      }).start();
+      onBlur?.();
+    };
+
+    const borderColor = anim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [
+        error ? C.danger : C.border,
+        error ? C.danger : C.borderFocus,
+      ],
     });
-    const [loading, setLoading] = useState(false);
-    const [showAdvanced, setShowAdvanced] = useState(false);
-    const [errors, setErrors] = useState({});
-    const [leadSources, setLeadSources] = useState([]);
-    const [products, setProducts] = useState([]);
-    const [creatingProduct, setCreatingProduct] = useState(false);
-    const [newProductName, setNewProductName] = useState("");
-    const [loadingSources, setLoadingSources] = useState(false);
-    const [showProductModal, setShowProductModal] = useState(false);
-    const [showSourceModal, setShowSourceModal] = useState(false);
-    const [addressPredictions, setAddressPredictions] = useState([]);
-    const [addressLoading, setAddressLoading] = useState(false);
-    const [showAddressDropdown, setShowAddressDropdown] = useState(false);
-
-    // Staff Assignment
-    const [staffList, setStaffList] = useState([]);
-    const [loadingStaff, setLoadingStaff] = useState(false);
-    const [showStaffModal, setShowStaffModal] = useState(false);
-
-    // Toast animation state
-    const [toastMessage, setToastMessage] = useState("");
-    const [toastType, setToastType] = useState("success"); // "success" | "error"
-    const [toastVisible, setToastVisible] = useState(false);
-    const toastAnimValue = useRef(new Animated.Value(0)).current;
-  const toastTimeoutRef = useRef(null);
-  const confettiRef = useRef(null);
-
-    // Animation
-    const fadeAnim = React.useRef(new Animated.Value(0)).current;
-
-    // Ensure notifications are initialized on mount
-    useEffect(() => {
-        notificationService.initializeNotifications();
-    }, []);
-
-    useEffect(() => {
-        // Entrance animation
-        Animated.timing(fadeAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-        }).start();
-
-        // Fetch lead sources
-        const fetchLeadSources = async () => {
-            try {
-                setLoadingSources(true);
-                const groups = await leadSourceService.getAllLeadSources();
-                const sources = [];
-                groups?.forEach((group) => {
-                    group.sources?.forEach((source) => {
-                        sources.push({
-                            id: source._id,
-                            name: source.name,
-                            group: group.name,
-                        });
-                    });
-                });
-                setLeadSources(sources);
-            } catch (error) {
-                console.error("Error fetching lead sources:", error);
-            } finally {
-                setLoadingSources(false);
-            }
-        };
-        fetchLeadSources();
-
-        // Fetch Staff (for assignment)
-        const fetchStaff = async () => {
-            try {
-                setLoadingStaff(true);
-                const staff = await staffService.getAllStaff();
-                // Filter out inactive staff if creating new enquiry? Maybe keep all if editing?
-                // For now, show all.
-                if (Array.isArray(staff)) {
-                    setStaffList(staff);
-                }
-            } catch (error) {
-                console.error("Error fetching staff:", error);
-            } finally {
-                setLoadingStaff(false);
-            }
-        };
-        fetchStaff();
-    }, [isEditMode, editingEnquiry]);
-
-    // If editing existing enquiry, prefill form
-    useEffect(() => {
-        if (isEditMode && editingEnquiry) {
-            setForm((prev) => ({
-                ...prev,
-                enqType: editingEnquiry.enqType || prev.enqType,
-                source: editingEnquiry.source || prev.source,
-                name: editingEnquiry.name || prev.name,
-                mobile: editingEnquiry.mobile || prev.mobile,
-                email: editingEnquiry.email || "",
-                address: editingEnquiry.address || prev.address,
-                product: editingEnquiry.product || prev.product,
-                cost: editingEnquiry.cost
-                    ? String(editingEnquiry.cost)
-                    : prev.cost,
-                image: editingEnquiry.image || prev.image,
-                assignedTo: editingEnquiry.assignedTo || prev.assignedTo,
-            }));
-        }
-    }, [isEditMode, editingEnquiry]);
-
-    // Fetch products (hoisted so it can be reused)
-    const fetchProducts = async () => {
-        try {
-            const list = await productService.getAllProducts();
-            setProducts(Array.isArray(list) ? list : []);
-        } catch (error) {
-            console.error("Error fetching products:", error);
-        }
-    };
-
-    // call once on mount
-    useEffect(() => {
-        fetchProducts();
-    }, []);
-
-    const updateField = (field, value) => {
-        setForm((prev) => ({ ...prev, [field]: value }));
-        if (errors[field]) {
-            setErrors((prev) => ({ ...prev, [field]: null }));
-        }
-    };
-
-    const pickImage = async () => {
-        // No request permissions needed for launching image library in Expo SDK 53+
-        let result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.5,
-            base64: true, // Get base64 data
-        });
-
-        if (!result.canceled) {
-            const asset = result.assets[0];
-            // Store as base64 data URL for database storage
-            const base64Image = `data:image/jpeg;base64,${asset.base64}`;
-            updateField("image", base64Image);
-        }
-    };
-
-    // Handle address input change with debouncing
-    const addressTimeoutRef = React.useRef(null);
-    const handleAddressChange = (text) => {
-        updateField("address", text);
-
-        // Clear previous timeout
-        if (addressTimeoutRef.current) {
-            clearTimeout(addressTimeoutRef.current);
-        }
-
-        if (text.trim().length >= 3) {
-            setAddressLoading(true);
-            addressTimeoutRef.current = setTimeout(async () => {
-                try {
-                    const predictions =
-                        await addressService.getAddressPredictions(text);
-                    setAddressPredictions(predictions);
-                    setShowAddressDropdown(true);
-                } catch (error) {
-                    console.error("Error fetching predictions:", error);
-                } finally {
-                    setAddressLoading(false);
-                }
-            }, 200);
-        } else {
-            setAddressPredictions([]);
-            setShowAddressDropdown(false);
-        }
-    };
-
-    // Handle address selection from dropdown
-    const handleAddressSelect = async (prediction) => {
-        setShowAddressDropdown(false);
-        setAddressLoading(true);
-
-        try {
-            const details = await addressService.getPlaceDetails(
-                prediction.placeId,
-            );
-            if (details) {
-                updateField("address", details.address);
-            } else {
-                updateField("address", prediction.fullAddress);
-            }
-        } catch (error) {
-            console.error("Error selecting address:", error);
-            updateField("address", prediction.fullAddress);
-        } finally {
-            setAddressLoading(false);
-        }
-    };
-
-    const validateForm = () => {
-        const newErrors = {};
-
-        // In edit mode, only validate fields that are being changed (non-empty)
-        // In create mode, validate all required fields
-        if (!isEditMode) {
-            // Create mode: strict validation
-            if (!form.name?.trim()) newErrors.name = "Name is required";
-            if (!form.mobile?.trim()) newErrors.mobile = "Mobile is required";
-            if (!form.product?.trim())
-                newErrors.product = "Product is required";
-        } else {
-            // Edit mode: only validate if field has value (optional validation)
-            // This allows editing specific fields without requiring all fields
-            if (form.name && !form.name.trim()) {
-                newErrors.name = "Name cannot be empty";
-            }
-            if (form.mobile && !form.mobile.trim()) {
-                newErrors.mobile = "Mobile cannot be empty";
-            }
-            if (form.product && !form.product.trim()) {
-                newErrors.product = "Product cannot be empty";
-            }
-        }
-
-        // Validate mobile format if provided
-        if (form.mobile?.trim() && form.mobile.trim().length !== 10) {
-            newErrors.mobile = "Mobile must be 10 digits";
-        }
-
-        setErrors(newErrors);
-        return Object.keys(newErrors).length === 0;
-    };
-
-    // Show animated toast popup
-    const showToast = (message, type = "success", autoDismiss = true) => {
-        // Clear any existing timeout
-        if (toastTimeoutRef.current) {
-            clearTimeout(toastTimeoutRef.current);
-        }
-
-        setToastMessage(message);
-        setToastType(type);
-        setToastVisible(true);
-
-        // Animate in
-        Animated.spring(toastAnimValue, {
-            toValue: 1,
-            useNativeDriver: true,
-            tension: 50,
-            friction: 10,
-        }).start();
-
-        // Auto-dismiss if requested
-        if (autoDismiss) {
-            toastTimeoutRef.current = setTimeout(() => {
-                Animated.timing(toastAnimValue, {
-                    toValue: 0,
-                    duration: 300,
-                    useNativeDriver: true,
-                }).start(() => {
-                    setToastVisible(false);
-                });
-            }, 2500);
-        }
-    };
-
-    const handleSubmit = async () => {
-        if (!validateForm()) return;
-
-        setLoading(true);
-        try {
-            const url = isEditMode
-                ? `${API_URL}/${editingEnquiry._id}`
-                : API_URL;
-            const method = isEditMode ? "PUT" : "POST";
-
-            let response;
-
-            // Get token for auth
-            const token = await AsyncStorage.getItem("token");
-
-            // Sanitize data before sending
-            const submissionData = { ...form };
-            if (submissionData.assignedTo === "")
-                submissionData.assignedTo = null;
-            if (submissionData.cost)
-                submissionData.cost = Number(submissionData.cost);
-
-            // Always use JSON (images are now base64 encoded)
-            response = await fetch(url, {
-                method: method,
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: token ? `Bearer ${token}` : "",
-                },
-                body: JSON.stringify(submissionData),
-            });
-
-            const data = await response.json();
-            if (response.ok) {
-                if (!isEditMode) {
-                    confettiRef.current?.play?.();
-                }
-
-                // Show success notification with enquiry details
-                if (!isEditMode) {
-                    await notificationService.showEnquirySuccessNotification({
-                        name: form.name,
-                        source: form.source,
-                        product: form.product,
-                    });
-                }
-
-                // Reset form and close after showing success toast
-                setTimeout(() => {
-                    if (!isEditMode) {
-                        setForm({
-                            enqType: "Normal",
-                            source: "",
-                            name: "",
-                            mobile: "",
-                            address: "",
-                            product: "",
-                            cost: "",
-                            image: null,
-                        });
-                        setShowAdvanced(false);
-                        setAddressPredictions([]);
-                        setShowAddressDropdown(false);
-                        setAddressLoading(false);
-                    }
-
-                    // Call the callback and close form
-                    route.params?.onEnquirySaved?.(data);
-
-                    // Close the form after 1.2 seconds total (0.3s + 0.9s)
-                    setTimeout(() => {
-                        navigation.goBack();
-                    }, 900);
-                }, 300);
-            } else {
-                // Show error notification
-                const errorMessage =
-                    data.message ||
-                    (isEditMode
-                        ? "Failed to update enquiry"
-                        : "Failed to create enquiry");
-                await notificationService.showEnquiryErrorNotification(
-                    errorMessage,
-                );
-                showToast(errorMessage, "error");
-            }
-        } catch (error) {
-            // Show error notification for network errors
-            await notificationService.showEnquiryErrorNotification(
-                error.message || "Network error. Please try again.",
-            );
-            showToast(
-                error.message || "Network error. Please try again.",
-                "error",
-            );
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Inline product creation from Add Enquiry modal
-    const createProductInline = async () => {
-        if (!newProductName.trim()) {
-            Alert.alert("Error", "Product name is required");
-            return;
-        }
-        try {
-            setCreatingProduct(true);
-            const payload = {
-                name: newProductName.trim(),
-                items: [{ name: newProductName.trim() }],
-            };
-            const created = await productService.createProduct(payload);
-            // refresh list and select
-            await fetchProducts();
-            updateField("product", created.name || newProductName.trim());
-            setNewProductName("");
-            setShowProductModal(false);
-        } catch (err) {
-            console.error("Create product inline error:", err);
-            Alert.alert(
-                "Error",
-                err.response?.data?.message || "Failed to create product",
-            );
-        } finally {
-            setCreatingProduct(false);
-        }
-    };
-
-    // --- RENDER HELPERS ---
-    const renderInput = (
-        label,
-        value,
-        onChange,
-        placeholder,
-        icon,
-        keyboardType = "default",
-        error,
-        autoCapitalize = "sentences",
-    ) => (
-        <View style={styles.inputWrapper}>
-            <Text style={styles.inputLabel}>{label}</Text>
-            <View
-                style={[
-                    styles.inputContainer,
-                    error && styles.inputErrorBorder,
-                    { borderColor: error ? COLORS.danger : COLORS.gray[200] },
-                ]}>
-                <View style={styles.inputIconBox}>
-                    <Ionicons name={icon} size={20} color={COLORS.gray[400]} />
-                </View>
-                <TextInput
-                    style={styles.inputField}
-                    value={value}
-                    onChangeText={onChange}
-                    placeholder={placeholder}
-                    placeholderTextColor={COLORS.gray[400]}
-                    keyboardType={keyboardType}
-                    autoCapitalize={autoCapitalize}
-                />
-            </View>
-            {error && <Text style={styles.errorText}>{error}</Text>}
-        </View>
-    );
+    const bgColor = anim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [error ? "#FEF2F2" : C.card, error ? "#FEF2F2" : "#F8FAFF"],
+    });
 
     return (
-        <SafeAreaView style={[styles.container]}>
-            <StatusBar
-                barStyle="dark-content"
-                backgroundColor={COLORS.gray[50]}
+      <View style={{ marginBottom: sc.sp.md }}>
+        {label ? (
+          <Text
+            style={{
+              fontSize: sc.f.sm,
+              fontWeight: "600",
+              color: C.textSub,
+              marginBottom: sc.sp.xs,
+              marginLeft: 2,
+            }}
+          >
+            {label}
+          </Text>
+        ) : null}
+        <Animated.View
+          style={{
+            flexDirection: "row",
+            alignItems: multiline ? "flex-start" : "center",
+            borderWidth: focused ? 1.5 : 1,
+            borderColor,
+            borderRadius: sc.radius,
+            backgroundColor: bgColor,
+            paddingHorizontal: sc.sp.md,
+            paddingVertical: multiline ? sc.sp.sm : 0,
+            height: multiline ? undefined : sc.inputH,
+            minHeight: multiline ? 88 : sc.inputH,
+          }}
+        >
+          <View
+            style={{
+              width: sc.iconBox,
+              height: sc.iconBox,
+              borderRadius: sc.iconBox / 2,
+              backgroundColor: focused ? C.primaryMid : "#F1F5F9",
+              alignItems: "center",
+              justifyContent: "center",
+              marginRight: sc.sp.sm,
+              marginTop: multiline ? sc.sp.xs : 0,
+            }}
+          >
+            <Ionicons
+              name={icon}
+              size={sc.f.md}
+              color={focused ? C.primary : C.textMuted}
             />
-            <ConfettiBurst ref={confettiRef} topOffset={0} />
-
-            {/* Top Bar */}
-            <View style={styles.navBar}>
-                <TouchableOpacity
-                    style={styles.navBtn}
-                    onPress={() => navigation.goBack()}
-                    activeOpacity={0.85}>
-                    <Ionicons
-                        name={
-                            Platform.OS === "ios"
-                                ? "chevron-back"
-                                : "arrow-back"
-                        }
-                        size={22}
-                        color={COLORS.gray[900]}
-                    />
-                </TouchableOpacity>
-                <Text style={styles.navTitle}>
-                    {isEditMode ? "Edit Enquiry" : "New Enquiry"}
-                </Text>
-                <View style={{ width: 44 }} />
-            </View>
-
-            {/* Main Content */}
-            <KeyboardAvoidingView
-                style={styles.keyboardContainer}
-                behavior={Platform.OS === "ios" ? "padding" : "height"}>
-                <ScrollView
-                    style={styles.scrollView}
-                    contentContainerStyle={styles.scrollContent}
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="always">
-                    <Animated.View
-                        style={[
-                            styles.contentContainer,
-                            { opacity: fadeAnim },
-                        ]}>
-                        {/* Hero */}
-                        <LinearGradient
-                            colors={COLORS.gradient}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 1 }}
-                            style={styles.heroCard}>
-                            <View style={styles.heroTopRow}>
-                                <View style={styles.heroIcon}>
-                                    <Ionicons
-                                        name="sparkles"
-                                        size={18}
-                                        color={COLORS.white}
-                                    />
-                                </View>
-                                <View style={styles.heroPill}>
-                                    <Ionicons
-                                        name="checkmark-circle-outline"
-                                        size={16}
-                                        color={COLORS.white}
-                                    />
-                                    <Text style={styles.heroPillText}>
-                                        Fast lead creation
-                                    </Text>
-                                </View>
-                            </View>
-                            <Text style={styles.heroTitle}>
-                                {isEditMode
-                                    ? "Update lead details"
-                                    : "Create a new lead"}
-                            </Text>
-                            <Text style={styles.heroSubtitle}>
-                                {isEditMode
-                                    ? "Edit the enquiry and save changes."
-                                    : "Fill required fields and save. Address & photo are optional in Advanced."}
-                            </Text>
-                            <View style={styles.heroBadgesRow}>
-                                <View style={styles.heroBadge}>
-                                    <Ionicons
-                                        name="star-outline"
-                                        size={14}
-                                        color={COLORS.white}
-                                    />
-                                    <Text style={styles.heroBadgeText}>
-                                        Priority
-                                    </Text>
-                                </View>
-                                <View style={styles.heroBadge}>
-                                    <Ionicons
-                                        name="call-outline"
-                                        size={14}
-                                        color={COLORS.white}
-                                    />
-                                    <Text style={styles.heroBadgeText}>
-                                        Mobile
-                                    </Text>
-                                </View>
-                                <View style={styles.heroBadge}>
-                                    <Ionicons
-                                        name="cube-outline"
-                                        size={14}
-                                        color={COLORS.white}
-                                    />
-                                    <Text style={styles.heroBadgeText}>
-                                        Product
-                                    </Text>
-                                </View>
-                            </View>
-                        </LinearGradient>
-
-                        {/* 1. Categorization Card */}
-                        <View style={styles.card}>
-                            <View style={styles.cardHeader}>
-                                <Ionicons
-                                    name="pricetags-outline"
-                                    size={20}
-                                    color={COLORS.primary}
-                                />
-                                <Text style={styles.cardTitle}>
-                                    Categorization
-                                </Text>
-                            </View>
-
-                            <View style={styles.inputWrapper}>
-                                <Text style={styles.inputLabel}>
-                                    Priority Level
-                                </Text>
-                                <View style={styles.priorityGrid}>
-                                    {["High", "Medium", "Normal"].map(
-                                        (priority) => {
-                                            const isActive =
-                                                form.enqType === priority;
-                                            let activeColor = COLORS.success;
-                                            if (priority === "High")
-                                                activeColor = COLORS.danger;
-                                            if (priority === "Medium")
-                                                activeColor = COLORS.warning;
-                                            if (priority === "Normal")
-                                                activeColor = COLORS.primary;
-
-                                            return (
-                                                <TouchableOpacity
-                                                    key={priority}
-                                                    style={[
-                                                        styles.priorityCard,
-                                                        isActive && {
-                                                            backgroundColor:
-                                                                activeColor +
-                                                                "15",
-                                                            borderColor:
-                                                                activeColor,
-                                                        },
-                                                    ]}
-                                                    onPress={() =>
-                                                        updateField(
-                                                            "enqType",
-                                                            priority,
-                                                        )
-                                                    }>
-                                                    <View
-                                                        style={[
-                                                            styles.priorityDot,
-                                                            {
-                                                                backgroundColor:
-                                                                    isActive
-                                                                        ? activeColor
-                                                                        : COLORS
-                                                                              .gray[300],
-                                                            },
-                                                        ]}
-                                                    />
-                                                    <Text
-                                                        style={[
-                                                            styles.priorityText,
-                                                            isActive && {
-                                                                color: activeColor,
-                                                                fontWeight:
-                                                                    "700",
-                                                            },
-                                                        ]}>
-                                                        {priority}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            );
-                                        },
-                                    )}
-                                </View>
-                            </View>
-
-                            <View style={styles.inputWrapper}>
-                                <Text style={styles.inputLabel}>
-                                    Lead Source
-                                </Text>
-                                <TouchableOpacity
-                                    style={styles.dropdownButton}
-                                    onPress={() => setShowSourceModal(true)}>
-                                    <View style={styles.dropdownLeft}>
-                                        <View style={styles.inputIconBox}>
-                                            <Ionicons
-                                                name="share-social-outline"
-                                                size={20}
-                                                color={COLORS.gray[400]}
-                                            />
-                                        </View>
-                                        <Text
-                                            style={
-                                                form.source
-                                                    ? styles.dropdownText
-                                                    : styles.dropdownPlaceholder
-                                            }>
-                                            {form.source || "Select Source "}
-                                        </Text>
-                                    </View>
-                                    <Ionicons
-                                        name="chevron-down"
-                                        size={20}
-                                        color={COLORS.gray[400]}
-                                    />
-                                </TouchableOpacity>
-                            </View>
-
-                            {/* Assigned To Dropdown (Only if staff exists e.g. Admin view) */}
-                            {staffList.length > 0 && (
-                                <View style={styles.inputWrapper}>
-                                    <Text style={styles.inputLabel}>
-                                        Assign To
-                                    </Text>
-                                    <TouchableOpacity
-                                        style={styles.dropdownButton}
-                                        onPress={() => setShowStaffModal(true)}>
-                                        <View style={styles.dropdownLeft}>
-                                            <View style={styles.inputIconBox}>
-                                                <Ionicons
-                                                    name="person-add-outline"
-                                                    size={20}
-                                                    color={COLORS.gray[400]}
-                                                />
-                                            </View>
-                                            <View>
-                                                <Text
-                                                    style={
-                                                        form.assignedTo
-                                                            ? styles.dropdownText
-                                                            : styles.dropdownPlaceholder
-                                                    }>
-                                                    {form.assignedTo
-                                                        ? staffList.find(
-                                                              (s) =>
-                                                                  s._id ===
-                                                                  form.assignedTo,
-                                                          )?.name ||
-                                                          "Unknown Staff"
-                                                        : "Me (Auto-assign)"}
-                                                </Text>
-                                                {/* Subtext to clarify auto-assign */}
-                                                {!form.assignedTo && (
-                                                    <Text
-                                                        style={{
-                                                            fontSize: 10,
-                                                            color: COLORS
-                                                                .gray[400],
-                                                            marginTop: 2,
-                                                        }}>
-                                                        Will be assigned to you
-                                                        automatically
-                                                    </Text>
-                                                )}
-                                            </View>
-                                        </View>
-                                        <Ionicons
-                                            name="chevron-down"
-                                            size={20}
-                                            color={COLORS.gray[400]}
-                                        />
-                                    </TouchableOpacity>
-                                </View>
-                            )}
-                        </View>
-
-                        {/* 2. Customer Details Card */}
-                        <View style={styles.card}>
-                            <View style={styles.cardHeader}>
-                                <Ionicons
-                                    name="person-outline"
-                                    size={20}
-                                    color={COLORS.primary}
-                                />
-                                <Text style={styles.cardTitle}>
-                                    Customer Details
-                                </Text>
-                            </View>
-
-                            {renderInput(
-                                "Full Name *",
-                                form.name,
-                                (text) => updateField("name", text),
-                                "Enter customer full name",
-                                "person-outline",
-                                "default",
-                                errors.name,
-                            )}
-
-                            {renderInput(
-                                "Mobile Number *",
-                                form.mobile,
-                                (text) => updateField("mobile", text),
-                                "Enter 10-digit number",
-                                "call-outline",
-                                "phone-pad",
-                                errors.mobile,
-                            )}
-
-                            {renderInput(
-                                "Email",
-                                form.email,
-                                (text) => updateField("email", text),
-                                "Optional email address",
-                                "mail-outline",
-                                "email-address",
-                                errors.email,
-                                "none",
-                            )}
-                        </View>
-
-                        {/* 3. Requirement Card */}
-                        <View style={styles.card}>
-                            <View style={styles.cardHeader}>
-                                <Ionicons
-                                    name="cart-outline"
-                                    size={20}
-                                    color={COLORS.primary}
-                                />
-                                <Text style={styles.cardTitle}>
-                                    Requirement
-                                </Text>
-                            </View>
-
-                            <View style={styles.inputWrapper}>
-                                <Text style={styles.inputLabel}>
-                                    Product / Service *
-                                </Text>
-                                <TouchableOpacity
-                                    style={styles.dropdownButton}
-                                    onPress={() => setShowProductModal(true)}>
-                                    <View style={styles.dropdownLeft}>
-                                        <View style={styles.inputIconBox}>
-                                            <Ionicons
-                                                name="cube-outline"
-                                                size={20}
-                                                color={COLORS.gray[400]}
-                                            />
-                                        </View>
-                                        <Text
-                                            style={
-                                                form.product
-                                                    ? styles.dropdownText
-                                                    : styles.dropdownPlaceholder
-                                            }>
-                                            {form.product || "Select Product"}
-                                        </Text>
-                                    </View>
-                                    <Ionicons
-                                        name="chevron-down"
-                                        size={20}
-                                        color={COLORS.gray[400]}
-                                    />
-                                </TouchableOpacity>
-                                {errors.product && (
-                                    <Text style={styles.errorText}>
-                                        {errors.product}
-                                    </Text>
-                                )}
-                            </View>
-
-                            {renderInput(
-                                "Estimated Value (₹)",
-                                form.cost,
-                                (text) => updateField("cost", text),
-                                "0.00",
-                                "cash-outline",
-                                "decimal-pad",
-                            )}
-                        </View>
-
-                        {/* 4. Location (Toggle) */}
-                        <View style={styles.card}>
-                            <TouchableOpacity
-                                style={styles.accordionHeader}
-                                onPress={() => setShowAdvanced(!showAdvanced)}>
-                                <View style={styles.accordionLeft}>
-                                    <View
-                                        style={[
-                                            styles.inputIconBox,
-                                            {
-                                                backgroundColor:
-                                                    COLORS.primary + "10",
-                                            },
-                                        ]}>
-                                        <Ionicons
-                                            name="location-outline"
-                                            size={20}
-                                            color={COLORS.primary}
-                                        />
-                                    </View>
-                                    <Text style={styles.cardTitle}>
-                                        Location & Address
-                                    </Text>
-                                </View>
-                                <Ionicons
-                                    name={
-                                        showAdvanced
-                                            ? "chevron-up"
-                                            : "chevron-down"
-                                    }
-                                    size={20}
-                                    color={COLORS.gray[400]}
-                                />
-                            </TouchableOpacity>
-
-                            {showAdvanced && (
-                                <View style={styles.accordionContent}>
-                                    <View style={styles.inputWrapper}>
-                                        <Text style={styles.inputLabel}>
-                                            Full Address
-                                        </Text>
-                                        <View
-                                            style={[
-                                                styles.inputContainer,
-                                                {
-                                                    alignItems: "flex-start",
-                                                    paddingVertical: 12,
-                                                    height: "auto",
-                                                    minHeight: 100,
-                                                },
-                                            ]}>
-                                            <View
-                                                style={[
-                                                    styles.inputIconBox,
-                                                    { marginTop: 0 },
-                                                ]}>
-                                                <Ionicons
-                                                    name="map-outline"
-                                                    size={20}
-                                                    color={COLORS.gray[400]}
-                                                />
-                                            </View>
-                                            <View style={{ flex: 1 }}>
-                                                <TextInput
-                                                    style={[
-                                                        styles.inputField,
-                                                        {
-                                                            height: "100%",
-                                                            textAlignVertical:
-                                                                "top",
-                                                            paddingTop: 8,
-                                                        },
-                                                    ]}
-                                                    value={form.address}
-                                                    onChangeText={
-                                                        handleAddressChange
-                                                    }
-                                                    placeholder="Enter full address or city..."
-                                                    placeholderTextColor={
-                                                        COLORS.gray[400]
-                                                    }
-                                                    multiline
-                                                />
-                                            </View>
-                                        </View>
-
-                                        {/* Address Predictions */}
-                                        {showAddressDropdown &&
-                                            addressPredictions.length > 0 && (
-                                                <View
-                                                    style={
-                                                        styles.predictionsContainer
-                                                    }>
-                                                    {addressLoading && (
-                                                        <ActivityIndicator
-                                                            size="small"
-                                                            color={
-                                                                COLORS.primary
-                                                            }
-                                                            style={{
-                                                                margin: 10,
-                                                            }}
-                                                        />
-                                                    )}
-                                                    {addressPredictions.map(
-                                                        (prediction, index) => (
-                                                            <TouchableOpacity
-                                                                key={
-                                                                    prediction.placeId ||
-                                                                    index
-                                                                }
-                                                                style={
-                                                                    styles.predictionItem
-                                                                }
-                                                                onPress={() =>
-                                                                    handleAddressSelect(
-                                                                        prediction,
-                                                                    )
-                                                                }>
-                                                                <Ionicons
-                                                                    name="location-sharp"
-                                                                    size={16}
-                                                                    color={
-                                                                        COLORS
-                                                                            .gray[400]
-                                                                    }
-                                                                    style={{
-                                                                        marginTop: 2,
-                                                                    }}
-                                                                />
-                                                                <View
-                                                                    style={{
-                                                                        marginLeft: 10,
-                                                                        flex: 1,
-                                                                    }}>
-                                                                    <Text
-                                                                        style={
-                                                                            styles.predictionMain
-                                                                        }>
-                                                                        {
-                                                                            prediction.mainText
-                                                                        }
-                                                                    </Text>
-                                                                    <Text
-                                                                        style={
-                                                                            styles.predictionSub
-                                                                        }>
-                                                                        {
-                                                                            prediction.secondaryText
-                                                                        }
-                                                                    </Text>
-                                                                </View>
-                                                            </TouchableOpacity>
-                                                        ),
-                                                    )}
-                                                </View>
-                                            )}
-                                        <View
-                                            style={styles.imageUploadContainer}>
-                                            <TouchableOpacity
-                                                onPress={pickImage}
-                                                style={styles.imagePicker}>
-                                                {form.image ? (
-                                                    <Image
-                                                        source={{
-                                                            uri: getImageUrl(
-                                                                form.image,
-                                                            ),
-                                                        }}
-                                                        style={
-                                                            styles.uploadedImage
-                                                        }
-                                                    />
-                                                ) : (
-                                                    <View
-                                                        style={
-                                                            styles.imagePlaceholder
-                                                        }>
-                                                        <Ionicons
-                                                            name="camera-outline"
-                                                            size={32}
-                                                            color={
-                                                                COLORS.primary
-                                                            }
-                                                        />
-                                                        <Text
-                                                            style={
-                                                                styles.uploadText
-                                                            }>
-                                                            Add Photo
-                                                        </Text>
-                                                    </View>
-                                                )}
-                                                <View
-                                                    style={
-                                                        styles.editIconBadge
-                                                    }>
-                                                    <Ionicons
-                                                        name="pencil"
-                                                        size={12}
-                                                        color={COLORS.white}
-                                                    />
-                                                </View>
-                                            </TouchableOpacity>
-                                        </View>
-                                    </View>
-                                </View>
-                            )}
-                        </View>
-
-                        {/* Image Upload for Customer */}
-
-                        {/* Spacer for bottom button */}
-                        <View style={{ height: 130 }} />
-                    </Animated.View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-
-            {/* Footer Button */}
-            <View
-                style={[
-                    styles.footerContainer,
-                    { paddingBottom: Math.max(14, insets.bottom + 10) },
-                ]}>
-                <TouchableOpacity
-                    style={[
-                        styles.submitButton,
-                        loading && styles.disabledButton,
-                    ]}
-                    onPress={handleSubmit}
-                    activeOpacity={0.8}
-                    disabled={loading}>
-                    <LinearGradient
-                        colors={COLORS.gradient}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.gradientButton}>
-                        {loading ? (
-                            <ActivityIndicator color={COLORS.white} />
-                        ) : (
-                            <>
-                                <Text style={styles.submitText}>
-                                    {isEditMode
-                                        ? "Update Enquiry"
-                                        : "Create Enquiry"}
-                                </Text>
-                                <View style={styles.iconCircle}>
-                                    <Ionicons
-                                        name="arrow-forward"
-                                        size={18}
-                                        color={COLORS.primary}
-                                    />
-                                </View>
-                            </>
-                        )}
-                    </LinearGradient>
-                </TouchableOpacity>
-            </View>
-
-            {/* Source Selection Modal */}
-            <Modal
-                visible={showSourceModal}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowSourceModal(false)}>
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>
-                                Select Lead Source
-                            </Text>
-                            <TouchableOpacity
-                                onPress={() => setShowSourceModal(false)}
-                                style={styles.closeBtn}>
-                                <Ionicons
-                                    name="close"
-                                    size={24}
-                                    color={COLORS.gray[600]}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        {loadingSources ? (
-                            <View style={styles.centerBox}>
-                                <ActivityIndicator
-                                    size="large"
-                                    color={COLORS.primary}
-                                />
-                                <Text style={styles.loadingText}>
-                                    Loading sources...
-                                </Text>
-                            </View>
-                        ) : (
-                            <ScrollView style={styles.modalScroll}>
-                                <View style={styles.modalGrid}>
-                                    {leadSources.map((source) => (
-                                        <TouchableOpacity
-                                            key={source.id}
-                                            style={[
-                                                styles.sourceCard,
-                                                form.source === source.name &&
-                                                    styles.sourceCardActive,
-                                            ]}
-                                            onPress={() => {
-                                                updateField(
-                                                    "source",
-                                                    source.name,
-                                                );
-                                                setShowSourceModal(false);
-                                            }}>
-                                            <View
-                                                style={[
-                                                    styles.sourceIconBox,
-                                                    form.source === source.name
-                                                        ? {
-                                                              backgroundColor:
-                                                                  COLORS.white,
-                                                          }
-                                                        : {
-                                                              backgroundColor:
-                                                                  COLORS
-                                                                      .gray[100],
-                                                          },
-                                                ]}>
-                                                <Ionicons
-                                                    name={
-                                                        form.source ===
-                                                        source.name
-                                                            ? "checkmark-circle"
-                                                            : "ellipse-outline"
-                                                    }
-                                                    size={24}
-                                                    color={
-                                                        form.source ===
-                                                        source.name
-                                                            ? COLORS.primary
-                                                            : COLORS.gray[400]
-                                                    }
-                                                />
-                                            </View>
-                                            <Text
-                                                style={[
-                                                    styles.sourceName,
-                                                    form.source ===
-                                                        source.name && {
-                                                        color: COLORS.white,
-                                                        fontWeight: "700",
-                                                    },
-                                                ]}>
-                                                {source.name}
-                                            </Text>
-                                            {source.group && (
-                                                <Text
-                                                    style={[
-                                                        styles.sourceGroup,
-                                                        form.source ===
-                                                            source.name && {
-                                                            color: "rgba(255,255,255,0.8)",
-                                                        },
-                                                    ]}>
-                                                    {source.group}
-                                                </Text>
-                                            )}
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-                            </ScrollView>
-                        )}
-                    </View>
-                </View>
-            </Modal>
-
-            {/* Product Selection Modal */}
-            <Modal
-                visible={showProductModal}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowProductModal(false)}>
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>
-                                Select Product
-                            </Text>
-                            <TouchableOpacity
-                                onPress={() => setShowProductModal(false)}
-                                style={styles.closeBtn}>
-                                <Ionicons
-                                    name="close"
-                                    size={24}
-                                    color={COLORS.gray[600]}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView style={styles.modalScroll}>
-                            <View
-                                style={{
-                                    padding: 12,
-                                    borderBottomWidth: 1,
-                                    borderBottomColor: COLORS.gray[100],
-                                    backgroundColor: COLORS.white,
-                                }}>
-                                <Text
-                                    style={{
-                                        fontWeight: "700",
-                                        marginBottom: 8,
-                                    }}>
-                                    Add New Product
-                                </Text>
-                                <View
-                                    style={{
-                                        flexDirection: "row",
-                                        gap: 8,
-                                        alignItems: "center",
-                                    }}>
-                                    <TextInput
-                                        placeholder="New product name"
-                                        value={newProductName}
-                                        onChangeText={setNewProductName}
-                                        style={{
-                                            flex: 1,
-                                            backgroundColor: COLORS.gray[50],
-                                            padding: 10,
-                                            borderRadius: 10,
-                                            borderWidth: 1,
-                                            borderColor: COLORS.gray[200],
-                                        }}
-                                    />
-                                    <TouchableOpacity
-                                        onPress={createProductInline}
-                                        style={{
-                                            backgroundColor: COLORS.primary,
-                                            padding: 10,
-                                            borderRadius: 10,
-                                        }}>
-                                        {creatingProduct ? (
-                                            <ActivityIndicator color="#fff" />
-                                        ) : (
-                                            <Text
-                                                style={{
-                                                    color: "#fff",
-                                                    fontWeight: "700",
-                                                }}>
-                                                Add
-                                            </Text>
-                                        )}
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                            <View style={styles.modalGrid}>
-                                {products.map((prod) => (
-                                    <TouchableOpacity
-                                        key={prod._id}
-                                        style={[
-                                            styles.sourceCard,
-                                            form.product === prod.name &&
-                                                styles.sourceCardActive,
-                                        ]}
-                                        onPress={() => {
-                                            updateField("product", prod.name);
-                                            setShowProductModal(false);
-                                        }}>
-                                        <View
-                                            style={[
-                                                styles.sourceIconBox,
-                                                form.product === prod.name
-                                                    ? {
-                                                          backgroundColor:
-                                                              COLORS.white,
-                                                      }
-                                                    : {
-                                                          backgroundColor:
-                                                              COLORS.gray[100],
-                                                      },
-                                            ]}>
-                                            <Ionicons
-                                                name={
-                                                    form.product === prod.name
-                                                        ? "checkmark-circle"
-                                                        : "cube-outline"
-                                                }
-                                                size={24}
-                                                color={
-                                                    form.product === prod.name
-                                                        ? COLORS.primary
-                                                        : COLORS.gray[400]
-                                                }
-                                            />
-                                        </View>
-                                        <Text
-                                            style={[
-                                                styles.sourceName,
-                                                form.product === prod.name && {
-                                                    color: COLORS.white,
-                                                    fontWeight: "700",
-                                                },
-                                            ]}>
-                                            {prod.name}
-                                        </Text>
-                                        <Text
-                                            style={[
-                                                styles.sourceGroup,
-                                                form.product === prod.name && {
-                                                    color: "rgba(255,255,255,0.8)",
-                                                },
-                                            ]}>
-                                            {(prod.items || []).length} item
-                                            {(prod.items || []).length !== 1
-                                                ? "s"
-                                                : ""}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        </ScrollView>
-                    </View>
-                </View>
-            </Modal>
-
-            {/* Staff Selection Modal */}
-            <Modal
-                visible={showStaffModal}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowStaffModal(false)}>
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>
-                                Assign to Staff
-                            </Text>
-                            <TouchableOpacity
-                                onPress={() => setShowStaffModal(false)}
-                                style={styles.closeBtn}>
-                                <Ionicons
-                                    name="close"
-                                    size={24}
-                                    color={COLORS.gray[600]}
-                                />
-                            </TouchableOpacity>
-                        </View>
-
-                        {loadingStaff ? (
-                            <View style={styles.centerBox}>
-                                <ActivityIndicator
-                                    size="large"
-                                    color={COLORS.primary}
-                                />
-                                <Text style={styles.loadingText}>
-                                    Loading staff...
-                                </Text>
-                            </View>
-                        ) : (
-                            <ScrollView style={styles.modalScroll}>
-                                <TouchableOpacity
-                                    style={[
-                                        styles.sourceCard,
-                                        !form.assignedTo &&
-                                            styles.sourceCardActive,
-                                        { width: "100%", marginBottom: 12 },
-                                    ]}
-                                    onPress={() => {
-                                        updateField("assignedTo", "");
-                                        setShowStaffModal(false);
-                                    }}>
-                                    <View
-                                        style={[
-                                            styles.sourceIconBox,
-                                            !form.assignedTo
-                                                ? {
-                                                      backgroundColor:
-                                                          COLORS.white,
-                                                  }
-                                                : {
-                                                      backgroundColor:
-                                                          COLORS.gray[100],
-                                                  },
-                                        ]}>
-                                        <Ionicons
-                                            name={
-                                                !form.assignedTo
-                                                    ? "checkmark-circle"
-                                                    : "person-outline"
-                                            }
-                                            size={22}
-                                            color={
-                                                !form.assignedTo
-                                                    ? COLORS.primary
-                                                    : COLORS.gray[400]
-                                            }
-                                        />
-                                    </View>
-                                    <View>
-                                        <Text
-                                            style={[
-                                                styles.sourceName,
-                                                !form.assignedTo && {
-                                                    color: COLORS.white,
-                                                },
-                                            ]}>
-                                            Me (Auto-assign)
-                                        </Text>
-                                        <Text
-                                            style={[
-                                                styles.sourceGroup,
-                                                !form.assignedTo && {
-                                                    color: "rgba(255,255,255,0.8)",
-                                                },
-                                            ]}>
-                                            Assign to yourself
-                                        </Text>
-                                    </View>
-                                </TouchableOpacity>
-
-                                <View style={styles.modalGrid}>
-                                    {staffList.map((staff) => (
-                                        <TouchableOpacity
-                                            key={staff._id}
-                                            style={[
-                                                styles.sourceCard,
-                                                form.assignedTo === staff._id &&
-                                                    styles.sourceCardActive,
-                                            ]}
-                                            onPress={() => {
-                                                updateField(
-                                                    "assignedTo",
-                                                    staff._id,
-                                                );
-                                                setShowStaffModal(false);
-                                            }}>
-                                            <View
-                                                style={[
-                                                    styles.sourceIconBox,
-                                                    form.assignedTo ===
-                                                    staff._id
-                                                        ? {
-                                                              backgroundColor:
-                                                                  COLORS.white,
-                                                          }
-                                                        : {
-                                                              backgroundColor:
-                                                                  COLORS
-                                                                      .gray[100],
-                                                          },
-                                                ]}>
-                                                <Ionicons
-                                                    name={
-                                                        form.assignedTo ===
-                                                        staff._id
-                                                            ? "checkmark-circle"
-                                                            : "person-outline"
-                                                    }
-                                                    size={22}
-                                                    color={
-                                                        form.assignedTo ===
-                                                        staff._id
-                                                            ? COLORS.primary
-                                                            : COLORS.gray[400]
-                                                    }
-                                                />
-                                            </View>
-                                            <Text
-                                                style={[
-                                                    styles.sourceName,
-                                                    form.assignedTo ===
-                                                        staff._id && {
-                                                        color: COLORS.white,
-                                                        fontWeight: "700",
-                                                    },
-                                                ]}>
-                                                {staff.name}
-                                            </Text>
-                                            <Text
-                                                style={[
-                                                    styles.sourceGroup,
-                                                    form.assignedTo ===
-                                                        staff._id && {
-                                                        color: "rgba(255,255,255,0.8)",
-                                                    },
-                                                ]}>
-                                                {staff.role || "Staff"}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-                            </ScrollView>
-                        )}
-                    </View>
-                </View>
-            </Modal>
-            {toastVisible && (
-                <Animated.View
-                    style={[
-                        styles.toastContainer,
-                        {
-                            opacity: toastAnimValue,
-                            transform: [
-                                {
-                                    translateY: toastAnimValue.interpolate({
-                                        inputRange: [0, 1],
-                                        outputRange: [-20, 0],
-                                    }),
-                                },
-                            ],
-                        },
-                    ]}>
-                    <View
-                        style={[
-                            styles.toastContent,
-                            {
-                                backgroundColor:
-                                    toastType === "success"
-                                        ? COLORS.success
-                                        : COLORS.danger,
-                            },
-                        ]}>
-                        <Ionicons
-                            name={
-                                toastType === "success"
-                                    ? "checkmark-circle"
-                                    : "alert-circle"
-                            }
-                            size={24}
-                            color={COLORS.white}
-                        />
-                        <Text style={styles.toastText}>{toastMessage}</Text>
-                    </View>
-                </Animated.View>
-            )}
-        </SafeAreaView>
+          </View>
+          <TextInput
+            style={{
+              flex: 1,
+              fontSize: sc.f.base,
+              color: C.text,
+              fontWeight: "500",
+              paddingVertical: multiline ? sc.sp.sm : 0,
+              textAlignVertical: multiline ? "top" : "center",
+            }}
+            value={value}
+            onChangeText={onChange}
+            onFocus={onFocus}
+            onBlur={handleBlur}
+            placeholder={placeholder}
+            placeholderTextColor={C.textLight}
+            keyboardType={keyboardType}
+            autoCapitalize={autoCapitalize}
+            multiline={multiline}
+            scrollEnabled={multiline}
+          />
+        </Animated.View>
+        {error ? (
+          <Text
+            style={{
+              fontSize: sc.f.xs,
+              color: C.danger,
+              marginTop: sc.sp.xs,
+              marginLeft: 2,
+              fontWeight: "600",
+            }}
+          >
+            {error}
+          </Text>
+        ) : null}
+      </View>
     );
-}
+  },
+);
+Field.displayName = "Field";
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: COLORS.gray[50],
-    },
-    navBar: {
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+// ─── Dropdown button ──────────────────────────────────────────────────────────
+const DropBtn = ({ label, value, placeholder, icon, onPress, error, sc }) => (
+  <View style={{ marginBottom: sc.sp.md }}>
+    {label ? (
+      <Text
+        style={{
+          fontSize: sc.f.sm,
+          fontWeight: "600",
+          color: C.textSub,
+          marginBottom: sc.sp.xs,
+          marginLeft: 2,
+        }}
+      >
+        {label}
+      </Text>
+    ) : null}
+    <TouchableOpacity
+      style={{
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-    },
-    navBtn: {
-        width: 44,
-        height: 44,
-        borderRadius: 14,
-        backgroundColor: COLORS.white,
         borderWidth: 1,
-        borderColor: COLORS.gray[200],
-        justifyContent: "center",
-        alignItems: "center",
-        shadowColor: "rgba(10,15,30,0.10)",
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.08,
-        shadowRadius: 14,
-        elevation: 2,
-    },
-    navTitle: {
-        fontSize: 17,
-        fontWeight: "900",
-        color: COLORS.gray[900],
-    },
-    header: {
-        paddingBottom: 25,
-        paddingHorizontal: 24,
-        borderBottomLeftRadius: 30,
-        borderBottomRightRadius: 30,
-        elevation: 8,
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.25,
-        shadowRadius: 16,
-    },
-    headerTop: {
+        borderColor: error ? C.danger : C.border,
+        borderRadius: sc.radius,
+        backgroundColor: error ? "#FEF2F2" : C.card,
+        paddingHorizontal: sc.sp.md,
+        height: sc.inputH,
+      }}
+      onPress={onPress}
+      activeOpacity={0.75}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          flex: 1,
+          gap: sc.sp.sm,
+        }}
+      >
+        <View
+          style={{
+            width: sc.iconBox,
+            height: sc.iconBox,
+            borderRadius: sc.iconBox / 2,
+            backgroundColor: "#F1F5F9",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name={icon} size={sc.f.md} color={C.textMuted} />
+        </View>
+        <Text
+          style={{
+            fontSize: sc.f.base,
+            color: value ? C.text : C.textLight,
+            fontWeight: value ? "600" : "400",
+            flex: 1,
+          }}
+          numberOfLines={1}
+        >
+          {value || placeholder}
+        </Text>
+      </View>
+      <Ionicons name="chevron-down" size={sc.f.md} color={C.textMuted} />
+    </TouchableOpacity>
+    {error ? (
+      <Text
+        style={{
+          fontSize: sc.f.xs,
+          color: C.danger,
+          marginTop: sc.sp.xs,
+          marginLeft: 2,
+          fontWeight: "600",
+        }}
+      >
+        {error}
+      </Text>
+    ) : null}
+  </View>
+);
+
+// ─── Section card ─────────────────────────────────────────────────────────────
+const Card = ({ icon, title, children, sc }) => (
+  <View
+    style={{
+      backgroundColor: C.card,
+      borderRadius: sc.cardR,
+      padding: sc.sp.lg,
+      borderWidth: 1,
+      borderColor: C.border,
+      marginBottom: sc.sp.md,
+      shadowColor: "#0F172A",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.04,
+      shadowRadius: 8,
+      elevation: 2,
+    }}
+  >
+    <View
+      style={{
         flexDirection: "row",
         alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 8,
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: "rgba(255,255,255,0.2)",
-        alignItems: "center",
-        justifyContent: "center",
-        borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.3)",
-    },
-    helpButton: {
-        width: 40,
-        height: 40,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    headerTitle: {
-        fontSize: 22,
-        fontWeight: "700",
-        color: COLORS.white,
-        letterSpacing: 0.5,
-    },
-    headerSubtitle: {
-        fontSize: 14,
-        color: "rgba(255,255,255,0.8)",
-        textAlign: "center",
-        marginTop: 5,
-    },
-    keyboardContainer: {
-        flex: 1,
-    },
-    scrollView: {
-        flex: 1,
-    },
-    scrollContent: {
-        paddingTop: 10,
-        paddingHorizontal: 16,
-        paddingBottom: 160, // space for footer
-    },
-    contentContainer: {
-        gap: 20,
-    },
-    heroCard: {
-        borderRadius: 26,
-        padding: 18,
-        overflow: "hidden",
-        shadowColor: "rgba(10,15,30,0.10)",
-        shadowOffset: { width: 0, height: 16 },
-        shadowOpacity: 0.18,
-        shadowRadius: 24,
-        elevation: 6,
-    },
-    heroTopRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    heroIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 14,
-        backgroundColor: "rgba(255,255,255,0.18)",
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.22)",
-    },
-    heroPill: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        backgroundColor: "rgba(255,255,255,0.16)",
-        borderRadius: 999,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-    },
-    heroPillText: {
-        color: COLORS.white,
-        fontSize: 12,
-        fontWeight: "800",
-    },
-    heroTitle: {
-        marginTop: 10,
-        fontSize: 22,
-        fontWeight: "900",
-        color: COLORS.white,
-        letterSpacing: -0.3,
-    },
-    heroSubtitle: {
-        marginTop: 8,
-        color: "rgba(255,255,255,0.85)",
-        fontSize: 13,
-        lineHeight: 19,
-    },
-    heroBadgesRow: {
-        marginTop: 14,
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 10,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: "rgba(255,255,255,0.18)",
-    },
-    heroBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 7,
-        borderRadius: 999,
-        backgroundColor: "rgba(255,255,255,0.16)",
-    },
-    heroBadgeText: {
-        color: COLORS.white,
-        fontSize: 12,
-        fontWeight: "800",
-    },
-    card: {
-        backgroundColor: COLORS.white,
-        borderRadius: 20,
-        padding: 20,
-        shadowColor: "#64748B",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.08,
-        shadowRadius: 12,
-        elevation: 4,
-    },
-    cardHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        marginBottom: 16,
-        gap: 10,
-    },
-    cardTitle: {
-        fontSize: 16,
-        fontWeight: "700",
-        color: COLORS.gray[800],
-    },
-    inputWrapper: {
-        marginBottom: 16,
-    },
-    inputLabel: {
-        fontSize: 13,
-        fontWeight: "600",
-        color: COLORS.gray[600],
-        marginBottom: 8,
-        marginLeft: 4,
-    },
-    inputContainer: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: COLORS.gray[50], // Very light gray bg
-        borderWidth: 1.5,
-        borderColor: COLORS.gray[200],
-        borderRadius: 14,
-        paddingHorizontal: 12,
-        height: 54, // Taller inputs
-    },
-    inputErrorBorder: {
-        borderColor: COLORS.danger,
-        backgroundColor: "#FEF2F2",
-    },
-    inputIconBox: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
-        backgroundColor: COLORS.white,
-        alignItems: "center",
-        justifyContent: "center",
-        marginRight: 12,
-        borderWidth: 1,
-        borderColor: COLORS.gray[100],
-    },
-    inputField: {
-        flex: 1,
-        fontSize: 16,
-        color: COLORS.gray[800],
-        fontWeight: "500",
-    },
-    errorText: {
-        fontSize: 12,
-        color: COLORS.danger,
-        marginTop: 6,
-        marginLeft: 4,
-        fontWeight: "500",
-    },
-    // Priority custom styling
-    priorityGrid: {
-        flexDirection: "row",
-        gap: 10,
-    },
-    priorityCard: {
-        flex: 1,
-        paddingVertical: 12,
-        borderRadius: 12,
-        backgroundColor: COLORS.white,
-        borderWidth: 1.5,
-        borderColor: COLORS.gray[200],
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-    },
-    priorityDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    priorityText: {
-        fontSize: 12,
-        fontWeight: "600",
-        color: COLORS.gray[500],
-    },
-    // Dropdown
-    dropdownButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        backgroundColor: COLORS.white,
-        borderWidth: 1.5,
-        borderColor: COLORS.gray[200],
-        borderRadius: 14,
-        padding: 12,
-        height: 60,
-    },
-    dropdownLeft: {
-        flexDirection: "row",
-        alignItems: "center",
-        flex: 1,
-    },
-    dropdownText: {
-        fontSize: 16,
-        fontWeight: "600",
-        color: COLORS.gray[800],
-    },
-    dropdownPlaceholder: {
-        fontSize: 15,
-        color: COLORS.gray[400],
-    },
-    // Accordion
-    accordionHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    accordionLeft: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
-    },
-    accordionContent: {
-        marginTop: 20,
-        paddingTop: 20,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.gray[100],
-    },
-    predictionsContainer: {
-        backgroundColor: COLORS.white,
-        borderRadius: 12,
-        marginTop: 10,
-        borderWidth: 1,
-        borderColor: COLORS.gray[200],
-        overflow: "hidden",
-    },
-    predictionItem: {
-        flexDirection: "row",
-        padding: 14,
+        gap: sc.sp.sm,
+        marginBottom: sc.sp.md,
+        paddingBottom: sc.sp.sm,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.gray[50],
-        alignItems: "flex-start",
-    },
-    predictionMain: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: COLORS.gray[800],
-    },
-    predictionSub: {
-        fontSize: 12,
-        color: COLORS.gray[500],
-        marginTop: 2,
-    },
-    // Footer / Submit
-    footerContainer: {
+        borderBottomColor: "#F1F5F9",
+      }}
+    >
+      <View
+        style={{
+          width: sc.iconBox,
+          height: sc.iconBox,
+          borderRadius: sc.iconBox / 2,
+          backgroundColor: C.primarySoft,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Ionicons name={icon} size={sc.f.md} color={C.primary} />
+      </View>
+      <Text style={{ fontSize: sc.f.md, fontWeight: "700", color: C.text }}>
+        {title}
+      </Text>
+    </View>
+    {children}
+  </View>
+);
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+const Toast = ({ visible, message, type, animValue, sc }) => {
+  if (!visible) return null;
+  return (
+    <Animated.View
+      style={{
         position: "absolute",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        backgroundColor: COLORS.white,
-        paddingHorizontal: 16,
-        paddingTop: 10,
-        paddingBottom: 14,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: -4 },
-        shadowOpacity: 0.05,
-        shadowRadius: 10,
-        elevation: 20,
-    },
-    submitButton: {
-        borderRadius: 18,
-        overflow: "hidden",
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.35,
-        shadowRadius: 16,
-        elevation: 10,
-    },
-    disabledButton: {
-        opacity: 0.7,
-    },
-    gradientButton: {
-        paddingVertical: 18,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 10,
-    },
-    submitText: {
-        fontSize: 18,
-        fontWeight: "700",
-        color: COLORS.white,
-        letterSpacing: 0.5,
-    },
-    iconCircle: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: COLORS.white,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    // Modal
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: "rgba(15, 23, 42, 0.6)", // Blur effect background
-        justifyContent: "flex-end",
-    },
-    modalContent: {
-        backgroundColor: COLORS.gray[50],
-        borderTopLeftRadius: 30,
-        borderTopRightRadius: 30,
-        height: "75%",
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: -4 },
-        shadowOpacity: 0.25,
-        shadowRadius: 20,
-        elevation: 25,
-        overflow: "hidden",
-    },
-    modalHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: 24,
-        backgroundColor: COLORS.white,
-        borderBottomWidth: 1,
-        borderBottomColor: COLORS.gray[200],
-    },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: "700",
-        color: COLORS.gray[900],
-    },
-    closeBtn: {
-        padding: 4,
-        backgroundColor: COLORS.gray[100],
-        borderRadius: 20,
-    },
-    modalScroll: {
-        flex: 1,
-        padding: 20,
-    },
-    modalGrid: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 12,
-        paddingBottom: 40,
-    },
-    sourceCard: {
-        width: "48%",
-        backgroundColor: COLORS.white,
-        borderRadius: 16,
-        padding: 16,
-        borderWidth: 1,
-        borderColor: COLORS.gray[200],
-        gap: 10,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    sourceCardActive: {
-        backgroundColor: COLORS.primary,
-        borderColor: COLORS.primary,
-    },
-    sourceIconBox: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    sourceName: {
-        fontSize: 14,
-        fontWeight: "700",
-        color: COLORS.gray[800],
-    },
-    sourceGroup: {
-        fontSize: 12,
-        color: COLORS.gray[500],
-    },
-    centerBox: {
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    loadingText: {
-        marginTop: 12,
-        color: COLORS.gray[500],
-        fontSize: 14,
-    },
-    // Toast
-    toastContainer: {
-        position: "absolute",
-        top: Platform.OS === "ios" ? 50 : 30,
+        top: Platform.OS === "ios" ? 56 : 40,
         alignSelf: "center",
         zIndex: 9999,
-        width: "90%",
-    },
-    toastContent: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingVertical: 14,
-        paddingHorizontal: 20,
+        width: "88%",
+        opacity: animValue,
+        transform: [
+          {
+            translateY: animValue.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-20, 0],
+            }),
+          },
+        ],
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          paddingVertical: sc.sp.md,
+          paddingHorizontal: sc.sp.lg,
+          borderRadius: sc.cardR,
+          backgroundColor: type === "success" ? C.success : C.danger,
+          gap: sc.sp.sm,
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.18,
+          shadowRadius: 12,
+          elevation: 8,
+        }}
+      >
+        <Ionicons
+          name={type === "success" ? "checkmark-circle" : "alert-circle"}
+          size={sc.f.lg}
+          color="#fff"
+        />
+        <Text
+          style={{
+            color: "#fff",
+            fontSize: sc.f.base,
+            fontWeight: "600",
+            flex: 1,
+          }}
+        >
+          {message}
+        </Text>
+      </View>
+    </Animated.View>
+  );
+};
+
+// ─── Selection Modal ──────────────────────────────────────────────────────────
+const SelectModal = ({
+  visible,
+  title,
+  onClose,
+  loading,
+  loadingText,
+  children,
+  sc,
+}) => (
+  <Modal
+    visible={visible}
+    transparent
+    animationType="slide"
+    onRequestClose={onClose}
+  >
+    <TouchableWithoutFeedback onPress={onClose}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: "rgba(15,23,42,0.55)",
+          justifyContent: "flex-end",
+        }}
+      >
+        <TouchableWithoutFeedback>
+          <View
+            style={{
+              backgroundColor: "#F8FAFC",
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              height: "76%",
+              overflow: "hidden",
+            }}
+          >
+            {/* Handle */}
+            <View
+              style={{ alignItems: "center", paddingTop: 12, paddingBottom: 4 }}
+            >
+              <View
+                style={{
+                  width: 36,
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: C.border,
+                }}
+              />
+            </View>
+            {/* Header */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                paddingHorizontal: sc.hPad,
+                paddingVertical: sc.sp.md,
+                borderBottomWidth: 1,
+                borderBottomColor: C.border,
+                backgroundColor: C.card,
+              }}
+            >
+              <Text
+                style={{ fontSize: sc.f.lg, fontWeight: "700", color: C.text }}
+              >
+                {title}
+              </Text>
+              <TouchableOpacity
+                onPress={onClose}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: "#F1F5F9",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name="close" size={sc.f.lg} color={C.textSub} />
+              </TouchableOpacity>
+            </View>
+            {loading ? (
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: sc.sp.md,
+                }}
+              >
+                <ActivityIndicator size="large" color={C.primary} />
+                <Text style={{ color: C.textMuted, fontSize: sc.f.base }}>
+                  {loadingText}
+                </Text>
+              </View>
+            ) : (
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ padding: sc.hPad, paddingBottom: 32 }}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {children}
+              </ScrollView>
+            )}
+          </View>
+        </TouchableWithoutFeedback>
+      </View>
+    </TouchableWithoutFeedback>
+  </Modal>
+);
+
+// ─── Inline create row ────────────────────────────────────────────────────────
+const InlineCreate = ({
+  label,
+  value,
+  onChange,
+  onAdd,
+  loading,
+  placeholder,
+  sc,
+}) => (
+  <View
+    style={{
+      backgroundColor: C.card,
+      borderRadius: sc.radius,
+      padding: sc.sp.md,
+      marginBottom: sc.sp.lg,
+      borderWidth: 1,
+      borderColor: C.border,
+    }}
+  >
+    <Text
+      style={{
+        fontSize: sc.f.sm,
+        fontWeight: "700",
+        color: C.textSub,
+        marginBottom: sc.sp.sm,
+      }}
+    >
+      {label}
+    </Text>
+    <View style={{ flexDirection: "row", gap: sc.sp.sm }}>
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={C.textLight}
+        style={{
+          flex: 1,
+          fontSize: sc.f.base,
+          color: C.text,
+          backgroundColor: "#F8FAFC",
+          borderWidth: 1,
+          borderColor: C.border,
+          borderRadius: sc.radius,
+          paddingHorizontal: sc.sp.md,
+          height: 40,
+        }}
+      />
+      <TouchableOpacity
+        onPress={onAdd}
+        disabled={loading}
+        style={{
+          backgroundColor: C.primary,
+          paddingHorizontal: sc.sp.lg,
+          borderRadius: sc.radius,
+          alignItems: "center",
+          justifyContent: "center",
+          minWidth: 60,
+          height: 40,
+        }}
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <Text style={{ color: "#fff", fontWeight: "700", fontSize: sc.f.sm }}>
+            Add
+          </Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  </View>
+);
+
+// ─── Choice card (source/product/staff grid) ──────────────────────────────────
+const ChoiceCard = ({ label, sublabel, icon, active, onPress, sc }) => (
+  <TouchableOpacity
+    onPress={onPress}
+    style={{
+      width: "48%",
+      backgroundColor: active ? C.primary : C.card,
+      borderRadius: sc.radius,
+      padding: sc.sp.md,
+      borderWidth: 1.5,
+      borderColor: active ? C.primary : C.border,
+      gap: sc.sp.xs,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.04,
+      shadowRadius: 4,
+      elevation: 1,
+    }}
+    activeOpacity={0.8}
+  >
+    <View
+      style={{
+        width: 32,
+        height: 32,
         borderRadius: 16,
-        gap: 12,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.2,
-        shadowRadius: 12,
-        elevation: 8,
-    },
-    toastText: {
-        color: COLORS.white,
-        fontSize: 15,
-        fontWeight: "600",
-        flex: 1,
-    },
-    // Image Upload Styles
-    imageUploadContainer: {
-        alignItems: "center",
-        marginTop: 20,
-    },
-    imagePicker: {
-        width: 100,
-        height: 100,
-        borderRadius: 50,
-        backgroundColor: COLORS.gray[100],
-        borderWidth: 2,
-        borderColor: COLORS.primary,
-        borderStyle: "dashed",
-        justifyContent: "center",
-        alignItems: "center",
-        overflow: "hidden",
-        position: "relative",
-    },
-    uploadedImage: {
-        width: "100%",
-        height: "100%",
-        borderRadius: 50,
-    },
-    imagePlaceholder: {
+        backgroundColor: active ? "rgba(255,255,255,0.2)" : C.primarySoft,
         alignItems: "center",
         justifyContent: "center",
+      }}
+    >
+      <Ionicons
+        name={active ? "checkmark-circle" : icon || "ellipse-outline"}
+        size={sc.f.lg}
+        color={active ? "#fff" : C.primary}
+      />
+    </View>
+    <Text
+      style={{
+        fontSize: sc.f.sm,
+        fontWeight: "700",
+        color: active ? "#fff" : C.text,
+      }}
+      numberOfLines={1}
+    >
+      {label}
+    </Text>
+    {sublabel ? (
+      <Text
+        style={{
+          fontSize: sc.f.xs,
+          color: active ? "rgba(255,255,255,0.8)" : C.textMuted,
+        }}
+        numberOfLines={1}
+      >
+        {sublabel}
+      </Text>
+    ) : null}
+  </TouchableOpacity>
+);
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+export default function AddEnquiryScreen({ route, navigation }) {
+  const insets = useSafeAreaInsets();
+  const sc = useScale();
+  const { user } = useAuth();
+
+  const editingEnquiry = route?.params?.enquiry;
+  const isEditMode = !!editingEnquiry;
+
+  // Form
+  const [form, setForm] = useState({
+    enqType: "Normal",
+    source: "",
+    name: "",
+    mobile: "",
+    email: "",
+    address: "",
+    product: "",
+    cost: "",
+    image: null,
+    assignedTo: "",
+  });
+  const [errors, setErrors] = useState({});
+
+  // Data
+  const [leadSources, setLeadSources] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [staffList, setStaffList] = useState([]);
+
+  // Loading
+  const [loading, setLoading] = useState(false);
+  const [loadingSources, setLoadingSources] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [loadingStaff, setLoadingStaff] = useState(false);
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [creatingLeadSource, setCreatingLeadSource] = useState(false);
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
+
+  // New inputs
+  const [newProductName, setNewProductName] = useState("");
+  const [newLeadSourceName, setNewLeadSourceName] = useState("");
+
+  // Modals
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [showSourceModal, setShowSourceModal] = useState(false);
+  const [showStaffModal, setShowStaffModal] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Address autocomplete
+  const [addressPredictions, setAddressPredictions] = useState([]);
+  const [showAddressDropdown, setShowAddressDropdown] = useState(false);
+
+  // Toast
+  const [toastMsg, setToastMsg] = useState("");
+  const [toastType, setToastType] = useState("success");
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTimer = useRef(null);
+
+  // Refs
+  const addressDebounce = useRef(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const confettiRef = useRef(null);
+  const scrollRef = useRef(null);
+  const currentUserId = String(user?.id || user?._id || "");
+  const assignableTeam = useMemo(() => {
+    const seen = new Set();
+    return (staffList || [])
+      .filter((member) => {
+        const id = String(member?._id || "");
+        if (!id || id === currentUserId) return false;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
+      .sort((a, b) => {
+        const roleA = String(a?.role || "").toLowerCase();
+        const roleB = String(b?.role || "").toLowerCase();
+        if (roleA !== roleB) return roleA === "admin" ? -1 : 1;
+        return String(a?.name || "").localeCompare(String(b?.name || ""));
+      });
+  }, [currentUserId, staffList]);
+  const adminLabelMap = useMemo(() => {
+    const admins = [...staffList]
+      .filter((member) => String(member?.role || "").toLowerCase() === "admin")
+      .sort(
+        (a, b) =>
+          new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime(),
+      );
+
+    return admins.reduce((acc, member, index) => {
+      acc[String(member?._id || "")] = getOrdinalAdminLabel(index + 1);
+      return acc;
+    }, {});
+  }, [staffList]);
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    notificationService.initializeNotifications();
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  useEffect(() => {
+    const fetch = async (fn, setter, setLoading_) => {
+      setLoading_(true);
+      try {
+        const d = await fn();
+        setter(Array.isArray(d) ? d : []);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading_(false);
+      }
+    };
+    fetch(
+      leadSourceService.getAllLeadSources,
+      setLeadSources,
+      setLoadingSources,
+    );
+    fetch(staffService.getAllStaff, setStaffList, setLoadingStaff);
+    fetch(productService.getAllProducts, setProducts, setLoadingProducts);
+  }, []);
+
+  useEffect(() => {
+    if (isEditMode && editingEnquiry) {
+      setForm((prev) => ({
+        ...prev,
+        enqType: editingEnquiry.enqType || prev.enqType,
+        source: editingEnquiry.source || "",
+        name: editingEnquiry.name || "",
+        mobile: editingEnquiry.mobile || "",
+        email: editingEnquiry.email || "",
+        address: editingEnquiry.address || "",
+        product: editingEnquiry.product || "",
+        cost: editingEnquiry.cost ? String(editingEnquiry.cost) : "",
+        image: editingEnquiry.image || null,
+        assignedTo:
+          editingEnquiry.assignedTo?._id ||
+          editingEnquiry.assignedTo?.id ||
+          editingEnquiry.assignedTo ||
+          "",
+      }));
+    }
+  }, [isEditMode, editingEnquiry]);
+
+  // ── Form helpers ──────────────────────────────────────────────────────────
+  const set = (field, value) => {
+    setForm((p) => ({ ...p, [field]: value }));
+    if (errors[field]) setErrors((p) => ({ ...p, [field]: null }));
+  };
+
+  const closeAll = () => {
+    setShowProductModal(false);
+    setShowSourceModal(false);
+    setShowStaffModal(false);
+    setShowAddressDropdown(false);
+    Keyboard.dismiss();
+  };
+
+  const toast = useCallback(
+    (msg, type = "success") => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      setToastMsg(msg);
+      setToastType(type);
+      setToastVisible(true);
+      Animated.spring(toastAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        tension: 60,
+        friction: 10,
+      }).start();
+      toastTimer.current = setTimeout(() => {
+        Animated.timing(toastAnim, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+        }).start(() => setToastVisible(false));
+      }, 2800);
     },
-    uploadText: {
-        fontSize: 10,
-        color: COLORS.primary,
-        marginTop: 4,
-        fontWeight: "600",
-    },
-    editIconBadge: {
-        position: "absolute",
-        bottom: 0,
-        right: 0,
-        backgroundColor: COLORS.primary,
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        alignItems: "center",
-        justifyContent: "center",
-        borderWidth: 2,
-        borderColor: COLORS.white,
-    },
-});
+    [toastAnim],
+  );
+
+  // ── Address: typing-based autocomplete ───────────────────────────────────
+  const handleAddressChange = (text) => {
+    set("address", text);
+    if (addressDebounce.current) clearTimeout(addressDebounce.current);
+    if (text.trim().length >= 3) {
+      setAddressLoading(true);
+      addressDebounce.current = setTimeout(async () => {
+        try {
+          const preds = await addressService.getAddressPredictions(text);
+          setAddressPredictions(preds || []);
+          setShowAddressDropdown(true);
+        } catch (e) {
+          setAddressPredictions([]);
+        } finally {
+          setAddressLoading(false);
+        }
+      }, 350);
+    } else {
+      setAddressPredictions([]);
+      setShowAddressDropdown(false);
+      setAddressLoading(false);
+    }
+  };
+
+  const handleAddressSelect = async (prediction) => {
+    setShowAddressDropdown(false);
+    setAddressLoading(true);
+    try {
+      const details = await addressService.getPlaceDetails(prediction.placeId);
+      set("address", details?.address || prediction.fullAddress);
+    } catch {
+      set("address", prediction.fullAddress);
+    } finally {
+      setAddressLoading(false);
+    }
+  };
+
+  // ── Address: real-time GPS → reverse geocode → auto-fill ─────────────────
+  const handleGetLocation = async () => {
+    setLocationLoading(true);
+    setShowAddressDropdown(false);
+    try {
+      // 1. Permission
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        toast("Location permission denied. Enable it in Settings.", "error");
+        return;
+      }
+
+      // 2. Get GPS — try high accuracy, fall back to balanced
+      let pos = null;
+      try {
+        pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+          timeInterval: 0,
+          distanceInterval: 0,
+        });
+      } catch {
+        pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+      }
+
+      const { latitude, longitude } = pos.coords;
+
+      // 3. Reverse geocode — try backend first, then expo built-in
+      let address = null;
+
+      try {
+        const result = await addressService.reverseGeocode(latitude, longitude);
+        if (result && typeof result === "string" && result.trim().length > 4) {
+          address = result.trim();
+        }
+      } catch {
+        /* backend failed, use expo fallback */
+      }
+
+      if (!address) {
+        // expo-location built-in reverse geocode (no API key needed)
+        const results = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
+        });
+        if (results && results.length > 0) {
+          const g = results[0];
+          // Build readable address from all available parts
+          const parts = [
+            g.name,
+            g.streetNumber && g.street
+              ? `${g.streetNumber} ${g.street}`
+              : g.street || g.streetNumber,
+            g.subregion || g.district,
+            g.city || g.subregion,
+            g.region,
+            g.postalCode,
+            g.country,
+          ]
+            .map((p) => (p || "").trim())
+            .filter((p) => p.length > 0)
+            // remove duplicates
+            .filter((p, i, arr) => arr.indexOf(p) === i);
+          if (parts.length > 0) address = parts.join(", ");
+        }
+      }
+
+      if (address && address.length > 4) {
+        set("address", address);
+        toast("Location auto-filled!", "success");
+      } else {
+        toast(
+          "GPS found you but address is unavailable. Type manually.",
+          "error",
+        );
+      }
+    } catch (e) {
+      toast("Could not access GPS. Type your address below.", "error");
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
+  // ── Image ─────────────────────────────────────────────────────────────────
+  const pickImage = async () => {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5,
+        base64: true,
+      });
+      if (!res.canceled) {
+        set("image", `data:image/jpeg;base64,${res.assets[0].base64}`);
+      }
+    } catch {
+      toast("Failed to pick image", "error");
+    }
+  };
+
+  // ── Validation ────────────────────────────────────────────────────────────
+  const validate = () => {
+    const e = {};
+    if (!isEditMode) {
+      if (!form.name?.trim()) e.name = "Name is required";
+      if (!form.mobile?.trim()) e.mobile = "Mobile is required";
+      if (!form.product?.trim()) e.product = "Product is required";
+    }
+    if (form.mobile?.trim() && form.mobile.trim().length !== 10) {
+      e.mobile = "Mobile must be 10 digits";
+    }
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
+  // ── Submit ────────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    if (!validate()) return;
+    closeAll();
+    setLoading(true);
+    try {
+      const token = await getAuthToken();
+      const url = isEditMode ? `${API_URL}/${editingEnquiry._id}` : API_URL;
+      const method = isEditMode ? "PUT" : "POST";
+      const body = {
+        ...form,
+        assignedTo: form.assignedTo || null,
+        cost: form.cost ? Number(form.cost) : undefined,
+      };
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : "",
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        if (!isEditMode) confettiRef.current?.play?.();
+        await notificationService.showEnquirySuccessNotification({
+          name: form.name,
+          source: form.source,
+          product: form.product,
+        });
+        setTimeout(() => {
+          if (!isEditMode)
+            setForm({
+              enqType: "Normal",
+              source: "",
+              name: "",
+              mobile: "",
+              email: "",
+              address: "",
+              product: "",
+              cost: "",
+              image: null,
+              assignedTo: "",
+            });
+          route.params?.onEnquirySaved?.(data);
+          setTimeout(() => navigation.goBack(), 800);
+        }, 300);
+      } else {
+        const msg =
+          data.message ||
+          (isEditMode ? "Failed to update" : "Failed to create enquiry");
+        await notificationService.showEnquiryErrorNotification(msg);
+        toast(msg, "error");
+      }
+    } catch (e) {
+      toast(e.message || "Network error. Please try again.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Inline create helpers ─────────────────────────────────────────────────
+  const createProduct = async () => {
+    if (!newProductName.trim()) {
+      Alert.alert("Error", "Product name required");
+      return;
+    }
+    try {
+      setCreatingProduct(true);
+      const created = await productService.createProduct({
+        name: newProductName.trim(),
+        items: [{ name: newProductName.trim() }],
+      });
+      const list = await productService.getAllProducts();
+      setProducts(Array.isArray(list) ? list : []);
+      set("product", created.name || newProductName.trim());
+      setNewProductName("");
+      setShowProductModal(false);
+      toast("Product added!");
+    } catch (e) {
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Failed to create product";
+      if (/already exists/i.test(String(msg))) {
+        Alert.alert("Product already exists", "This product name already exists.");
+        return;
+      }
+      Alert.alert("Error", msg);
+    } finally {
+      setCreatingProduct(false);
+    }
+  };
+
+  const createLeadSource = async () => {
+    const name = newLeadSourceName.trim();
+    if (!name) {
+      Alert.alert("Error", "Lead source name required");
+      return;
+    }
+    try {
+      setCreatingLeadSource(true);
+      const created = await leadSourceService.createLeadSource({ name });
+      const obj = created?.name
+        ? created
+        : { _id: Date.now().toString(), name };
+      setLeadSources((p) =>
+        p.some((i) => i.name?.toLowerCase() === name.toLowerCase())
+          ? p
+          : [obj, ...p],
+      );
+      set("source", obj.name || name);
+      setNewLeadSourceName("");
+      setShowSourceModal(false);
+      toast("Lead source added!");
+    } catch (e) {
+      Alert.alert(
+        "Error",
+        e.response?.data?.message || "Failed to create lead source",
+      );
+    } finally {
+      setCreatingLeadSource(false);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+      <StatusBar barStyle="dark-content" backgroundColor={C.navBg} />
+      <ConfettiBurst ref={confettiRef} topOffset={0} />
+
+      {/* Nav bar */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingHorizontal: sc.hPad,
+          paddingVertical: sc.sp.sm,
+          backgroundColor: C.navBg,
+          borderBottomWidth: 1,
+          borderBottomColor: C.border,
+        }}
+      >
+        <TouchableOpacity
+          onPress={() => {
+            closeAll();
+            navigation.goBack();
+          }}
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 19,
+            backgroundColor: "#F1F5F9",
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1,
+            borderColor: C.border,
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={Platform.OS === "ios" ? "chevron-back" : "arrow-back"}
+            size={sc.f.lg}
+            color={C.text}
+          />
+        </TouchableOpacity>
+        <Text style={{ fontSize: sc.f.lg, fontWeight: "800", color: C.text }}>
+          {isEditMode ? "Edit Enquiry" : "New Enquiry"}
+        </Text>
+        <View style={{ width: 38 }} />
+      </View>
+
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
+        <TouchableWithoutFeedback onPress={closeAll}>
+          <ScrollView
+            ref={scrollRef}
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingHorizontal: sc.hPad,
+              paddingTop: sc.sp.md,
+              paddingBottom: 100,
+            }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Animated.View style={{ opacity: fadeAnim, gap: sc.sp.sm }}>
+              {/* Hero strip */}
+              <LinearGradient
+                colors={C.gradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{
+                  borderRadius: sc.cardR,
+                  padding: sc.sp.lg,
+                  marginBottom: sc.sp.xs,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <View style={{ gap: 2 }}>
+                  <Text
+                    style={{
+                      color: "rgba(255,255,255,0.75)",
+                      fontSize: sc.f.xs,
+                      fontWeight: "700",
+                      letterSpacing: 0.8,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Lead Form
+                  </Text>
+                  <Text
+                    style={{
+                      color: "#fff",
+                      fontSize: sc.f.xl,
+                      fontWeight: "900",
+                      letterSpacing: -0.3,
+                    }}
+                  >
+                    {isEditMode ? "Update Lead" : "Create Lead"}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: "rgba(255,255,255,0.15)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: "rgba(255,255,255,0.25)",
+                  }}
+                >
+                  <Ionicons name="sparkles" size={sc.f.xl} color="#fff" />
+                </View>
+              </LinearGradient>
+
+              {/* 1. Lead Setup */}
+              <Card icon="pricetags-outline" title="Lead Setup" sc={sc}>
+                {/* Priority */}
+                <View style={{ marginBottom: sc.sp.md }}>
+                  <Text
+                    style={{
+                      fontSize: sc.f.sm,
+                      fontWeight: "600",
+                      color: C.textSub,
+                      marginBottom: sc.sp.xs,
+                      marginLeft: 2,
+                    }}
+                  >
+                    Priority Level
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: sc.sp.sm }}>
+                    {["High", "Medium", "Normal"].map((p) => {
+                      const active = form.enqType === p;
+                      const col =
+                        p === "High"
+                          ? C.danger
+                          : p === "Medium"
+                            ? C.warning
+                            : C.primary;
+                      return (
+                        <TouchableOpacity
+                          key={p}
+                          onPress={() => {
+                            set("enqType", p);
+                            closeAll();
+                          }}
+                          style={{
+                            flex: 1,
+                            paddingVertical: sc.sp.sm,
+                            borderRadius: sc.radius,
+                            borderWidth: 1.5,
+                            borderColor: active ? col : C.border,
+                            backgroundColor: active ? col + "14" : C.card,
+                            alignItems: "center",
+                            gap: 4,
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <View
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: 4,
+                              backgroundColor: active ? col : C.border,
+                            }}
+                          />
+                          <Text
+                            style={{
+                              fontSize: sc.f.sm,
+                              fontWeight: active ? "700" : "500",
+                              color: active ? col : C.textMuted,
+                            }}
+                          >
+                            {p}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                <DropBtn
+                  label="Lead Source"
+                  value={form.source}
+                  placeholder="Select Source"
+                  icon="share-social-outline"
+                  onPress={() => setShowSourceModal(true)}
+                  sc={sc}
+                />
+                {assignableTeam.length > 0 && (
+                  <DropBtn
+                    label="Assign To"
+                    value={
+                      form.assignedTo
+                        ? assignableTeam.find((s) => s._id === form.assignedTo)
+                            ?.name || "Unknown"
+                        : ""
+                    }
+                    placeholder="Me (Auto-assign)"
+                    icon="person-add-outline"
+                    onPress={() => setShowStaffModal(true)}
+                    sc={sc}
+                  />
+                )}
+              </Card>
+
+              {/* 2. Contact */}
+              <Card icon="person-outline" title="Contact" sc={sc}>
+                <Field
+                  label="Full Name *"
+                  value={form.name}
+                  onChange={(t) => set("name", t)}
+                  placeholder="Customer full name"
+                  icon="person-outline"
+                  error={errors.name}
+                />
+                <Field
+                  label="Mobile Number *"
+                  value={form.mobile}
+                  onChange={(t) => set("mobile", t)}
+                  placeholder="10-digit number"
+                  icon="call-outline"
+                  keyboardType="phone-pad"
+                  error={errors.mobile}
+                />
+                <Field
+                  label="Email"
+                  value={form.email}
+                  onChange={(t) => set("email", t)}
+                  placeholder="Optional email"
+                  icon="mail-outline"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </Card>
+
+              {/* 3. Requirement */}
+              <Card icon="cart-outline" title="Requirement" sc={sc}>
+                <DropBtn
+                  label="Product / Service *"
+                  value={form.product}
+                  placeholder="Select Product"
+                  icon="cube-outline"
+                  onPress={() => setShowProductModal(true)}
+                  error={errors.product}
+                  sc={sc}
+                />
+                <Field
+                  label="Estimated Value (₹)"
+                  value={form.cost}
+                  onChange={(t) => set("cost", t)}
+                  placeholder="0.00"
+                  icon="cash-outline"
+                  keyboardType="decimal-pad"
+                />
+              </Card>
+
+              {/* 4. Location & Address */}
+              <Card icon="location-outline" title="Location & Address" sc={sc}>
+                {/* Address text input with GPS icon on right side */}
+                <View style={{ marginBottom: sc.sp.xs }}>
+                  <Text
+                    style={{
+                      fontSize: sc.f.sm,
+                      fontWeight: "600",
+                      color: C.textSub,
+                      marginBottom: sc.sp.xs,
+                      marginLeft: 2,
+                    }}
+                  >
+                    Address
+                  </Text>
+
+                  {/* Input row */}
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "flex-start",
+                      borderWidth: 1.5,
+                      borderColor: C.border,
+                      borderRadius: sc.radius,
+                      backgroundColor: C.card,
+                      paddingLeft: sc.sp.md,
+                      paddingRight: 6,
+                      paddingVertical: sc.sp.sm,
+                      minHeight: sc.inputH + 16,
+                    }}
+                  >
+                    {/* Left map icon */}
+                    <View
+                      style={{
+                        width: sc.iconBox,
+                        height: sc.iconBox,
+                        borderRadius: sc.iconBox / 2,
+                        backgroundColor: "#F1F5F9",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginRight: sc.sp.sm,
+                        marginTop: 2,
+                      }}
+                    >
+                      {addressLoading ? (
+                        <ActivityIndicator size="small" color={C.primary} />
+                      ) : (
+                        <Ionicons
+                          name="map-outline"
+                          size={sc.f.md}
+                          color={C.textMuted}
+                        />
+                      )}
+                    </View>
+
+                    {/* Text input */}
+                    <TextInput
+                      style={{
+                        flex: 1,
+                        fontSize: sc.f.base,
+                        color: C.text,
+                        fontWeight: "500",
+                        paddingVertical: 4,
+                        textAlignVertical: "top",
+                        paddingRight: 4,
+                      }}
+                      value={form.address}
+                      onChangeText={handleAddressChange}
+                      placeholder="Type address, city or pincode…"
+                      placeholderTextColor={C.textLight}
+                      multiline
+                      autoCapitalize="sentences"
+                    />
+
+                    {/* GPS locate button — right side, inside input */}
+                    <TouchableOpacity
+                      onPress={handleGetLocation}
+                      disabled={locationLoading}
+                      activeOpacity={0.8}
+                      style={{
+                        width: 42,
+                        height: 42,
+                        borderRadius: 12,
+                        backgroundColor: locationLoading
+                          ? C.primarySoft
+                          : C.primary,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        alignSelf: "flex-start",
+                        marginTop: 1,
+                        marginLeft: 4,
+                        borderWidth: 1,
+                        borderColor: locationLoading
+                          ? C.primary + "40"
+                          : C.primary,
+                        shadowColor: C.primary,
+                        shadowOffset: { width: 0, height: 3 },
+                        shadowOpacity: 0.3,
+                        shadowRadius: 6,
+                        elevation: 4,
+                      }}
+                    >
+                      {locationLoading ? (
+                        <ActivityIndicator size="small" color={C.primary} />
+                      ) : (
+                        <Ionicons name="locate" size={sc.f.lg} color="#fff" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Helper text below input */}
+                  <Text
+                    style={{
+                      fontSize: sc.f.xs,
+                      color: C.textMuted,
+                      marginTop: sc.sp.xs,
+                      marginLeft: 2,
+                    }}
+                  >
+                    Tap <Ionicons name="locate" size={10} color={C.textMuted} />{" "}
+                    to auto-fill from GPS
+                  </Text>
+
+                  {/* Autocomplete dropdown */}
+                  {showAddressDropdown && addressPredictions.length > 0 && (
+                    <View
+                      style={{
+                        backgroundColor: C.card,
+                        borderRadius: sc.radius,
+                        marginTop: sc.sp.xs,
+                        borderWidth: 1,
+                        borderColor: C.border,
+                        overflow: "hidden",
+                        shadowColor: "#000",
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.08,
+                        shadowRadius: 12,
+                        elevation: 6,
+                      }}
+                    >
+                      {addressPredictions.map((pred, i) => (
+                        <TouchableOpacity
+                          key={pred.placeId || i}
+                          onPress={() => handleAddressSelect(pred)}
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "flex-start",
+                            paddingHorizontal: sc.sp.md,
+                            paddingVertical: sc.sp.sm,
+                            borderBottomWidth:
+                              i < addressPredictions.length - 1 ? 1 : 0,
+                            borderBottomColor: "#F8FAFC",
+                            gap: sc.sp.sm,
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <View
+                            style={{
+                              width: 28,
+                              height: 28,
+                              borderRadius: 14,
+                              backgroundColor: C.primarySoft,
+                              alignItems: "center",
+                              justifyContent: "center",
+                              marginTop: 2,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Ionicons
+                              name="location-sharp"
+                              size={sc.f.sm}
+                              color={C.primary}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={{
+                                fontSize: sc.f.sm,
+                                fontWeight: "600",
+                                color: C.text,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {pred.mainText}
+                            </Text>
+                            <Text
+                              style={{
+                                fontSize: sc.f.xs,
+                                color: C.textMuted,
+                                marginTop: 1,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {pred.secondaryText}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                {/* Photo upload */}
+                <View style={{ alignItems: "center", marginTop: sc.sp.lg }}>
+                  <TouchableOpacity
+                    onPress={pickImage}
+                    activeOpacity={0.85}
+                    style={{ position: "relative" }}
+                  >
+                    <View
+                      style={{
+                        width: 80,
+                        height: 80,
+                        borderRadius: 40,
+                        borderWidth: 2,
+                        borderColor: C.primary,
+                        borderStyle: "dashed",
+                        backgroundColor: "#F8FAFF",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        overflow: "hidden",
+                      }}
+                    >
+                      {form.image ? (
+                        <Image
+                          source={{ uri: getImageUrl(form.image) }}
+                          style={{ width: "100%", height: "100%" }}
+                        />
+                      ) : (
+                        <View style={{ alignItems: "center", gap: 4 }}>
+                          <Ionicons
+                            name="camera-outline"
+                            size={sc.f.xl}
+                            color={C.primary}
+                          />
+                          <Text
+                            style={{
+                              fontSize: sc.f.xs,
+                              color: C.primary,
+                              fontWeight: "600",
+                            }}
+                          >
+                            Add Photo
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                    <View
+                      style={{
+                        position: "absolute",
+                        bottom: 0,
+                        right: 0,
+                        width: 24,
+                        height: 24,
+                        borderRadius: 12,
+                        backgroundColor: C.primary,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderWidth: 2,
+                        borderColor: C.card,
+                      }}
+                    >
+                      <Ionicons name="pencil" size={10} color="#fff" />
+                    </View>
+                  </TouchableOpacity>
+                  <Text
+                    style={{
+                      fontSize: sc.f.xs,
+                      color: C.textMuted,
+                      marginTop: sc.sp.xs,
+                    }}
+                  >
+                    Tap to add site photo
+                  </Text>
+                </View>
+              </Card>
+            </Animated.View>
+          </ScrollView>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
+
+      {/* Footer submit */}
+      <View
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: C.card,
+          paddingHorizontal: sc.hPad,
+          paddingTop: sc.sp.sm,
+          paddingBottom: Math.max(insets.bottom, sc.sp.md) + 4,
+          borderTopWidth: 1,
+          borderTopColor: C.border,
+        }}
+      >
+        <TouchableOpacity
+          onPress={handleSubmit}
+          disabled={loading}
+          activeOpacity={0.85}
+          style={{
+            borderRadius: sc.cardR,
+            overflow: "hidden",
+            opacity: loading ? 0.75 : 1,
+          }}
+        >
+          <LinearGradient
+            colors={C.gradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              paddingVertical: sc.sp.md,
+              gap: sc.sp.sm,
+            }}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Text
+                  style={{
+                    color: "#fff",
+                    fontSize: sc.f.md,
+                    fontWeight: "800",
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  {isEditMode ? "Update Enquiry" : "Create Enquiry"}
+                </Text>
+                <View
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: "rgba(255,255,255,0.2)",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Ionicons name="arrow-forward" size={sc.f.md} color="#fff" />
+                </View>
+              </>
+            )}
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Modals ── */}
+
+      {/* Lead Source */}
+      <SelectModal
+        visible={showSourceModal}
+        title="Select Lead Source"
+        onClose={() => setShowSourceModal(false)}
+        loading={loadingSources}
+        loadingText="Loading sources…"
+        sc={sc}
+      >
+        <InlineCreate
+          label="Add New Lead Source"
+          value={newLeadSourceName}
+          onChange={setNewLeadSourceName}
+          onAdd={createLeadSource}
+          loading={creatingLeadSource}
+          placeholder="e.g. Instagram"
+          sc={sc}
+        />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: sc.sp.sm }}>
+          {leadSources.map((src) => (
+            <ChoiceCard
+              key={src._id || src.name}
+              label={src.name}
+              icon="share-social-outline"
+              active={form.source === src.name}
+              onPress={() => {
+                set("source", src.name);
+                setShowSourceModal(false);
+                Keyboard.dismiss();
+              }}
+              sc={sc}
+            />
+          ))}
+        </View>
+      </SelectModal>
+
+      {/* Product */}
+      <SelectModal
+        visible={showProductModal}
+        title="Select Product"
+        onClose={() => setShowProductModal(false)}
+        loading={loadingProducts}
+        loadingText="Loading products…"
+        sc={sc}
+      >
+        <InlineCreate
+          label="Add New Product"
+          value={newProductName}
+          onChange={setNewProductName}
+          onAdd={createProduct}
+          loading={creatingProduct}
+          placeholder="Product name"
+          sc={sc}
+        />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: sc.sp.sm }}>
+          {products.map((prod) => (
+            <ChoiceCard
+              key={prod._id}
+              label={prod.name}
+              sublabel={`${(prod.items || []).length} item${(prod.items || []).length !== 1 ? "s" : ""}`}
+              icon="cube-outline"
+              active={form.product === prod.name}
+              onPress={() => {
+                set("product", prod.name);
+                setShowProductModal(false);
+                Keyboard.dismiss();
+              }}
+              sc={sc}
+            />
+          ))}
+        </View>
+      </SelectModal>
+
+      {/* Staff */}
+      <SelectModal
+        visible={showStaffModal}
+        title="Assign to Team"
+        onClose={() => setShowStaffModal(false)}
+        loading={loadingStaff}
+        loadingText="Loading team…"
+        sc={sc}
+      >
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: sc.sp.sm }}>
+          <ChoiceCard
+            label="Me (Auto-assign)"
+            sublabel="Assign to yourself"
+            icon="person-outline"
+            active={!form.assignedTo}
+            onPress={() => {
+              set("assignedTo", "");
+              setShowStaffModal(false);
+              Keyboard.dismiss();
+            }}
+            sc={sc}
+          />
+          {assignableTeam.map((s) => (
+            <ChoiceCard
+              key={s._id}
+              label={s.name}
+              sublabel={
+                String(s.role || "").toLowerCase() === "admin"
+                  ? adminLabelMap[String(s._id)] || "Admin"
+                  : "Staff"
+              }
+              icon="person-outline"
+              active={form.assignedTo === s._id}
+              onPress={() => {
+                set("assignedTo", s._id);
+                setShowStaffModal(false);
+                Keyboard.dismiss();
+              }}
+              sc={sc}
+            />
+          ))}
+        </View>
+      </SelectModal>
+
+      {/* Toast */}
+      <Toast
+        visible={toastVisible}
+        message={toastMsg}
+        type={toastType}
+        animValue={toastAnim}
+        sc={sc}
+      />
+    </SafeAreaView>
+  );
+}

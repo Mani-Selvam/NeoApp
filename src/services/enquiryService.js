@@ -16,13 +16,21 @@ export const createEnquiry = async (enquiryData) => {
 };
 
 // GET ALL ENQUIRIES
-export const getAllEnquiries = async (page = 1, limit = 20, search = "", status = "", date = "") => {
+export const getAllEnquiries = async (
+    page = 1,
+    limit = 20,
+    search = "",
+    status = "",
+    date = "",
+    followUpDate = "",
+) => {
     try {
         const client = await getApiClient();
         const params = { page, limit };
         if (search) params.search = search;
         if (status) params.status = status;
         if (date) params.date = date;
+        if (followUpDate) params.followUpDate = followUpDate;
 
         const response = await client.get("/enquiries", { params });
         return response.data; // Now returns { data: [], pagination: {} } or [] if legacy
@@ -135,6 +143,24 @@ export const getFollowUpReminders = async () => {
     } catch (error) {
         console.error(
             "Get follow-up reminders error:",
+            error.response?.data || error.message,
+        );
+        throw error;
+    }
+};
+
+export const getFollowUpStatusSummary = async (followUpDate = "") => {
+    try {
+        const client = await getApiClient();
+        const params = {};
+        if (followUpDate) params.followUpDate = followUpDate;
+        const response = await client.get("/enquiries/meta/followup-status-summary", {
+            params,
+        });
+        return response.data;
+    } catch (error) {
+        console.error(
+            "Get follow-up status summary error:",
             error.response?.data || error.message,
         );
         throw error;

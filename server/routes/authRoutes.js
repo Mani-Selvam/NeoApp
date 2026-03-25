@@ -6,7 +6,11 @@ const Plan = require("../models/Plan");
 const CompanySubscription = require("../models/CompanySubscription");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { sendEmailOTP, sendMobileOTP } = require("../utils/otpService");
+const {
+  sendEmailOTP,
+  sendMobileOTP,
+  sendSignupTemplateNotifications,
+} = require("../utils/otpService");
 const firebaseAdmin = require("../config/firebaseAdmin");
 const { verifyToken } = require("../middleware/auth");
 const { requireSuperadmin } = require("../middleware/role.middleware");
@@ -14,9 +18,18 @@ const SystemLog = require("../models/SystemLog");
 const { getSecurityPolicy } = require("../services/settingsService");
 const { getClientIp, isIpAllowed } = require("../utils/ipAllowlist");
 const { generateSecretBase32, verifyTotp, buildTotpOtpAuthUrl } = require("../utils/totp");
+const { ensureEnvLoaded } = require("../config/loadEnv");
 
-const JWT_SECRET =
-  process.env.JWT_SECRET || "your-secret-key-change-in-production";
+ensureEnvLoaded();
+
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET is required");
+}
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const EXPOSE_TEST_OTP =
+  String(process.env.EXPOSE_TEST_OTP || "").toLowerCase() === "true" ||
+  String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
 // Temporary In-Memory OTP Store (For production use Redis or DB with TTL)
 const otpStore = {};
@@ -29,6 +42,50 @@ const validateEmail = (email) => {
 
 const validatePassword = (password) => {
   return password && password.length >= 8;
+};
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const findSuperadminByEmail = async (email) => {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return null;
+  return User.findOne({
+    email: normalizedEmail,
+    role: { $in: ["superadmin", "Superadmin", "SUPERADMIN"] },
+  });
+};
+
+const findAnyUserByEmail = async (email) => {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return null;
+  return User.findOne({ email: normalizedEmail });
+};
+
+const isPrimaryCompanyUser = async (user) => {
+  if (!user?.company_id) return false;
+  const primary = await User.findOne({ company_id: user.company_id })
+    .sort({ createdAt: 1, _id: 1 })
+    .select("_id")
+    .lean();
+  return Boolean(primary?._id && String(primary._id) === String(user._id));
+};
+
+const normalizeCompanyCode = (value) => String(value || "").trim().toUpperCase();
+
+const findCompanyByCode = async (companyCode) => {
+  const normalizedCompanyCode = normalizeCompanyCode(companyCode);
+  if (!normalizedCompanyCode) return null;
+  return Company.findOne({ code: normalizedCompanyCode }).lean();
+};
+
+const getOtpRecordForKeys = (...keys) => {
+  for (const rawKey of keys) {
+    const key = String(rawKey || "").trim();
+    if (key && otpStore[key]) {
+      return { key, record: otpStore[key] };
+    }
+  }
+  return { key: "", record: null };
 };
 
 // Generate JWT Token
@@ -190,7 +247,7 @@ router.post("/send-otp", async (req, res) => {
         .json({ success: false, message: "Email or Mobile is required" });
     }
 
-    const lookupEmail = email;
+    const lookupEmail = normalizeEmail(email);
     const recordKey = email || mobile; // Use whichever is provided as key
 
     // Behavior depends on `type` of OTP request
@@ -206,27 +263,16 @@ router.post("/send-otp", async (req, res) => {
           .json({ success: false, message: "User not found" });
       }
     } else if (type === "signup") {
-      // For signup: avoid global blocking between companies.
-      // If email provided, try to find a company by domain and only block if email exists within that company.
-      if (email) {
-        const domain = (email || "").split("@")[1];
-        if (domain) {
-          const company = await Company.findOne({ domain });
-          if (company) {
-            existingUser = await User.findOne({
-              email: lookupEmail,
-              company_id: company._id,
-            });
-            if (existingUser) {
-              return res.status(409).json({
-                success: false,
-                message: "Email already registered. Please sign in.",
-              });
-            }
-          }
+      // Main company signup email must stay globally unique.
+      if (lookupEmail) {
+        existingUser = await findAnyUserByEmail(lookupEmail);
+        if (existingUser) {
+          return res.status(409).json({
+            success: false,
+            message: "This email is already used by another company account",
+          });
         }
       }
-      // If mobile-only signup or no company found for domain, allow signup to proceed (no global block)
     } else {
       // Generic send-otp for login or other flows: prefer sending to existing account if present (global lookup)
       existingUser = await User.findOne({
@@ -247,6 +293,14 @@ router.post("/send-otp", async (req, res) => {
     otpStore[recordKey] = record;
 
     // OTP generated and dispatched (not echoed to client in production)
+    if (EXPOSE_TEST_OTP) {
+      console.log("[OTP][TEST]", {
+        type: type || "generic",
+        email: emailToSend || null,
+        mobile: mobileToSend || null,
+        otp,
+      });
+    }
 
     const requested = String(method || "").toLowerCase().trim(); // "", "email", "sms", "whatsapp"
     let sent = false;
@@ -269,18 +323,24 @@ router.post("/send-otp", async (req, res) => {
       return ok;
     };
 
+    const isSignupFlow = String(type || "").toLowerCase().trim() === "signup";
+
     if (!requested) {
-      // Default: try all available channels (email + SMS gateway → WhatsApp fallback inside otpService)
-      sent = (await trySendEmail()) || sent;
-      sent = (await trySendMobile("")) || sent;
+      // Default: prefer email first and only fall back to mobile if email could not be sent.
+      if (isSignupFlow && mobileToSend) {
+        sent = (await trySendMobile("sms")) || sent;
+      } else {
+        sent = (await trySendEmail()) || sent;
+        if (!sent) sent = (await trySendMobile("")) || sent;
+      }
     } else if (requested === "email") {
       // Prefer email; fallback to SMS if email fails
       sent = (await trySendEmail()) || sent;
       if (!sent) sent = (await trySendMobile("sms")) || sent;
     } else if (requested === "sms") {
-      // Prefer SMS; fallback to email if SMS fails
+      // Signup/mobile OTP must remain mobile-only; do not silently fall back to email.
       sent = (await trySendMobile("sms")) || sent;
-      if (!sent) sent = (await trySendEmail()) || sent;
+      if (!sent && !isSignupFlow) sent = (await trySendEmail()) || sent;
     } else if (requested === "whatsapp") {
       // Prefer WhatsApp; fallback to SMS, then email
       sent = (await trySendMobile("whatsapp")) || sent;
@@ -296,18 +356,26 @@ router.post("/send-otp", async (req, res) => {
     if (!sent) {
       return res.status(400).json({
         success: false,
-        message:
-          "OTP could not be sent. Configure Email/SMS/WhatsApp provider and try again.",
+        message: isSignupFlow
+          ? "OTP could not be sent to mobile. Configure the SMS gateway or WhatsApp provider and try again."
+          : "OTP could not be sent. Configure Email/SMS/WhatsApp provider and try again.",
       });
     }
 
-    res.json({
+    const response = {
       success: true,
       message:
         sentVia.length > 0
           ? `OTP sent successfully via ${sentVia.join(" + ")}.`
           : "OTP sent successfully.",
-    });
+    };
+
+    if (EXPOSE_TEST_OTP) {
+      response.testOtp = otp;
+      response.testChannel = sentVia[0] || requested || (emailToSend ? "email" : "sms");
+    }
+
+    res.json(response);
   } catch (err) {
     console.error("Send OTP Error:", err);
     res.status(500).json({ success: false, message: "Failed to send OTP" });
@@ -318,15 +386,13 @@ router.post("/send-otp", async (req, res) => {
 router.post("/verify-otp", async (req, res) => {
   try {
     const { email, mobile, otp } = req.body;
-    const key = email || mobile;
+    const { key, record } = getOtpRecordForKeys(email, mobile);
 
-    if (!key || !otp) {
+    if ((!email && !mobile) || !otp) {
       return res
         .status(400)
         .json({ success: false, message: "Email/Mobile and OTP are required" });
     }
-
-    const record = otpStore[key];
 
     if (!record) {
       return res.status(400).json({
@@ -359,12 +425,13 @@ router.post("/verify-otp", async (req, res) => {
 // [NEW] Reset Password Endpoint
 router.post("/reset-password", async (req, res) => {
   try {
-    const { email, password, otp } = req.body;
+    const { email, mobile, password, otp } = req.body;
     const policy = await getSecurityPolicy();
     const minLen = Number(policy?.passwordMinLength ?? 8);
     const requiredLen = Number.isFinite(minLen) && minLen >= 8 ? minLen : 8;
+    const identifier = String(email || mobile || "").trim();
 
-    if (!email || !password || !otp) {
+    if (!identifier || !password || !otp) {
       return res
         .status(400)
         .json({ success: false, message: "All fields are required" });
@@ -378,7 +445,7 @@ router.post("/reset-password", async (req, res) => {
     }
 
     // Verify OTP again to ensure security
-    const record = otpStore[email];
+    const record = otpStore[identifier];
     if (!record) {
       return res.status(400).json({
         success: false,
@@ -392,7 +459,7 @@ router.post("/reset-password", async (req, res) => {
     }
 
     const user = await User.findOne({
-      $or: [{ email }, { mobile: email }],
+      $or: [{ email: identifier }, { mobile: identifier }],
     });
     if (!user) {
       return res
@@ -406,7 +473,7 @@ router.post("/reset-password", async (req, res) => {
     await user.save();
 
     // Clear OTP
-    delete otpStore[email];
+    delete otpStore[identifier];
 
     res.json({ success: true, message: "Password reset successfully" });
   } catch (err) {
@@ -423,11 +490,12 @@ router.post("/check-user", async (req, res) => {
     const { email, mobile } = req.body;
 
     if (email) {
-      const userEmail = await User.findOne({ email });
+      const normalizedEmail = normalizeEmail(email);
+      const userEmail = await findAnyUserByEmail(normalizedEmail);
       if (userEmail)
         return res
           .status(409)
-          .json({ success: false, message: "Email already registered" });
+          .json({ success: false, message: "This email is already used by another company account" });
     }
 
     if (mobile) {
@@ -451,7 +519,18 @@ router.post("/check-user", async (req, res) => {
 // Register / Signup (Updated to remove OTP check if handled elsewhere, or keep it standard)
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password, confirmPassword, mobile } = req.body;
+    const {
+      name,
+      email,
+      password,
+      confirmPassword,
+      mobile,
+      otp,
+      firebaseIdToken,
+      privacyPolicyAccepted,
+      privacyPolicyUrl,
+    } = req.body;
+    const normalizedEmail = normalizeEmail(email);
     const policy = await getSecurityPolicy();
     const minLen = Number(policy?.passwordMinLength ?? 8);
     const requiredLen = Number.isFinite(minLen) && minLen >= 8 ? minLen : 8;
@@ -463,7 +542,14 @@ router.post("/signup", async (req, res) => {
         .json({ success: false, message: "All fields are required" });
     }
 
-    if (!validateEmail(email)) {
+    if (privacyPolicyAccepted !== true) {
+      return res.status(400).json({
+        success: false,
+        message: "You must accept the Privacy Policy to create an account",
+      });
+    }
+
+    if (!validateEmail(normalizedEmail)) {
       return res
         .status(400)
         .json({ success: false, message: "Invalid email format" });
@@ -482,12 +568,84 @@ router.post("/signup", async (req, res) => {
         .json({ success: false, message: "Passwords do not match" });
     }
 
+    const normalizedSignupMobile = String(mobile || "").replace(/[^\d]/g, "");
+    if (!normalizedSignupMobile) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number is required",
+      });
+    }
+
+    if (!otp && !firebaseIdToken) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP verification is required",
+      });
+    }
+
+    if (otp) {
+      const { key: otpKey, record: otpRecord } = getOtpRecordForKeys(normalizedEmail, mobile);
+
+      if (!otpRecord) {
+        return res.status(400).json({
+          success: false,
+          message: "OTP not found or expired. Please resend.",
+        });
+      }
+
+      if (Date.now() > otpRecord.expiresAt) {
+        delete otpStore[otpKey];
+        if (normalizedEmail) delete otpStore[normalizedEmail];
+        if (mobile) delete otpStore[mobile];
+        return res.status(400).json({
+          success: false,
+          message: "OTP expired. Please resend.",
+        });
+      }
+
+      if (String(otpRecord.otp) !== String(otp).trim()) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+        });
+      }
+    } else {
+      let decodedPhoneToken;
+      try {
+        decodedPhoneToken = await firebaseAdmin.auth().verifyIdToken(firebaseIdToken);
+      } catch (_error) {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid or expired phone verification",
+        });
+      }
+
+      const verifiedPhone = String(decodedPhoneToken?.phone_number || "").trim();
+      if (!verifiedPhone) {
+        return res.status(400).json({
+          success: false,
+          message: "Verified phone number not found",
+        });
+      }
+
+      const normalizedVerifiedPhone = verifiedPhone.replace(/[^\d]/g, "");
+      if (
+        !normalizedVerifiedPhone ||
+        !normalizedVerifiedPhone.endsWith(normalizedSignupMobile.slice(-10))
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Phone verification does not match the signup mobile number",
+        });
+      }
+    }
+
     // Check if user already exists
-    let user = await User.findOne({ email }).maxTimeMS(5000);
+    let user = await findAnyUserByEmail(normalizedEmail);
     if (user) {
       return res.status(409).json({
         success: false,
-        message: "Email already registered. Please sign in.",
+        message: "This email is already used by another company account",
       });
     }
 
@@ -590,9 +748,12 @@ router.post("/signup", async (req, res) => {
 	    // Create new user tied to the company
 	    user = new User({
 	      name,
-	      email,
+      email: normalizedEmail,
 	      password,
 	      mobile,
+        privacyPolicyAccepted: true,
+        privacyPolicyAcceptedAt: new Date(),
+        privacyPolicyUrl: String(privacyPolicyUrl || "").trim(),
 	      role: "Admin",
 	      company_id: company ? company._id : undefined,
 	    });
@@ -606,6 +767,24 @@ router.post("/signup", async (req, res) => {
     // Generate token
     const token = generateToken(user._id);
 
+    if (normalizedEmail) delete otpStore[normalizedEmail];
+    if (mobile) delete otpStore[mobile];
+
+    Promise.resolve(
+      sendSignupTemplateNotifications({
+        customerPhoneNumber: mobile,
+        customerName: name,
+        companyName: company?.name || name,
+        companyCode: company?.code || "",
+        email: normalizedEmail,
+      }),
+    ).catch((templateErr) => {
+      console.error(
+        "Signup template notification failed:",
+        templateErr?.message || templateErr,
+      );
+    });
+
     res.status(201).json({
       success: true,
       message: "Account created successfully",
@@ -614,7 +793,18 @@ router.post("/signup", async (req, res) => {
         name: user.name,
         email: user.email,
         mobile: user.mobile,
+        role: user.role,
+        company_id: user.company_id,
+        companyCode: company?.code || "",
+        companyName: company?.name || "",
       },
+      company: company
+        ? {
+            id: company._id,
+            code: company.code || "",
+            name: company.name || "",
+          }
+        : null,
       token,
     });
   } catch (err) {
@@ -847,6 +1037,7 @@ router.post("/superadmin/2fa/disable", verifyToken, requireSuperadmin, async (re
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     // Validation
     if (!email || !password) {
@@ -856,14 +1047,80 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    if (!validateEmail(email)) {
+    if (!validateEmail(normalizedEmail)) {
       return res
         .status(400)
         .json({ success: false, message: "Invalid email format" });
     }
 
-    // Find user by email
-    const user = await User.findOne({ email }).maxTimeMS(5000);
+    let user = null;
+    let company = null;
+
+    const superadmin = await findSuperadminByEmail(normalizedEmail);
+    if (superadmin) {
+      user = superadmin;
+    } else {
+      const matches = await User.find({
+        email: normalizedEmail,
+        role: { $nin: ["superadmin", "Superadmin", "SUPERADMIN"] },
+      }).maxTimeMS(5000);
+
+      if (matches.length === 1) {
+        user = matches[0];
+        if (matches[0]?.company_id) {
+          company = await Company.findById(matches[0].company_id).lean();
+        }
+      } else if (matches.length > 1) {
+        const passwordMatches = [];
+
+        for (const candidate of matches) {
+          const isCandidateMatch = await bcrypt.compare(password, candidate.password);
+          if (isCandidateMatch) {
+            passwordMatches.push(candidate);
+          }
+        }
+
+        if (passwordMatches.length > 1) {
+          const primaryMatches = [];
+          for (const candidate of passwordMatches) {
+            if (await isPrimaryCompanyUser(candidate)) {
+              primaryMatches.push(candidate);
+            }
+          }
+
+          if (primaryMatches.length === 1) {
+            user = primaryMatches[0];
+            if (user?.company_id) {
+              company = await Company.findById(user.company_id).lean();
+            }
+          } else {
+            return res.status(409).json({
+              success: false,
+              code: "AMBIGUOUS_COMPANY_LOGIN",
+              message: "This email and password match multiple company accounts. Please keep a different password in each company.",
+            });
+          }
+        }
+
+        if (!user && passwordMatches.length === 1) {
+          user = passwordMatches[0];
+          if (user?.company_id) {
+            company = await Company.findById(user.company_id).lean();
+          }
+        }
+
+        if (passwordMatches.length > 1 && user) {
+          // resolved by company primary account preference
+        } else if (!user && passwordMatches.length > 1) {
+          return res.status(409).json({
+            success: false,
+            code: "AMBIGUOUS_COMPANY_LOGIN",
+            message: "This email and password match multiple company accounts. Please keep a different password in each company.",
+          });
+        }
+      }
+    }
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -904,6 +1161,8 @@ router.post("/login", async (req, res) => {
         role: user.role,
         status: user.status,
         company_id: user.company_id,
+        companyCode: company?.code || "",
+        companyName: company?.name || "",
       },
       token,
     });

@@ -6,6 +6,14 @@ const FollowUp = require("../models/FollowUp");
 const { verifyToken } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
 
+const toLocalIsoDate = (d = new Date()) => {
+    const dt = d instanceof Date ? d : new Date(d);
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const day = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+};
+
 // Get Dashboard Summary
 router.get("/summary", verifyToken, async (req, res) => {
     const _start = Date.now();
@@ -14,8 +22,11 @@ router.get("/summary", verifyToken, async (req, res) => {
 
         // ⚡ Use cache.wrap to deduplicate concurrent requests
         const { data: response, source } = await cache.wrap(cacheKey, async () => {
-            const today = new Date().toISOString().split("T")[0];
-            const firstDayOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split("T")[0];
+            const now = new Date();
+            const today = toLocalIsoDate(now);
+            const firstDayOfMonth = toLocalIsoDate(
+                new Date(now.getFullYear(), now.getMonth(), 1),
+            );
 
             // Data isolation query
             const query = {};
@@ -26,6 +37,15 @@ router.get("/summary", verifyToken, async (req, res) => {
                 query.userId = new mongoose.Types.ObjectId(req.userId);
             }
 
+            const activeFollowUpFilter = {
+                status: { $nin: ["Completed", "Drop", "Dropped", "dropped", "drop"] },
+                nextAction: { $nin: ["Drop", "Dropped", "dropped", "drop"] },
+                activityType: { $ne: "System" },
+                type: { $ne: "System" },
+                note: { $ne: "Enquiry created" },
+                remarks: { $ne: "Enquiry created" },
+            };
+
             // Run all queries in parallel
             const [
                 countsResult,
@@ -33,8 +53,10 @@ router.get("/summary", verifyToken, async (req, res) => {
                 todayEnquiry,
                 revenueResult,
                 todayFollowUpsCount,
+                missedFollowUpsCount,
                 recentEnquiries,
-                todayList
+                todayList,
+                missedList,
             ] = await Promise.all([
                 Enquiry.aggregate([
                     { $match: query },
@@ -54,14 +76,21 @@ router.get("/summary", verifyToken, async (req, res) => {
                         }
                     }
                 ]),
-                FollowUp.countDocuments({ ...query, date: today, status: { $ne: "Completed" } }),
+                FollowUp.countDocuments({ ...query, date: today, ...activeFollowUpFilter }),
+                FollowUp.countDocuments({ ...query, date: { $lt: today }, ...activeFollowUpFilter }),
                 Enquiry.find(query)
                     .select('name enqNo date status mobile product cost')
                     .sort({ createdAt: -1 })
                     .limit(5)
                     .lean(),
-                FollowUp.find({ ...query, date: today })
-                    .select('name mobile image product enqNo date type remarks status')
+                FollowUp.find({ ...query, date: today, ...activeFollowUpFilter })
+                    .select('name mobile image product enqNo date followUpDate nextFollowUpDate type activityType remarks status')
+                    .sort({ date: 1, activityTime: -1, createdAt: -1 })
+                    .limit(5)
+                    .lean(),
+                FollowUp.find({ ...query, date: { $lt: today }, ...activeFollowUpFilter })
+                    .select('name mobile image product enqNo date followUpDate nextFollowUpDate type activityType remarks status')
+                    .sort({ date: -1, activityTime: -1, createdAt: -1 })
                     .limit(5)
                     .lean()
             ]);
@@ -84,16 +113,29 @@ router.get("/summary", verifyToken, async (req, res) => {
                 else if (status === "closed") counts.closed = c.count;
             });
 
+            const converted = counts.converted || 0;
+            const conversionRate = totalEnquiry > 0 ? Math.round((converted / totalEnquiry) * 100) : 0;
+
             return {
-                counts,
+                counts: {
+                    ...counts,
+                    contacted: counts.contacted || 0,
+                    inProgress: counts.contacted || 0,
+                    interested: counts.interested || 0,
+                    dropped: counts.notInterested || 0,
+                    converted,
+                },
                 totalEnquiry,
                 todayEnquiry,
                 todayFollowUps: todayFollowUpsCount,
+                missedFollowUps: missedFollowUpsCount,
                 overallSalesAmount: revenueResult[0]?.overall[0]?.totalAmount || 0,
                 monthlyRevenue: revenueResult[0]?.monthly[0]?.monthlyAmount || 0,
                 salesMonthly: revenueResult[0]?.monthly[0]?.count || 0,
+                conversionRate,
                 recentEnquiries,
                 todayList,
+                missedList,
             };
         }, 60000); // 60s TTL
 

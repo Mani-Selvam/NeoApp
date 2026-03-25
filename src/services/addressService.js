@@ -5,6 +5,8 @@ const GOOGLE_PLACES_API_URL =
     "https://maps.googleapis.com/maps/api/place/autocomplete/json";
 const GOOGLE_PLACE_DETAILS_URL =
     "https://maps.googleapis.com/maps/api/place/details/json";
+const GOOGLE_GEOCODE_URL =
+    "https://maps.googleapis.com/maps/api/geocode/json";
 
 /**
  * Get address predictions from Google Places API
@@ -78,6 +80,36 @@ export const getPlaceDetails = async (placeId) => {
         return null;
     } catch (error) {
         console.error("Error fetching place details:", error);
+        return null;
+    }
+};
+
+export const reverseGeocode = async (lat, lng) => {
+    if (
+        lat == null ||
+        lng == null ||
+        Number.isNaN(Number(lat)) ||
+        Number.isNaN(Number(lng)) ||
+        !GOOGLE_PLACES_API_KEY
+    ) {
+        return null;
+    }
+
+    try {
+        const response = await axios.get(GOOGLE_GEOCODE_URL, {
+            params: {
+                latlng: `${lat},${lng}`,
+                key: GOOGLE_PLACES_API_KEY,
+            },
+        });
+
+        if (response.data.status === "OK" && response.data.results?.length) {
+            return response.data.results[0].formatted_address || null;
+        }
+
+        return null;
+    } catch (error) {
+        console.error("Error reverse geocoding address:", error);
         return null;
     }
 };

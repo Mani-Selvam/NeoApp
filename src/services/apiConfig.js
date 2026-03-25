@@ -1,4 +1,11 @@
 const DEFAULT_CLOUD_API = "https://neomobile.neophrondev.in/api";
+const isLocalDevHost = (value) =>
+    typeof value === "string" &&
+    (value.includes("localhost") ||
+        value.includes("127.0.0.1") ||
+        value.includes("192.168.") ||
+        value.includes("10.") ||
+        value.includes("172.16."));
 
 const normalizeApiUrl = (rawValue) => {
     if (!rawValue || typeof rawValue !== "string") return null;
@@ -25,11 +32,16 @@ const getApiUrl = () => {
     const normalizedEnvUrl = normalizeApiUrl(process.env.EXPO_PUBLIC_API_URL);
 
     if (normalizedEnvUrl) {
-        const isLocal =
-            normalizedEnvUrl.includes("localhost") ||
-            normalizedEnvUrl.includes("127.0.0.1") ||
-            normalizedEnvUrl.includes("192.168.");
+        const isLocal = isLocalDevHost(normalizedEnvUrl);
+        const isHttps = normalizedEnvUrl.startsWith("https://");
         const mode = isLocal ? "LOCAL SERVER" : "ONLINE SERVER";
+
+        if (!__DEV__ && !isHttps) {
+            console.warn(
+                `[API] Ignoring non-HTTPS EXPO_PUBLIC_API_URL in release build: ${normalizedEnvUrl}`,
+            );
+            return DEFAULT_CLOUD_API;
+        }
 
         console.log("*****************************************");
         console.log(`API MODE: ${mode}`);
@@ -50,5 +62,10 @@ export const getImageUrl = (path) => {
     if (!path) return null;
     if (path.startsWith("http") || path.startsWith("data:")) return path;
     const baseUrl = API_URL.replace("/api", "");
-    return `${baseUrl}/${path}`;
+    const normalizedPath = String(path)
+        .replace(/^\/+/, "")
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
+    return `${baseUrl}/${normalizedPath}`;
 };

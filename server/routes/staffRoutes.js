@@ -11,7 +11,7 @@ const { verifyToken } = require("../middleware/auth");
 const { requireCompany, requireRole } = require("../middleware/tenant");
 
 // GET ALL STAFF (Scoped to current Admin)
-// List staff for the authenticated user's company (Admin-only)
+// List admins + staff for the authenticated user's company (Admin-only)
 router.get(
   "/",
   verifyToken,
@@ -19,18 +19,42 @@ router.get(
   requireRole("Admin"),
   async (req, res) => {
     try {
-      const staff = await User.find({
+      const team = await User.find({
         company_id: req.companyId,
-        role: { $in: ["Staff", "staff"] },
+        role: { $in: ["Admin", "admin", "Staff", "staff"] },
       })
+        .sort({ role: 1, createdAt: -1 })
         .select("-password")
         .lean();
-      res.status(200).json(staff);
+      res.status(200).json(team);
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
   },
 );
+
+const mapMongoUserError = (error) => {
+  if (error?.code === 11000) {
+    if (error?.keyPattern?.email || String(error?.message || "").includes("email_1")) {
+      return { status: 409, body: { error: "This email already exists in your company" } };
+    }
+    if (error?.keyPattern?.mobile || String(error?.message || "").includes("mobile_1")) {
+      return { status: 409, body: { error: "This mobile number is already used by another account" } };
+    }
+  }
+  return null;
+};
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const isPrimaryCompanyUser = async (user) => {
+  if (!user?.company_id) return false;
+  const primary = await User.findOne({ company_id: user.company_id })
+    .sort({ createdAt: 1, _id: 1 })
+    .select("_id company_id")
+    .lean();
+  return Boolean(primary?._id && String(primary._id) === String(user._id));
+};
 
 // GET STAFF BY COMPANY
 // Get staff by company (only allowed for admins of that company)
@@ -79,9 +103,13 @@ router.post(
   requireRole("Admin"),
   async (req, res) => {
     try {
-      const { name, email, mobile, password, status } = req.body;
+      const { name, email, mobile, password, status, role } = req.body;
+      const normalizedEmail = normalizeEmail(email);
+      const normalizedRole = String(role || "Staff").trim();
+      const isAdminRole = String(normalizedRole).toLowerCase() === "admin";
+      const targetRole = isAdminRole ? "Admin" : "Staff";
 
-      if (!name || !email || !password) {
+      if (!name || !normalizedEmail || !password) {
         return res
           .status(400)
           .json({ error: "Name, email, and password are required" });
@@ -92,12 +120,10 @@ router.post(
       const company = await Company.findById(companyId).lean();
       if (!company) return res.status(400).json({ error: "Company not found" });
 
-      const staffCount = await User.countDocuments({
-        company_id: companyId,
-        role: { $in: ["Staff", "staff"] },
-      });
-
       let maxStaff = 0;
+      let maxAdmins = 0;
+      let currentStaff = 0;
+      let currentAdmins = 0;
       try {
         const anySubscription = await CompanySubscription.findOne({ companyId })
           .select("_id")
@@ -105,41 +131,92 @@ router.post(
           .lean();
 
         const resolved = await resolveEffectivePlan(companyId);
-        if (resolved?.hasPlan) maxStaff = Number(resolved?.plan?.maxStaff || 0);
-        else if (!anySubscription) maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
-        else maxStaff = 0;
+        if (resolved?.hasPlan) {
+          maxStaff = Number(resolved?.plan?.maxStaff || 0);
+          maxAdmins = Number(resolved?.plan?.maxAdmins || 0);
+          currentStaff = Number(resolved?.plan?.staffUsed || 0);
+          currentAdmins = Number(resolved?.plan?.adminsUsed || 0);
+        }
+        else if (!anySubscription) {
+          maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
+          maxAdmins = 1;
+        } else {
+          maxStaff = 0;
+          maxAdmins = 0;
+        }
       } catch (e) {
         maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
+        maxAdmins = 1;
+        [currentStaff, currentAdmins] = await Promise.all([
+          User.countDocuments({
+            company_id: companyId,
+            role: { $in: ["Staff", "staff"] },
+          }),
+          User.countDocuments({
+            company_id: companyId,
+            role: { $in: ["Admin", "admin"] },
+          }),
+        ]);
       }
 
-      if (maxStaff > 0 && staffCount >= maxStaff) {
+      if (!isAdminRole && maxStaff > 0 && currentStaff >= maxStaff) {
         return res.status(403).json({
           error: "Staff limit reached for your plan",
           code: "STAFF_LIMIT_REACHED",
           limit: maxStaff,
-          current: staffCount,
+          current: currentStaff,
         });
       }
 
-      if (maxStaff === 0) {
+      if (isAdminRole && maxAdmins > 0 && currentAdmins >= maxAdmins) {
         return res.status(403).json({
-          error: "No active plan. Please choose a plan to add staff.",
+          error: "Admin limit reached for your plan",
+          code: "ADMIN_LIMIT_REACHED",
+          limit: maxAdmins,
+          current: currentAdmins,
+        });
+      }
+
+      if ((!isAdminRole && maxStaff === 0) || (isAdminRole && maxAdmins === 0)) {
+        return res.status(403).json({
+          error: `No active plan. Please choose a plan to add ${isAdminRole ? "admin" : "staff"}.`,
           code: "NO_ACTIVE_PLAN",
         });
       }
 
       // Check email uniqueness within company
-      const existingUser = await User.findOne({ company_id: companyId, email });
+      const existingUser = await User.findOne({ company_id: companyId, email: normalizedEmail });
       if (existingUser)
-        return res.status(400).json({ error: "Email already exists" });
+        return res.status(400).json({ error: "This email already exists in your company" });
+
+      const usersWithSameEmail = await User.find({
+        email: normalizedEmail,
+        company_id: { $ne: companyId },
+      })
+        .select("_id company_id password")
+        .lean();
+
+      for (const candidate of usersWithSameEmail) {
+        if (await isPrimaryCompanyUser(candidate)) {
+          return res.status(409).json({
+            error: "This email is already used as another company's main account",
+          });
+        }
+
+        if (candidate?.password && await bcrypt.compare(password, candidate.password)) {
+          return res.status(409).json({
+            error: "This email and password already exist in another company. Please change email or password.",
+          });
+        }
+      }
 
       const newStaff = new User({
         name,
-        email,
+        email: normalizedEmail,
         mobile,
         password,
         status: status || "Active",
-        role: "Staff",
+        role: targetRole,
         company_id: companyId,
       });
 
@@ -151,18 +228,26 @@ router.post(
         email: savedStaff.email,
         mobile: savedStaff.mobile,
         status: savedStaff.status,
+        role: savedStaff.role,
         company_id: savedStaff.company_id,
       });
     } catch (error) {
+      const mapped = mapMongoUserError(error);
+      if (mapped) return res.status(mapped.status).json(mapped.body);
       res.status(500).json({ error: error.message });
     }
   },
 );
 
 // UPDATE STAFF (Scoped check recommended)
-router.put("/:id", verifyToken, requireCompany, async (req, res) => {
+router.put(
+  "/:id",
+  verifyToken,
+  requireCompany,
+  requireRole("Admin"),
+  async (req, res) => {
   try {
-    const { name, mobile, status, company_id, password } = req.body;
+    const { name, mobile, status, company_id, password, role } = req.body;
 
     const updateData = {};
     if (name) updateData.name = name;
@@ -181,17 +266,104 @@ router.put("/:id", verifyToken, requireCompany, async (req, res) => {
     if (staff.company_id && staff.company_id.toString() !== req.companyId)
       return res.status(403).json({ error: "Forbidden" });
 
+    if (role) {
+      const normalizedRole = String(role || "Staff").trim().toLowerCase();
+      if (!["admin", "staff"].includes(normalizedRole)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+
+      const nextRole = normalizedRole === "admin" ? "Admin" : "Staff";
+      const currentRole = String(staff.role || "Staff").trim().toLowerCase();
+
+      if (currentRole !== normalizedRole) {
+        const companyId = req.companyId;
+        const company = await Company.findById(companyId).lean();
+        if (!company) {
+          return res.status(400).json({ error: "Company not found" });
+        }
+
+        let maxStaff = 0;
+        let maxAdmins = 0;
+        let currentStaff = 0;
+        let currentAdmins = 0;
+
+        try {
+          const anySubscription = await CompanySubscription.findOne({ companyId })
+            .select("_id")
+            .sort({ createdAt: -1 })
+            .lean();
+
+          const resolved = await resolveEffectivePlan(companyId);
+          if (resolved?.hasPlan) {
+            maxStaff = Number(resolved?.plan?.maxStaff || 0);
+            maxAdmins = Number(resolved?.plan?.maxAdmins || 0);
+            currentStaff = Number(resolved?.plan?.staffUsed || 0);
+            currentAdmins = Number(resolved?.plan?.adminsUsed || 0);
+          }
+          else if (!anySubscription) {
+            maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
+            maxAdmins = 1;
+          } else {
+            maxStaff = 0;
+            maxAdmins = 0;
+          }
+        } catch (_) {
+          maxStaff = Number((company.plan && company.plan.staffLimit) || 0);
+          maxAdmins = 1;
+          currentStaff = await User.countDocuments({
+            company_id: companyId,
+            role: { $in: ["Staff", "staff"] },
+          });
+          currentAdmins = await User.countDocuments({
+            company_id: companyId,
+            role: { $in: ["Admin", "admin"] },
+          });
+        }
+
+        if (normalizedRole === "staff" && maxStaff > 0 && currentStaff >= maxStaff) {
+          return res.status(403).json({
+            error: "Your current plan does not allow more staff members",
+            code: "STAFF_LIMIT_REACHED",
+            limit: maxStaff,
+          });
+        }
+
+        if (normalizedRole === "admin" && maxAdmins > 0 && currentAdmins >= maxAdmins) {
+          return res.status(403).json({
+            error: "Your current plan does not allow more admins",
+            code: "ADMIN_LIMIT_REACHED",
+            limit: maxAdmins,
+          });
+        }
+
+        if (
+          (normalizedRole === "staff" && maxStaff === 0) ||
+          (normalizedRole === "admin" && maxAdmins === 0)
+        ) {
+          return res.status(403).json({
+            error: "No active plan found. Please upgrade to add team members.",
+            code: "NO_ACTIVE_PLAN",
+          });
+        }
+      }
+
+      updateData.role = nextRole;
+    }
+
     Object.assign(staff, updateData);
     await staff.save();
 
     res.status(200).json(staff);
   } catch (error) {
+    const mapped = mapMongoUserError(error);
+    if (mapped) return res.status(mapped.status).json(mapped.body);
     res.status(500).json({ error: error.message });
   }
-});
+},
+);
 
 // UPDATE STAFF STATUS (Toggle Active/Inactive)
-router.patch("/:id/status", verifyToken, async (req, res) => {
+router.patch("/:id/status", verifyToken, requireCompany, requireRole("Admin"), async (req, res) => {
   try {
     const { status } = req.body;
 
@@ -232,7 +404,7 @@ router.delete(
       if (!staff) return res.status(404).json({ error: "Staff not found" });
       if (staff.company_id && staff.company_id.toString() !== req.companyId)
         return res.status(403).json({ error: "Forbidden" });
-      await staff.remove();
+      await staff.deleteOne();
       res.status(200).json({ message: "Staff deleted successfully" });
     } catch (error) {
       res.status(500).json({ error: error.message });
