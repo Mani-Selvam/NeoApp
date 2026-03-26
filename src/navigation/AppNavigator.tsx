@@ -71,7 +71,7 @@ const TAB_ROUTE_NAMES = [
   "Enquiry",
   "FollowUp",
   "Communication",
-  "CallLog",
+  "Report",
 ];
 const APP_NAV_THEME = {
   ...DefaultTheme,
@@ -112,7 +112,6 @@ function MainTabNavigator() {
   const currentTabRef = useRef("Home");
   const [chatBadgeCount, setChatBadgeCount] = useState(0);
   const [followUpBadgeCount, setFollowUpBadgeCount] = useState(0);
-  const [callBadgeCount, setCallBadgeCount] = useState(0);
 
   useEffect(() => {
     if (Platform.OS !== "android") return undefined;
@@ -171,9 +170,6 @@ function MainTabNavigator() {
 
   useEffect(() => {
     const callSub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-      if (currentTabRef.current !== "CallLog") {
-        setCallBadgeCount((prev) => prev + 1);
-      }
       if (currentTabRef.current !== "FollowUp") {
         setFollowUpBadgeCount((prev) => prev + 1);
       }
@@ -286,7 +282,7 @@ function MainTabNavigator() {
       <Tab.Screen
         name="Communication"
         component={CommunicationScreen}
-        options={getTabOptions("Chat", "chatbubbles-outline", chatBadgeCount)}
+        options={getTabOptions("Task", "chatbubbles-outline", chatBadgeCount)}
         listeners={{
           focus: () => {
             currentTabRef.current = "Communication";
@@ -295,13 +291,12 @@ function MainTabNavigator() {
         }}
       />
       <Tab.Screen
-        name="CallLog"
-        component={CallLogScreen}
-        options={getTabOptions("Calls", "call-outline", callBadgeCount)}
+        name="Report"
+        component={ReportScreen}
+        options={getTabOptions("Report", "bar-chart-outline")}
         listeners={{
           focus: () => {
-            currentTabRef.current = "CallLog";
-            setCallBadgeCount(0);
+            currentTabRef.current = "Report";
           },
         }}
       />
@@ -838,6 +833,7 @@ export default function AppNavigator() {
             name="SupportHelp"
             component={SupportHelpScreen as any}
           />
+          <Stack.Screen name="CallLog" component={CallLogScreen as any} />
           <Stack.Screen name="PricingScreen" component={PricingAccessScreen} />
           <Stack.Screen
             name="CheckoutScreen"
@@ -855,7 +851,6 @@ export default function AppNavigator() {
             name="EnterpriseContactScreen"
             component={EnterpriseContactScreen as any}
           />
-          <Stack.Screen name="Report" component={ReportScreen as any} />
         </Stack.Navigator>
       )}
     </NavigationContainer>

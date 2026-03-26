@@ -1,10 +1,12 @@
 const express = require("express");
 const router = express.Router();
+const axios = require("axios");
 const ChatMessage = require("../models/ChatMessage");
 const Enquiry = require("../models/Enquiry");
 const FollowUp = require("../models/FollowUp");
 const MessageTemplate = require("../models/MessageTemplate");
 const WhatsAppConfig = require("../models/WhatsAppConfig");
+const User = require("../models/User");
 const { verifyToken } = require("../middleware/auth");
 const aiService = require("../utils/aiService");
 const cache = require("../utils/responseCache");
@@ -39,65 +41,86 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
 });
 
-const toLocalIsoDate = (value = new Date()) => {
-  const dt = value instanceof Date ? value : new Date(value);
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, "0");
-  const d = String(dt.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+const getPublicBaseUrl = (req) => {
+  const explicitBaseUrl = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (explicitBaseUrl) return explicitBaseUrl.replace(/\/+$/, "");
+
+  const apiBaseUrl = String(
+    process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || "",
+  ).trim();
+  if (apiBaseUrl) return apiBaseUrl.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+
+  return `${req.protocol}://${req.get("host")}`.replace(/\/+$/, "");
 };
 
-const recordWhatsappActivity = async ({
-  req,
-  ownerId,
-  enquiry,
-  content,
-  fileName,
-  messageType,
-}) => {
-  if (!enquiry?._id || !ownerId) return;
+const extractCloudMediaFromPayload = (payload, typeHint = "") => {
+  const msgData = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  if (!msgData) return null;
 
-  const activityAt = new Date();
-  const date = toLocalIsoDate(activityAt);
-  const baseText =
-    messageType === "image"
-      ? `WhatsApp image sent${fileName ? `: ${fileName}` : ""}`
-      : messageType === "document"
-        ? `WhatsApp document sent${fileName ? `: ${fileName}` : ""}`
-        : `WhatsApp message sent${content ? `: ${String(content).slice(0, 220)}` : ""}`;
+  const mediaData =
+    msgData.image ||
+    msgData.document ||
+    msgData.audio ||
+    msgData.video ||
+    null;
 
-  await FollowUp.create({
-    enqId: enquiry._id,
-    enqNo: String(enquiry.enqNo || "").trim(),
-    userId: ownerId,
-    assignedTo: req.userId,
-    name: enquiry.name || "Enquiry",
-    mobile: enquiry.mobile || "",
-    image: enquiry.image || "",
-    product: enquiry.product || "",
-    date,
-    followUpDate: date,
-    nextFollowUpDate: date,
-    activityType: "WhatsApp",
-    type: "WhatsApp",
-    note: baseText,
-    remarks: baseText,
-    staffName: req.user?.name || "Staff",
-    nextAction: "Followup",
-    status: "Completed",
-    activityTime: activityAt,
-  });
+  if (!mediaData) return null;
 
-  await Enquiry.findByIdAndUpdate(enquiry._id, {
-    $set: {
-      lastContactedAt: activityAt,
-      status: "Contacted",
-    },
-  }).catch(() => null);
+  return {
+    type: msgData.type || typeHint || "",
+    id: mediaData.id || "",
+    url: mediaData.url || "",
+    mimeType: mediaData.mime_type || "",
+    fileName: msgData.document?.filename || "",
+  };
+};
 
-  cache.invalidate("followups");
-  cache.invalidate("dashboard");
-  cache.invalidate("enquiries");
+const inferMediaExtension = (mimeType = "", fallbackType = "") => {
+  const normalizedMime = String(mimeType || "").toLowerCase();
+  if (normalizedMime.includes("jpeg") || normalizedMime.includes("jpg")) return "jpg";
+  if (normalizedMime.includes("png")) return "png";
+  if (normalizedMime.includes("webp")) return "webp";
+  if (normalizedMime.includes("gif")) return "gif";
+  if (normalizedMime.includes("mp4")) return "mp4";
+  if (normalizedMime.includes("mpeg") || normalizedMime.includes("mp3")) return "mp3";
+  if (normalizedMime.includes("ogg")) return "ogg";
+  if (normalizedMime.includes("pdf")) return "pdf";
+  if (fallbackType === "image") return "jpg";
+  if (fallbackType === "audio") return "mp4";
+  if (fallbackType === "video") return "mp4";
+  return "bin";
+};
+
+const buildProviderHostedMediaUrl = (mediaId, mimeType = "", type = "") => {
+  const cleanId = String(mediaId || "").trim();
+  if (!cleanId) return "";
+  const baseUrl = String(
+    process.env.WHATSAPP_MEDIA_PUBLIC_BASE_URL ||
+      "https://askeva.blr1.cdn.digitaloceanspaces.com/aiwhatsapp.neophrontech.com/chat",
+  )
+    .trim()
+    .replace(/\/+$/, "");
+  const extension = inferMediaExtension(mimeType, type);
+  return `${baseUrl}/${cleanId}.${extension}`;
+};
+
+const formatWhatsappProviderError = (providerError) => {
+  const raw = String(providerError || "").trim();
+  const normalized = raw.toLowerCase();
+  if (!raw) return "";
+  if (normalized.includes("session is not opened")) {
+    return "Neo WhatsApp session is not opened. Please open or reconnect the session in the Neo panel, then try again.";
+  }
+  if (normalized.includes("invalid message type")) {
+    return "Neo WhatsApp rejected the message format. Please try again after refreshing the app.";
+  }
+  if (
+    normalized.includes("wrong final block length") ||
+    normalized.includes("decrypttoken")
+  ) {
+    return "Neo WhatsApp token is invalid for this account. Please update the Neo credentials and try again.";
+  }
+  return raw;
 };
 
 // 1. GET CHAT HISTORY FOR A NUMBER
@@ -111,12 +134,114 @@ router.get("/webhook", (req, res) => {
   );
 });
 
+router.get("/media/:messageId", async (req, res) => {
+  let remoteUrl = "";
+  try {
+    const messageId = String(req.params.messageId || "").trim();
+    if (!messageId) {
+      return res.status(400).send("Missing message id");
+    }
+
+    const msg = await ChatMessage.findById(messageId)
+      .select("userId type content mimeType providerResponse")
+      .lean();
+    if (!msg) {
+      return res.status(404).send("Message not found");
+    }
+
+    const payload = msg.providerResponse ? JSON.parse(msg.providerResponse) : null;
+    const media = extractCloudMediaFromPayload(payload, msg.type);
+    const hostedUrl = buildProviderHostedMediaUrl(
+      media?.id,
+      media?.mimeType || msg.mimeType,
+      media?.type || msg.type,
+    );
+    remoteUrl =
+      hostedUrl ||
+      media?.url ||
+      (String(msg.content || "").startsWith("http") ? String(msg.content) : "");
+
+    if (!remoteUrl) {
+      return res.status(404).send("No media URL available");
+    }
+
+    const owner = msg.userId
+      ? await User.findById(msg.userId).select("company_id").lean()
+      : null;
+    const cfg = await loadWhatsappConfig(
+      owner?.company_id ? { companyId: owner.company_id } : { ownerUserId: msg.userId },
+    );
+    const token = String(cfg?.metaWhatsappToken || "").trim();
+
+    let upstream = null;
+    try {
+      upstream = await axios.get(remoteUrl, {
+        responseType: "stream",
+        timeout: 30000,
+      });
+    } catch (plainErr) {
+      if (!token) throw plainErr;
+      upstream = await axios.get(remoteUrl, {
+        responseType: "stream",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        timeout: 30000,
+      });
+    }
+
+    res.setHeader(
+      "Content-Type",
+      media?.mimeType ||
+        msg.mimeType ||
+        upstream.headers["content-type"] ||
+        "application/octet-stream",
+    );
+    res.setHeader("Cache-Control", "private, max-age=300");
+    if (upstream.headers["content-length"]) {
+      res.setHeader("Content-Length", upstream.headers["content-length"]);
+    }
+
+    upstream.data.on("error", (streamErr) => {
+      if (!res.headersSent) {
+        res.status(502).send(streamErr.message);
+      } else {
+        res.end();
+      }
+    });
+
+    upstream.data.pipe(res);
+  } catch (err) {
+    if (remoteUrl) {
+      return res.redirect(302, remoteUrl);
+    }
+    const status = err.response?.status || 500;
+    const providerMessage =
+      typeof err.response?.data === "string" ? err.response.data : err.message;
+    console.error("WhatsApp media proxy error:", providerMessage);
+    res.status(status).send("Unable to load WhatsApp media");
+  }
+});
+
 router.get("/history/:phoneNumber", verifyToken, async (req, res) => {
   try {
-    const ownerId =
-      req.user.role === "Staff" && req.user.parentUserId
-        ? req.user.parentUserId
-        : req.userId;
+    const normalizedRole = String(req.user?.role || "").trim().toLowerCase();
+    let ownerUserIds = [];
+    let enquiryScopeFilter = {};
+
+    if (normalizedRole === "staff" && req.user?.parentUserId) {
+      ownerUserIds = [req.user.parentUserId];
+      enquiryScopeFilter = { assignedTo: req.userId };
+    } else if (req.user?.company_id) {
+      const companyUsers = await User.find({ company_id: req.user.company_id })
+        .select("_id")
+        .lean();
+      ownerUserIds = companyUsers
+        .map((item) => item?._id)
+        .filter(Boolean);
+    } else {
+      ownerUserIds = [req.userId];
+    }
 
     // Pagination params — load latest 30 by default
     const page = parseInt(req.query.page) || 1;
@@ -126,9 +251,39 @@ router.get("/history/:phoneNumber", verifyToken, async (req, res) => {
     const rawNum = req.params.phoneNumber.replace(/\D/g, "");
     const short10 = rawNum.length > 10 ? rawNum.slice(-10) : rawNum;
 
+    const enquiryMatches = await Enquiry.find({
+      ...(ownerUserIds.length
+        ? {
+            userId:
+              ownerUserIds.length === 1 ? ownerUserIds[0] : { $in: ownerUserIds },
+          }
+        : {}),
+      ...enquiryScopeFilter,
+      $or: [
+        { mobile: rawNum },
+        { mobile: short10 },
+        { mobile: { $regex: short10 + "$" } },
+        { altMobile: rawNum },
+        { altMobile: short10 },
+        { altMobile: { $regex: short10 + "$" } },
+      ],
+    })
+      .select("_id")
+      .lean();
+
+    const enquiryIds = enquiryMatches
+      .map((item) => item?._id)
+      .filter(Boolean);
+
     const filter = {
-      userId: ownerId,
       phoneNumber: { $regex: short10 + "$" },
+      $or: [
+        {
+          userId:
+            ownerUserIds.length <= 1 ? ownerUserIds[0] || null : { $in: ownerUserIds },
+        },
+        ...(enquiryIds.length ? [{ enquiryId: { $in: enquiryIds } }] : []),
+      ],
     };
 
     // Get total count for pagination info
@@ -238,6 +393,8 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
     );
     const providerMeta = extractProviderMessageMeta(cfg?.provider, providerResp);
 
+    const userFacingProviderError = formatWhatsappProviderError(providerError);
+
     const newMessage = new ChatMessage({
       userId: ownerId,
       enquiryId,
@@ -257,20 +414,11 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       externalId: providerMeta.externalId,
       providerTicketId: providerMeta.providerTicketId,
       providerResponse: providerResp ? JSON.stringify(providerResp.data) : null,
-      providerError,
+      providerError: userFacingProviderError || providerError,
       timestamp: new Date(),
     });
 
     await newMessage.save();
-
-    await recordWhatsappActivity({
-      req,
-      ownerId,
-      enquiry,
-      content: req.file ? "" : finalContent,
-      fileName,
-      messageType: newMessage.type,
-    });
 
     // Emit via Socket.io (emit with multiple formats for reliable matching)
     if (req.app.get("io")) {
@@ -284,7 +432,13 @@ router.post("/send", verifyToken, upload.single("file"), async (req, res) => {
       io.emit(`new_message_${shortMobile}`, newMessage);
     }
 
-    res.json(newMessage);
+    const responseBody = newMessage.toObject();
+    responseBody.deliveryWarning =
+      !providerMeta.providerOk && userFacingProviderError
+        ? userFacingProviderError
+        : null;
+
+    res.json(responseBody);
   } catch (err) {
     console.error("WhatsApp Send Error:", err);
     res.status(500).json({ message: err.message });
@@ -328,6 +482,7 @@ router.post("/webhook", async (req, res) => {
     let messageText = "";
     let type = "text";
     let mediaUrl = "";
+    let mediaId = "";
     let fileName = "";
     let mimeType = "";
 
@@ -398,10 +553,32 @@ router.post("/webhook", async (req, res) => {
     type =
       payload.type ||
       tryPaths(payload, ["message.type", "data.message.type"]) ||
-      "text";
+      "";
     mediaUrl = tryPaths(payload, mediaUrlCandidates) || "";
     fileName = tryPaths(payload, fileNameCandidates) || fileName || "";
     mimeType = tryPaths(payload, mimeTypeCandidates) || mimeType || "";
+    if (payload.entry) {
+      const previewMsg = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+      const previewMedia =
+        previewMsg?.image ||
+        previewMsg?.document ||
+        previewMsg?.audio ||
+        previewMsg?.video ||
+        null;
+      rawFrom = rawFrom || previewMsg?.from || "";
+      type = type || previewMsg?.type || "";
+      mediaId = mediaId || previewMedia?.id || "";
+      mimeType = mimeType || previewMedia?.mime_type || "";
+      fileName = fileName || previewMsg?.document?.filename || "";
+      mediaUrl = mediaUrl || previewMedia?.url || "";
+      messageText =
+        messageText ||
+        previewMsg?.text?.body ||
+        previewMsg?.image?.caption ||
+        previewMsg?.video?.caption ||
+        mediaUrl ||
+        "";
+    }
 
     console.log(
       `🟢 Webhook parsed — from: ${rawFrom}, text (preview): ${String(messageText).substring(0, 200)}`,
@@ -441,10 +618,26 @@ router.post("/webhook", async (req, res) => {
       // ===== META CLOUD API FORMAT =====
       const msgData = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
       if (msgData) {
+        const mediaData =
+          msgData.image ||
+          msgData.document ||
+          msgData.audio ||
+          msgData.video ||
+          null;
         // only set if not already extracted by earlier parsing
         rawFrom = rawFrom || msgData.from || "";
-        messageText = messageText || msgData.text?.body || "";
+        mediaId = mediaId || mediaData?.id || "";
+        messageText =
+          messageText ||
+          msgData.text?.body ||
+          msgData.image?.caption ||
+          msgData.video?.caption ||
+          mediaData?.url ||
+          "";
         type = type || msgData.type || "text";
+        mimeType = mimeType || mediaData?.mime_type || "";
+        fileName = fileName || msgData.document?.filename || "";
+        mediaUrl = mediaUrl || mediaData?.url || "";
       } else {
         // Status update from Cloud API — ignore
         console.log("ℹ️ Cloud API status update, skipping.");
@@ -458,6 +651,8 @@ router.post("/webhook", async (req, res) => {
         messageText || payload.text || payload.content || payload.message || "";
       type = type || payload.type || "text";
     }
+
+    type = type || "text";
 
     if (!rawFrom) {
       console.log(
@@ -476,7 +671,16 @@ router.post("/webhook", async (req, res) => {
       `🔍 Processing message from: ${cleanFrom} (short: ${shortMobile}) -> normalized: ${normalizedFrom}`,
     );
 
-    // 3. IDENTIFY CRM OWNER — search by last 10 digits for maximum flexibility
+    // 3. IDENTIFY CRM OWNER — prefer the most recent admin conversation for this number.
+    const recentAdminMessage = await ChatMessage.findOne({
+      phoneNumber: { $regex: shortMobile + "$" },
+      sender: "Admin",
+    })
+      .sort({ timestamp: -1 })
+      .select("userId enquiryId")
+      .lean();
+
+    // Fallback to enquiry lookup when no recent thread exists.
     const enquiry = await Enquiry.findOne({
       $or: [
         { mobile: cleanFrom },
@@ -486,10 +690,17 @@ router.post("/webhook", async (req, res) => {
         { altMobile: shortMobile },
         { altMobile: { $regex: shortMobile + "$" } },
       ],
-    }).populate("userId");
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .populate("userId");
 
     let targetUserId = null;
-    if (enquiry && enquiry.userId) {
+    let targetEnquiryId = enquiry?._id || null;
+
+    if (recentAdminMessage?.userId) {
+      targetUserId = recentAdminMessage.userId;
+      targetEnquiryId = recentAdminMessage.enquiryId || targetEnquiryId;
+    } else if (enquiry && enquiry.userId) {
       targetUserId = enquiry.userId._id || enquiry.userId;
     } else {
       const User = require("../models/User");
@@ -635,7 +846,7 @@ router.post("/webhook", async (req, res) => {
     // 4. SAVE & EMIT
     const incomingMsg = new ChatMessage({
       userId: targetUserId,
-      enquiryId: enquiry ? enquiry._id : null,
+      enquiryId: targetEnquiryId,
       sender: "Customer",
       type: type,
       content: messageText || mediaUrl || payload.audioUrl || "",
@@ -643,10 +854,20 @@ router.post("/webhook", async (req, res) => {
       mimeType: mimeType,
       phoneNumber: normalizedFrom, // Store as 91 + last10 for consistent matching
       status: "received",
+      providerResponse: JSON.stringify(payload),
       timestamp: new Date(),
     });
 
     await incomingMsg.save();
+    const hostedMediaUrl = buildProviderHostedMediaUrl(mediaId, mimeType, type);
+    if (
+      mediaId &&
+      ["image", "document", "audio", "video"].includes(type) &&
+      (hostedMediaUrl || mediaUrl || String(incomingMsg.content || "").startsWith("http"))
+    ) {
+      incomingMsg.content = hostedMediaUrl || `/api/whatsapp/media/${incomingMsg._id}`;
+      await incomingMsg.save();
+    }
     console.log(`✅ Message saved ID: ${incomingMsg._id} from: ${shortMobile}`);
 
     if (req.app.get("io")) {
@@ -779,20 +1000,12 @@ router.post("/config/mark-verified", verifyToken, async (req, res) => {
         ? req.user.parentUserId
         : req.userId;
     const companyId = req.user.company_id || null;
-    const matches = await WhatsAppConfig.find({
-      $or: [
-        ...(companyId ? [{ companyId }] : []),
-        { ownerUserId: ownerId },
-      ],
-    })
+    const query = companyId ? { companyId } : { ownerUserId: ownerId };
+    const matches = await WhatsAppConfig.find(query)
       .sort({ updatedAt: -1, createdAt: -1 })
       .select("_id ownerUserId companyId");
 
-    const existing =
-      matches.find((item) => String(item?.companyId || "") === String(companyId || "")) ||
-      matches.find((item) => String(item?.ownerUserId || "") === String(ownerId || "")) ||
-      matches[0] ||
-      null;
+    const existing = matches[0] || null;
 
     if (existing?._id) {
       const duplicateIds = matches
@@ -871,12 +1084,8 @@ router.put("/config", verifyToken, async (req, res) => {
         ? req.user.parentUserId
         : req.userId;
     const companyId = req.user.company_id || null;
-    const matches = await WhatsAppConfig.find({
-      $or: [
-        ...(companyId ? [{ companyId }] : []),
-        { ownerUserId: ownerId },
-      ],
-    })
+    const query = companyId ? { companyId } : { ownerUserId: ownerId };
+    const matches = await WhatsAppConfig.find(query)
       .sort({ updatedAt: -1, createdAt: -1 })
       .lean();
 

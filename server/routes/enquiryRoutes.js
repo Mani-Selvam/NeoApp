@@ -160,14 +160,10 @@ const upload = multer({
 
 // Helper: Generate next enquiry number by querying the database
 // Helper: Generate next enquiry number efficiently
-const generateEnquiryNumber = async () => {
+const generateEnquiryNumber = async (companyId) => {
   try {
-    // Find the latest enquiry by sorting enqNo in descending order
-    // This relies on consistent numbering ENQ-XXX
-    // We use natural sort if possible, but standard string sort might be "ENQ-10" < "ENQ-9"
-    // So relying on createdAt is safer for finding the 'latest', then parsing its ID
-
-    const latestEnquiry = await Enquiry.findOne({}, { enqNo: 1 })
+    const query = companyId ? { companyId } : {};
+    const latestEnquiry = await Enquiry.findOne(query, { enqNo: 1 })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -183,8 +179,73 @@ const generateEnquiryNumber = async () => {
     return `ENQ-${String(nextNumber).padStart(3, "0")}`;
   } catch (error) {
     console.error("Error generating enquiry number:", error);
-    const count = await Enquiry.countDocuments();
+    const count = await Enquiry.countDocuments(companyId ? { companyId } : {});
     return `ENQ-${String(count + 1).padStart(3, "0")}`;
+  }
+};
+
+const emitEnquiryCreated = async (req, enquiry, companyId) => {
+  try {
+    const io = req.app?.get("io");
+    if (!io || !enquiry || !companyId) return;
+
+    const companyUsers = await User.find({ company_id: companyId })
+      .select("_id")
+      .lean();
+
+    companyUsers.forEach((member) => {
+      const userId = String(member?._id || "");
+      if (!userId) return;
+      io.to(`user:${userId}`).emit("ENQUIRY_CREATED", {
+        _id: enquiry._id,
+        enqNo: enquiry.enqNo,
+        assignedTo: enquiry.assignedTo,
+        userId: enquiry.userId,
+        companyId: String(companyId),
+      });
+    });
+  } catch (_socketError) {
+    // ignore real-time fanout issues
+  }
+};
+
+const emitEnquiryUpdated = async (req, enquiry, companyId) => {
+  try {
+    const io = req.app?.get("io");
+    if (!io || !enquiry) return;
+
+    if (companyId) {
+      const companyUsers = await User.find({ company_id: companyId })
+        .select("_id")
+        .lean();
+
+      companyUsers.forEach((member) => {
+        const userId = String(member?._id || "");
+        if (!userId) return;
+        io.to(`user:${userId}`).emit("ENQUIRY_UPDATED", {
+          _id: enquiry._id,
+          enqNo: enquiry.enqNo,
+          assignedTo: enquiry.assignedTo,
+          userId: enquiry.userId,
+          status: enquiry.status,
+          companyId: String(companyId),
+        });
+      });
+      return;
+    }
+
+    const fallbackUserId = String(req.userId || "");
+    if (fallbackUserId) {
+      io.to(`user:${fallbackUserId}`).emit("ENQUIRY_UPDATED", {
+        _id: enquiry._id,
+        enqNo: enquiry.enqNo,
+        assignedTo: enquiry.assignedTo,
+        userId: enquiry.userId,
+        status: enquiry.status,
+      });
+    }
+  } catch (_socketError) {
+    // ignore real-time fanout issues
   }
 };
 
@@ -371,17 +432,29 @@ router.get("/", verifyToken, async (req, res) => {
 });
 
 const resolveAssignee = async ({ requestedAssignedTo, ownerId, actorId, actor }) => {
-  if (requestedAssignedTo) return requestedAssignedTo;
-
   const actorRole = String(actor?.role || "").toLowerCase();
   if (actorRole === "staff") return actorId;
 
   const scopeUserId = actor?.parentUserId || ownerId;
   const actorDoc = await User.findById(scopeUserId).select("company_id").lean();
+  const companyId = actor?.company_id || actorDoc?.company_id || null;
 
-  if (actorDoc?.company_id) {
+  if (requestedAssignedTo && requestedAssignedTo !== "all" && companyId) {
+    const validAssignee = await User.findOne({
+      _id: requestedAssignedTo,
+      company_id: companyId,
+      status: "Active",
+      role: { $in: ["admin", "Admin", "staff", "Staff"] },
+    })
+      .select("_id")
+      .lean();
+
+    if (validAssignee?._id) return validAssignee._id;
+  }
+
+  if (companyId) {
     const staffCandidate = await User.findOne({
-      company_id: actorDoc.company_id,
+      company_id: companyId,
       status: "Active",
       role: { $in: ["staff", "Staff"] },
     })
@@ -404,8 +477,6 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const enqNo = await generateEnquiryNumber();
-
     let imageData = null;
     if (req.file) {
       imageData = `/uploads/${req.file.filename}`;
@@ -417,6 +488,8 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
       req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
         : req.userId;
+    const ownerUser = await User.findById(ownerId).select("company_id").lean();
+    const companyId = req.user?.company_id || ownerUser?.company_id || null;
 
     const assignedTo = await resolveAssignee({
       requestedAssignedTo: req.body.assignedTo,
@@ -427,20 +500,39 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
 
     const enquiryDateTime = new Date();
     const normalizedStatus = normalizeEnquiryStatus(req.body.status || "New");
-
-    const newEnquiry = new Enquiry({
-      enqNo,
+    const basePayload = {
       ...req.body,
+      companyId,
       userId: ownerId,
-      assignedTo: assignedTo,
+      assignedTo,
       enqBy: req.user.name,
       image: imageData,
       date: toIsoDate(req.body.date) || enquiryDateTime.toISOString().split("T")[0],
       enquiryDateTime,
       status: normalizedStatus,
-    });
+    };
 
-    const savedEnquiry = await newEnquiry.save();
+    let savedEnquiry = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const enqNo = await generateEnquiryNumber(companyId);
+        savedEnquiry = await new Enquiry({
+          enqNo,
+          ...basePayload,
+        }).save();
+        break;
+      } catch (saveError) {
+        if (saveError?.code !== 11000) throw saveError;
+      }
+    }
+
+    if (!savedEnquiry) {
+      const fallbackEnqNo = `ENQ-${Date.now().toString().slice(-6)}`;
+      savedEnquiry = await new Enquiry({
+        enqNo: fallbackEnqNo,
+        ...basePayload,
+      }).save();
+    }
 
     // --- AUTO-SEND INTRO TEMPLATE (if available) ---
     try {
@@ -520,47 +612,9 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
     cache.invalidate("enquiries"); // Clear list cache
     cache.invalidate("followups");
     cache.invalidate("dashboard");
+    await emitEnquiryCreated(req, savedEnquiry, companyId);
     res.status(201).json(savedEnquiry);
   } catch (err) {
-    if (err.code === 11000 && err.keyPattern?.enqNo) {
-      const fallbackEnqNo = `ENQ-${Date.now().toString().slice(-6)}`;
-      try {
-        let imageData = req.file
-          ? `/uploads/${req.file.filename}`
-          : req.body.image;
-
-        const retryEnquiry = new Enquiry({
-          enqNo: fallbackEnqNo,
-          ...req.body,
-          userId:
-            req.user.role === "Staff" && req.user.parentUserId
-              ? req.user.parentUserId
-              : req.userId,
-          assignedTo: await resolveAssignee({
-            requestedAssignedTo: req.body.assignedTo,
-            ownerId:
-              req.user.role === "Staff" && req.user.parentUserId
-                ? req.user.parentUserId
-                : req.userId,
-            actorId: req.userId,
-            actor: req.user,
-          }),
-          enqBy: req.user.name,
-          image: imageData,
-          date: toIsoDate(req.body.date) || new Date().toISOString().split("T")[0],
-          enquiryDateTime: new Date(),
-          status: normalizeEnquiryStatus(req.body.status || "New"),
-        });
-        const savedEnquiry = await retryEnquiry.save();
-
-        return res.status(201).json(savedEnquiry);
-      } catch (retryErr) {
-        return res.status(400).json({
-          message: "Failed to create enquiry: " + retryErr.message,
-        });
-      }
-    }
-
     res.status(400).json({ message: err.message });
   }
 });
@@ -675,6 +729,7 @@ router.patch("/:id/status", verifyToken, async (req, res) => {
     cache.invalidate("enquiries");
     cache.invalidate("dashboard");
     cache.invalidate("reports");
+    await emitEnquiryUpdated(req, enquiry, req.user?.company_id || enquiry?.companyId || null);
     res.json(enquiry);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -818,6 +873,24 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
 
     // SANITIZE DATA: Prevent empty strings for ObjectIds or Numbers which cause Mongoose validation errors
     if (updateData.assignedTo === "") updateData.assignedTo = null;
+    if (String(req.user?.role || "").toLowerCase() === "staff") {
+      delete updateData.assignedTo;
+    } else if (updateData.assignedTo) {
+      const companyId = req.user?.company_id || null;
+      if (companyId) {
+        const validAssignee = await User.findOne({
+          _id: updateData.assignedTo,
+          company_id: companyId,
+          status: "Active",
+          role: { $in: ["admin", "Admin", "staff", "Staff"] },
+        })
+          .select("_id")
+          .lean();
+        if (!validAssignee?._id) {
+          return res.status(400).json({ message: "Invalid assignee selected" });
+        }
+      }
+    }
     if (updateData.cost === "")
       delete updateData.cost; // Or set to 0? Model says required: true.
     else if (updateData.cost !== undefined)
@@ -880,6 +953,7 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
     cache.invalidate("enquiries");
     cache.invalidate("followups");
     cache.invalidate("dashboard");
+    await emitEnquiryUpdated(req, enquiry, req.user?.company_id || enquiry?.companyId || null);
     res.json(enquiry);
   } catch (err) {
     console.error(`❌ [PUT /enquiries/${req.params.id}] Error:`, err.message);

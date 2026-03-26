@@ -462,6 +462,8 @@ export default function CommunicationScreen({ navigation }) {
   useEffect(() => {
     const onBack = () => {
       if (view === "chat") {
+        unloadCurrentSound().catch(() => {});
+        setAudioDraft(null);
         setView("list");
         setMessages([]);
         return true;
@@ -470,7 +472,7 @@ export default function CommunicationScreen({ navigation }) {
     };
     const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
     return () => sub.remove();
-  }, [view]);
+  }, [unloadCurrentSound, view]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const adminRoleLabelMap = useMemo(() => {
@@ -801,6 +803,8 @@ export default function CommunicationScreen({ navigation }) {
 
   const openChat = useCallback(
     async (memberId) => {
+      await unloadCurrentSound();
+      setAudioDraft(null);
       setSelectedMemberId(String(memberId));
       setView("chat");
       await loadMessages(String(memberId));
@@ -812,7 +816,7 @@ export default function CommunicationScreen({ navigation }) {
         ),
       );
     },
-    [loadMessages],
+    [loadMessages, unloadCurrentSound],
   );
 
   const pickMessageImage = useCallback(async () => {

@@ -15,6 +15,52 @@ const toLocalIsoDate = (d = new Date()) => {
   return `${y}-${m}-${day}`;
 };
 
+const parseTimeToMinutes = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?$/);
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridian = String(match[3] || "").toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) {
+    return null;
+  }
+
+  if (meridian) {
+    if (hours < 1 || hours > 12) return null;
+    if (meridian === "AM") {
+      if (hours === 12) hours = 0;
+    } else if (meridian === "PM") {
+      if (hours !== 12) hours += 12;
+    }
+  } else if (hours > 23) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+};
+
+const isMissedForReference = (item, referenceDate) => {
+  const itemDate = String(item?.date || item?.nextFollowUpDate || item?.followUpDate || "").trim();
+  if (!itemDate) return false;
+  if (itemDate < referenceDate) return true;
+  if (itemDate > referenceDate) return false;
+
+  const todayIso = toLocalIsoDate(new Date());
+  if (referenceDate !== todayIso) return false;
+
+  const dueMinutes = parseTimeToMinutes(item?.time);
+  if (dueMinutes == null) return false;
+
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return dueMinutes < nowMinutes;
+};
+
 const getFollowUpAccessScope = async (req) => {
   const normalizedRole = String(req.user?.role || "").trim().toLowerCase();
 
@@ -61,6 +107,41 @@ const buildFollowUpScopedFilter = (scope) => {
     userId,
     ...(scope?.scopingFilter || {}),
   };
+};
+
+const SALES_REGEX = /^(sales|converted)$/i;
+const DROP_REGEX = /^(drop|dropped|closed|not interested)$/i;
+const COMPLETED_REGEX = /^completed$/i;
+
+const emitFollowUpChanged = async (req, payload = {}) => {
+  try {
+    const io = req.app?.get("io");
+    if (!io) return;
+
+    const companyId = req.user?.company_id || null;
+    if (companyId) {
+      const companyUsers = await User.find({ company_id: companyId })
+        .select("_id")
+        .lean();
+
+      companyUsers.forEach((member) => {
+        const userId = String(member?._id || "");
+        if (!userId) return;
+        io.to(`user:${userId}`).emit("FOLLOWUP_CHANGED", {
+          ...payload,
+          companyId: String(companyId),
+        });
+      });
+      return;
+    }
+
+    const fallbackUserId = String(req.userId || "");
+    if (fallbackUserId) {
+      io.to(`user:${fallbackUserId}`).emit("FOLLOWUP_CHANGED", payload);
+    }
+  } catch (_socketError) {
+    // ignore real-time fanout issues
+  }
 };
 
 // GET Follow-ups with Tabs & Pagination
@@ -119,25 +200,61 @@ router.get("/", verifyToken, async (req, res) => {
       }
 
       const activeFilter = {
-        status: { $nin: ["Completed", "Drop", "Dropped", "dropped", "drop"] },
-        nextAction: { $nin: ["Drop", "Dropped", "dropped", "drop"] },
         activityType: { $ne: "System" },
         type: { $ne: "System" },
       };
 
       if (tab === "Today") {
         Object.assign(query, { date: referenceDate, ...activeFilter });
+        query.$and = [
+          ...(Array.isArray(query.$and) ? query.$and : []),
+          {
+            $nor: [
+              { status: SALES_REGEX },
+              { enquiryStatus: SALES_REGEX },
+              { nextAction: SALES_REGEX },
+              { status: DROP_REGEX },
+              { enquiryStatus: DROP_REGEX },
+              { nextAction: DROP_REGEX },
+              { status: COMPLETED_REGEX },
+            ],
+          },
+        ];
       } else if (tab === "Upcoming") {
         // Upcoming = dates strictly after the selected/reference date
         Object.assign(query, { date: { $gt: referenceDate }, ...activeFilter });
       } else if (tab === "Missed") {
-        Object.assign(query, { date: { $lt: referenceDate }, ...activeFilter });
+        Object.assign(query, { date: { $lte: referenceDate }, ...activeFilter });
+        query.$and = [
+          ...(Array.isArray(query.$and) ? query.$and : []),
+          {
+            $nor: [
+              { status: SALES_REGEX },
+              { enquiryStatus: SALES_REGEX },
+              { nextAction: SALES_REGEX },
+              { status: DROP_REGEX },
+              { enquiryStatus: DROP_REGEX },
+              { nextAction: DROP_REGEX },
+              { status: COMPLETED_REGEX },
+            ],
+          },
+        ];
+      } else if (tab === "Sales") {
+        Object.assign(query, {
+          ...(date ? { date: referenceDate } : {}),
+          $or: [
+            { status: SALES_REGEX },
+            { enquiryStatus: SALES_REGEX },
+            { nextAction: SALES_REGEX },
+          ],
+        });
       } else if (tab === "Dropped") {
         // Match common casings of drop in either status or nextAction
         Object.assign(query, {
           $or: [
-            { status: { $in: ["Drop", "Dropped", "dropped", "drop"] } },
-            { nextAction: { $in: ["Drop", "Dropped", "dropped", "drop"] } },
+            { status: DROP_REGEX },
+            { enquiryStatus: DROP_REGEX },
+            { nextAction: DROP_REGEX },
           ],
         });
       } else if (tab === "All") {
@@ -213,6 +330,14 @@ router.get("/", verifyToken, async (req, res) => {
           if (enqNo && statusByEnquiryNo.has(enqNo)) {
             // Backward compatibility for old follow-ups without enqId.
             followUps[i].enquiryStatus = statusByEnquiryNo.get(enqNo);
+          }
+        }
+      }
+
+      if (tab === "Missed") {
+        for (let i = followUps.length - 1; i >= 0; i -= 1) {
+          if (!isMissedForReference(followUps[i], referenceDate)) {
+            followUps.splice(i, 1);
           }
         }
       }
@@ -321,6 +446,13 @@ router.post("/", verifyToken, async (req, res) => {
     cache.invalidate("followups");
     cache.invalidate("dashboard");
     cache.invalidate("enquiries");
+    await emitFollowUpChanged(req, {
+      action: "create",
+      followUpId: String(saved?._id || ""),
+      enqId: String(saved?.enqId || ""),
+      enqNo: saved?.enqNo || "",
+      assignedTo: saved?.assignedTo || null,
+    });
     res.status(201).json(saved);
   } catch (err) {
     console.error("=== CREATE ERROR ===");
@@ -378,6 +510,13 @@ router.put("/:id", verifyToken, async (req, res) => {
     cache.invalidate("followups");
     cache.invalidate("dashboard");
     cache.invalidate("enquiries");
+    await emitFollowUpChanged(req, {
+      action: "update",
+      followUpId: String(followUp?._id || ""),
+      enqId: String(followUp?.enqId || ""),
+      enqNo: followUp?.enqNo || "",
+      assignedTo: followUp?.assignedTo || null,
+    });
     res.json(followUp);
   } catch (err) {
     console.error("Update error:", err);
@@ -409,6 +548,14 @@ router.delete("/:id", verifyToken, async (req, res) => {
 
     cache.invalidate("followups");
     cache.invalidate("dashboard");
+    cache.invalidate("enquiries");
+    await emitFollowUpChanged(req, {
+      action: "delete",
+      followUpId: String(followUp?._id || req.params.id || ""),
+      enqId: String(followUp?.enqId || ""),
+      enqNo: followUp?.enqNo || "",
+      assignedTo: followUp?.assignedTo || null,
+    });
     res.json({ message: "Follow-up deleted", data: followUp });
   } catch (err) {
     console.error("Delete error:", err);

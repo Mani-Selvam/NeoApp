@@ -23,8 +23,8 @@ export const getImageUrl = (imagePath) => {
         return imagePath;
     }
 
-    // If it's a server path like "/uploads/...", construct full URL
-    if (imagePath.startsWith("/uploads/")) {
+    // If it's a server-relative path like "/uploads/..." or "/api/...", construct full URL
+    if (imagePath.startsWith("/")) {
         const baseUrl = API_URL.replace("/api", "");
         return `${baseUrl}${imagePath}`;
     }

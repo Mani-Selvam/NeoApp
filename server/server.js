@@ -18,6 +18,7 @@ const defaultCorsOrigins = [
   "http://127.0.0.1:8081",
   "http://127.0.0.1:8082",
   "http://192.168.1.207:5000",
+  "http://192.168.1.207:5000",
   "http://192.168.1.34:8081",
   "http://192.168.1.33:8081",
   "http://192.168.1.33:8082",
@@ -197,7 +198,7 @@ app.use(
 );
 app.use(
   "/api/whatsapp",
-  withPlan("WhatsApp Integration", ["/webhook"]),
+  withPlan("WhatsApp Integration", ["/webhook", "/media"]),
   require("./routes/whatsappRoutes"),
 );
 app.use(

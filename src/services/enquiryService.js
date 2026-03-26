@@ -23,6 +23,7 @@ export const getAllEnquiries = async (
     status = "",
     date = "",
     followUpDate = "",
+    extraParams = {},
 ) => {
     try {
         const client = await getApiClient();
@@ -31,6 +32,9 @@ export const getAllEnquiries = async (
         if (status) params.status = status;
         if (date) params.date = date;
         if (followUpDate) params.followUpDate = followUpDate;
+        if (extraParams && typeof extraParams === "object") {
+            Object.assign(params, extraParams);
+        }
 
         const response = await client.get("/enquiries", { params });
         return response.data; // Now returns { data: [], pagination: {} } or [] if legacy

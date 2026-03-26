@@ -1,5 +1,7 @@
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { useFocusEffect } from "@react-navigation/native";
+import { Audio } from "expo-av";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
@@ -12,10 +14,11 @@ import {
     Dimensions,
     FlatList,
     Image,
-    Keyboard,
-    KeyboardAvoidingView,
-    Linking,
-    Platform,
+  Keyboard,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -108,7 +111,14 @@ const Avatar = ({ name, size = 42 }) => (
 );
 
 // â”€â”€â”€ MESSAGE BUBBLE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const MessageBubble = ({ item }) => {
+const MessageBubble = ({
+  item,
+  onPressImage,
+  onToggleAudio,
+  isAudioPlaying,
+  hasImageError,
+  onImageError,
+}) => {
   const isOwner = item.sender === "Admin";
 
   const getStatusIcon = () => {
@@ -154,12 +164,34 @@ const MessageBubble = ({ item }) => {
       >
         {/* IMAGE */}
         {item.type === "image" ? (
-          <TouchableOpacity activeOpacity={0.9}>
-            <Image
-              source={{ uri: getImageUrl(item.content) }}
-              style={S.msgImage}
-              resizeMode="cover"
-            />
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => onPressImage?.(getImageUrl(item.content))}
+          >
+            {hasImageError ? (
+              <View style={S.msgImageFallback}>
+                <Ionicons
+                  name="image-outline"
+                  size={28}
+                  color={isOwner ? "rgba(255,255,255,0.85)" : C.tan}
+                />
+                <Text
+                  style={[
+                    S.msgImageFallbackText,
+                    isOwner ? { color: "rgba(255,255,255,0.85)" } : null,
+                  ]}
+                >
+                  Image unavailable
+                </Text>
+              </View>
+            ) : (
+              <Image
+                source={{ uri: getImageUrl(item.content) }}
+                style={S.msgImage}
+                resizeMode="cover"
+                onError={() => onImageError?.(item)}
+              />
+            )}
             <View style={S.metaOverImage}>
               <Text style={[S.timestamp, { color: "rgba(255,255,255,0.85)" }]}>
                 {time}
@@ -170,6 +202,7 @@ const MessageBubble = ({ item }) => {
         item.type === "audio" || item.type === "ptt" ? (
           <View style={S.audioMsg}>
             <TouchableOpacity
+              onPress={() => onToggleAudio?.(item)}
               style={[
                 S.audioPlayBtn,
                 isOwner && {
@@ -178,7 +211,7 @@ const MessageBubble = ({ item }) => {
               ]}
             >
               <Ionicons
-                name="play"
+                name={isAudioPlaying ? "pause" : "play"}
                 size={16}
                 color={isOwner ? "#fff" : C.forest}
               />
@@ -420,6 +453,7 @@ export default function ChatScreen({
   navigation,
   embedded = false,
   readOnly = false,
+  manualKeyboardLift = false,
 }) {
   const insets = useSafeAreaInsets();
   const isEmbedded = embedded || !!route?.params?.embedded;
@@ -440,26 +474,45 @@ export default function ChatScreen({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [composerHeight, setComposerHeight] = useState(76);
   const [templates, setTemplates] = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [filteredTemplates, setFilteredTemplates] = useState([]);
+  const [previewImageUri, setPreviewImageUri] = useState("");
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
+  const [playingAudioId, setPlayingAudioId] = useState("");
+  const [failedImageIds, setFailedImageIds] = useState({});
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const socket = useRef(null);
   const flatListRef = useRef(null);
   const initialScrollDone = useRef(false);
-  const inputAnim = useRef(new Animated.Value(0)).current;
+  const recordingRef = useRef(null);
+  const soundRef = useRef(null);
+  const composerLiftAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     loadTemplates();
+  }, []);
+
+  useEffect(() => {
+    if (!manualKeyboardLift) {
+      setKeyboardHeight(0);
+      composerLiftAnim.setValue(0);
+      return undefined;
+    }
 
     const show = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
       (e) => {
-        setKeyboardHeight(e.endCoordinates.height);
-        Animated.timing(inputAnim, {
-          toValue: 1,
-          duration: 240,
+        const nextHeight = e?.endCoordinates?.height || 0;
+        const liftHeight = Math.round(nextHeight * 0.59);
+        setKeyboardHeight(nextHeight);
+        Animated.timing(composerLiftAnim, {
+          toValue: liftHeight,
+          duration: Platform.OS === "ios" ? 240 : 180,
           useNativeDriver: true,
         }).start();
       },
@@ -468,9 +521,9 @@ export default function ChatScreen({
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
       () => {
         setKeyboardHeight(0);
-        Animated.timing(inputAnim, {
+        Animated.timing(composerLiftAnim, {
           toValue: 0,
-          duration: 240,
+          duration: Platform.OS === "ios" ? 220 : 160,
           useNativeDriver: true,
         }).start();
       },
@@ -479,7 +532,38 @@ export default function ChatScreen({
       show.remove();
       hide.remove();
     };
+  }, [composerLiftAnim, manualKeyboardLift]);
+
+  useEffect(() => {
+    return () => {
+      if (recordingRef.current) {
+        recordingRef.current.stopAndUnloadAsync().catch(() => null);
+        recordingRef.current = null;
+      }
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => null);
+        soundRef.current = null;
+      }
+    };
   }, []);
+
+  const scrollToLatest = useCallback((animated = true) => {
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    }, animated ? 120 : 40);
+  }, []);
+
+  useEffect(() => {
+    if (!loading) {
+      scrollToLatest(false);
+    }
+  }, [composerHeight, messages.length, loading, scrollToLatest]);
+
+  useEffect(() => {
+    if (!loading && !loadingOlder) {
+      scrollToLatest(false);
+    }
+  }, [inputText, showTemplates, isRecordingAudio, loading, loadingOlder, scrollToLatest]);
 
   useEffect(() => {
     if (!enquiry?.mobile) return undefined;
@@ -512,6 +596,14 @@ export default function ChatScreen({
     socket.current?.disconnect();
     socket.current = io(base);
     const addMessage = (newMsg) => {
+      const currentDigits = String(enquiry.mobile || "").replace(/\D/g, "");
+      const currentShort =
+        currentDigits.length > 10 ? currentDigits.slice(-10) : currentDigits;
+      const incomingDigits = String(newMsg?.phoneNumber || "").replace(/\D/g, "");
+      const incomingShort =
+        incomingDigits.length > 10 ? incomingDigits.slice(-10) : incomingDigits;
+      if (!incomingShort || incomingShort !== currentShort) return;
+
       setMessages((prev) => {
         const exists = prev.some((m) => m._id === newMsg._id);
         if (exists)
@@ -530,10 +622,7 @@ export default function ChatScreen({
         }
         return [...prev, newMsg];
       });
-      setTimeout(
-        () => flatListRef.current?.scrollToEnd({ animated: true }),
-        200,
-      );
+      scrollToLatest(true);
     };
     const raw = (enquiry.mobile || "").replace(/\D/g, "");
     const s10 = raw.length > 10 ? raw.slice(-10) : raw;
@@ -563,7 +652,7 @@ export default function ChatScreen({
     } finally {
       setLoading(false);
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
+        scrollToLatest(false);
         initialScrollDone.current = true;
       }, 300);
     }
@@ -602,14 +691,20 @@ export default function ChatScreen({
     const optimisticMsg = {
       _id: tempId,
       sender: "Admin",
-      content: text || (mediaType === "image" ? "Image" : "Document"),
+      content:
+        text ||
+        (mediaType === "image"
+          ? "Image"
+          : mediaType === "audio"
+            ? "Voice message"
+            : "Document"),
       type: mediaType,
       timestamp: new Date().toISOString(),
       status: "sending",
     };
     setMessages((prev) => [...prev, optimisticMsg]);
     setSending(true);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    scrollToLatest(true);
     try {
       const response = await whatsappService.sendMessage({
         phoneNumber: sanitizePhoneNumber(enquiry.mobile),
@@ -621,14 +716,27 @@ export default function ChatScreen({
       setMessages((prev) =>
         prev.map((m) =>
           m._id === tempId
-            ? { ...m, status: "sent", _id: response._id || m._id }
+            ? {
+                ...m,
+                status: response?.status || "sent",
+                _id: response._id || m._id,
+                providerError: response?.providerError || null,
+              }
             : m,
         ),
       );
+      if (response?.deliveryWarning) {
+        Alert.alert("Delivery failed", response.deliveryWarning);
+      }
     } catch (e) {
       console.error("Send fail:", e);
       setMessages((prev) => prev.filter((m) => m._id !== tempId));
-      Alert.alert("Error", "Failed to send. Please check your connection.");
+      Alert.alert(
+        "Error",
+        e?.response?.data?.message ||
+          e?.response?.data?.error ||
+          "Failed to send. Please check your connection.",
+      );
     } finally {
       setSending(false);
     }
@@ -685,6 +793,167 @@ export default function ChatScreen({
     }
   };
 
+  const formatRecordingDuration = (durationMs) => {
+    const totalSeconds = Math.max(
+      0,
+      Math.floor((Number(durationMs) || 0) / 1000),
+    );
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  };
+
+  const resetRecordingState = async () => {
+    recordingRef.current = null;
+    setIsRecordingAudio(false);
+    setRecordingDurationMs(0);
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        staysActiveInBackground: false,
+        playThroughEarpieceAndroid: false,
+      });
+    } catch {
+      // ignore reset failures
+    }
+  };
+
+  const startAudioRecording = async () => {
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert("Permission needed", "Please allow microphone access.");
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        staysActiveInBackground: false,
+        playThroughEarpieceAndroid: false,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        (status) => {
+          if (status?.isRecording) {
+            setRecordingDurationMs(status.durationMillis || 0);
+          }
+        },
+      );
+
+      recordingRef.current = recording;
+      setRecordingDurationMs(0);
+      setIsRecordingAudio(true);
+    } catch (error) {
+      await resetRecordingState();
+      Alert.alert(
+        "Recording failed",
+        error?.message || "Unable to start voice recording.",
+      );
+    }
+  };
+
+  const stopAndSendAudioRecording = async () => {
+    const activeRecording = recordingRef.current;
+    if (!activeRecording) {
+      await resetRecordingState();
+      return;
+    }
+
+    try {
+      await activeRecording.stopAndUnloadAsync();
+      const uri = activeRecording.getURI();
+      if (!uri) {
+        throw new Error("Recording file not available");
+      }
+
+      await handleSend(
+        {
+          uri,
+          type: Platform.OS === "ios" ? "audio/m4a" : "audio/mp4",
+          name: `voice-note-${Date.now()}.m4a`,
+        },
+        "audio",
+      );
+    } catch (error) {
+      Alert.alert(
+        "Recording failed",
+        error?.message || "Unable to send voice recording.",
+      );
+    } finally {
+      await resetRecordingState();
+    }
+  };
+
+  const cancelAudioRecording = async () => {
+    const activeRecording = recordingRef.current;
+    try {
+      if (activeRecording) {
+        await activeRecording.stopAndUnloadAsync();
+      }
+    } catch {
+      // ignore cancel cleanup errors
+    } finally {
+      await resetRecordingState();
+    }
+  };
+
+  const toggleAudioPlayback = async (item) => {
+    const audioUri = getImageUrl(item?.content);
+    const messageId = String(item?._id || "");
+    if (!audioUri || !messageId) return;
+
+    try {
+      if (playingAudioId === messageId && soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+        setPlayingAudioId("");
+        return;
+      }
+
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync().catch(() => null);
+        soundRef.current = null;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        staysActiveInBackground: false,
+        playThroughEarpieceAndroid: false,
+      });
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: audioUri },
+        { shouldPlay: true },
+        (status) => {
+          if (status?.didJustFinish) {
+            soundRef.current?.unloadAsync().catch(() => null);
+            soundRef.current = null;
+            setPlayingAudioId("");
+          }
+        },
+      );
+
+      soundRef.current = sound;
+      setPlayingAudioId(messageId);
+    } catch (error) {
+      setPlayingAudioId("");
+      Alert.alert("Audio", error?.message || "Unable to play this voice message.");
+    }
+  };
+
+  const handleImageError = (item) => {
+    const key = String(item?._id || item?.content || "");
+    if (!key) return;
+    setFailedImageIds((prev) => ({ ...prev, [key]: true }));
+  };
+
   const handleCall = async () => {
     try {
       const raw = (enquiry.mobile || "").replace(/\D/g, "");
@@ -704,10 +973,22 @@ export default function ChatScreen({
     }
   };
 
+  const handlePrimaryAction = async () => {
+    if (hasText) {
+      await handleSend();
+      return;
+    }
+    if (isRecordingAudio) {
+      await stopAndSendAudioRecording();
+      return;
+    }
+    await startAudioRecording();
+  };
+
   const hasText = inputText.trim().length > 0;
   const composerBottomInset = Math.max(isEmbedded ? 10 : insets.bottom, 10);
-  const keyboardGap = Platform.OS === "android" && keyboardHeight > 0 ? 10 : 0;
-  // â”€â”€ RENDER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const resolvedKeyboardVerticalOffset =
+    Platform.OS === "ios" ? (isEmbedded ? 8 : 10) : 0;
   return (
     <View style={[S.root, { paddingTop: isEmbedded ? 0 : insets.top }]}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
@@ -761,11 +1042,10 @@ export default function ChatScreen({
         </View>
       </View>}
 
-      {/* â”€â”€ CHAT AREA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? (isEmbedded ? 8 : 0) : 0}
+        style={{ flex: 1, minHeight: 0 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={resolvedKeyboardVerticalOffset}
       >
         {/* Wallpaper pattern background */}
         <View style={S.chatBg}>
@@ -780,21 +1060,41 @@ export default function ChatScreen({
         ) : (
           <FlatList
             ref={flatListRef}
+            style={{ flex: 1, minHeight: 0 }}
             data={messages}
-            renderItem={({ item }) => <MessageBubble item={item} />}
+            renderItem={({ item }) => (
+              <MessageBubble
+                item={item}
+                onPressImage={(uri) => setPreviewImageUri(uri || "")}
+                onToggleAudio={toggleAudioPlayback}
+                isAudioPlaying={playingAudioId === String(item?._id || "")}
+                hasImageError={Boolean(
+                  failedImageIds[String(item?._id || item?.content || "")]
+                )}
+                onImageError={handleImageError}
+              />
+            )}
             keyExtractor={(item) => item._id}
             contentContainerStyle={[
               S.listContent,
               {
+                flexGrow: 1,
+                justifyContent: "flex-end",
                 paddingBottom:
-                  isEmbedded && Platform.OS === "android"
-                    ? (isReadOnly ? 24 : 90)
-                    : keyboardHeight > 0
-                    ? keyboardHeight + (isReadOnly ? 24 : 90)
-                    : (isReadOnly ? 24 : 90),
+                  isReadOnly
+                    ? 24
+                    : Math.max(
+                        composerHeight +
+                          16 +
+                          (manualKeyboardLift ? Math.round(keyboardHeight * 0.16) : 0),
+                        92,
+                      ),
               },
             ]}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             onEndReachedThreshold={0.1}
             maxToRenderPerBatch={15}
             windowSize={10}
@@ -828,26 +1128,56 @@ export default function ChatScreen({
                 loadOlderMessages();
             }}
             scrollEventThrottle={400}
+            onContentSizeChange={() => {
+              if (!loadingOlder) scrollToLatest(false);
+            }}
+            onLayout={() => {
+              if (!loadingOlder) scrollToLatest(false);
+            }}
           />
         )}
 
         {/* â”€â”€ INPUT AREA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {isComposerFocused && !isReadOnly ? (
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => {
+              setIsComposerFocused(false);
+              Keyboard.dismiss();
+            }}
+            style={S.composerFocusOverlay}
+          >
+            <BlurView
+              intensity={18}
+              tint="dark"
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={S.composerFocusTint} />
+          </TouchableOpacity>
+        ) : null}
+
         {!isReadOnly && (
         <Animated.View
           style={[
             S.inputArea,
+            isComposerFocused && S.inputAreaFocused,
             {
-              paddingBottom: composerBottomInset + keyboardGap,
-              transform: [
-                {
-                  translateY:
-                    Platform.OS === "android"
-                      ? Animated.multiply(inputAnim, -keyboardHeight)
-                      : 0,
-                },
-              ],
+              paddingBottom: composerBottomInset,
+              transform: manualKeyboardLift
+                ? [
+                    {
+                      translateY: Animated.multiply(composerLiftAnim, -1),
+                    },
+                  ]
+                : undefined,
             },
           ]}
+          onLayout={(event) => {
+            const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+            if (nextHeight && Math.abs(nextHeight - composerHeight) > 2) {
+              setComposerHeight(nextHeight);
+            }
+          }}
         >
           {/* Template picker */}
           <AnimatePresence>
@@ -906,6 +1236,22 @@ export default function ChatScreen({
             )}
           </AnimatePresence>
 
+          {isRecordingAudio && (
+            <View style={S.recordingBanner}>
+              <View style={S.recordingDot} />
+              <Text style={S.recordingText}>
+                Recording voice note {formatRecordingDuration(recordingDurationMs)}
+              </Text>
+              <TouchableOpacity
+                style={S.recordingDeleteBtn}
+                onPress={cancelAudioRecording}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="trash-outline" size={16} color="#B91C1C" />
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Input row */}
           <View style={S.inputRow}>
             {/* Attach button */}
@@ -922,6 +1268,11 @@ export default function ChatScreen({
               <FloatingChatInput
                 value={inputText}
                 onChangeText={handleTextChange}
+                onFocus={() => {
+                  setIsComposerFocused(true);
+                  scrollToLatest(false);
+                }}
+                onBlur={() => setIsComposerFocused(false)}
                 maxLength={2000}
                 scrollEnabled
                 rightSlot={
@@ -957,8 +1308,12 @@ export default function ChatScreen({
 
             {/* Send / Mic button */}
             <TouchableOpacity
-              style={[S.sendBtn, hasText && S.sendBtnActive]}
-              onPress={() => handleSend()}
+              style={[
+                S.sendBtn,
+                (hasText || isRecordingAudio) && S.sendBtnActive,
+                isRecordingAudio && S.sendBtnRecording,
+              ]}
+              onPress={handlePrimaryAction}
               disabled={sending}
               activeOpacity={0.85}
             >
@@ -966,7 +1321,9 @@ export default function ChatScreen({
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <Ionicons
-                  name={hasText ? "send" : "mic-outline"}
+                  name={
+                    hasText ? "send" : isRecordingAudio ? "stop" : "mic-outline"
+                  }
                   size={hasText ? 18 : 20}
                   color="#fff"
                   style={hasText && { marginLeft: 2 }}
@@ -977,13 +1334,42 @@ export default function ChatScreen({
         </Animated.View>
         )}
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={Boolean(previewImageUri)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImageUri("")}
+      >
+        <View style={S.previewOverlay}>
+          <TouchableOpacity
+            style={S.previewBackdrop}
+            activeOpacity={1}
+            onPress={() => setPreviewImageUri("")}
+          />
+          <TouchableOpacity
+            style={S.previewClose}
+            onPress={() => setPreviewImageUri("")}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+          {previewImageUri ? (
+            <Image
+              source={{ uri: previewImageUri }}
+              style={S.previewImage}
+              resizeMode="contain"
+            />
+          ) : null}
+        </View>
+      </Modal>
     </View>
   );
 }
 
 // â”€â”€â”€ STYLES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const S = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
+  root: { flex: 1, minHeight: 0, backgroundColor: C.bg },
 
   // â”€â”€ Header â”€â”€
   header: {
@@ -1140,6 +1526,20 @@ const S = StyleSheet.create({
 
   // â”€â”€ Image â”€â”€
   msgImage: { width: 220, height: 200, borderRadius: 14 },
+  msgImageFallback: {
+    width: 220,
+    height: 200,
+    borderRadius: 14,
+    backgroundColor: "#F3EEE7",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  msgImageFallbackText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: C.brown,
+  },
   metaOverImage: {
     position: "absolute",
     bottom: 8,
@@ -1245,6 +1645,28 @@ const S = StyleSheet.create({
     borderTopColor: C.linen,
     paddingTop: 10,
     paddingHorizontal: 12,
+  },
+  inputAreaFocused: {
+    zIndex: 4,
+    marginHorizontal: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.65)",
+    borderRadius: 24,
+    backgroundColor: "rgba(242,237,230,0.98)",
+    shadowColor: "#000",
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+  composerFocusOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 3,
+  },
+  composerFocusTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(28,15,6,0.16)",
   },
 
   // â”€â”€ Template picker â”€â”€
@@ -1376,6 +1798,67 @@ const S = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
+  },
+  sendBtnRecording: {
+    backgroundColor: "#C2410C",
+    shadowColor: "#7C2D12",
+  },
+  recordingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#FFF7ED",
+    borderWidth: 1,
+    borderColor: "#FED7AA",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#DC2626",
+  },
+  recordingText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#9A3412",
+    flex: 1,
+  },
+  recordingDeleteBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FEE2E2",
+  },
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.92)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  previewBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  previewClose: {
+    position: "absolute",
+    top: 52,
+    right: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 2,
+  },
+  previewImage: {
+    width: "92%",
+    height: "78%",
   },
 });
 

@@ -65,6 +65,8 @@ export const sendEmail = async ({
     message,
     enquiryId,
     templateId,
+    date,
+    product,
     trackOpen = false,
     trackLinks = false,
     file,
@@ -73,7 +75,7 @@ export const sendEmail = async ({
         const header = await getAuthHeader(false);
         const res = await axios.post(
             `${API_URL}/email/send`,
-            { to, subject, message, enquiryId, templateId, trackOpen, trackLinks },
+            { to, subject, message, enquiryId, templateId, date, product, trackOpen, trackLinks },
             header,
         );
         return res.data;
@@ -85,6 +87,8 @@ export const sendEmail = async ({
     formData.append("message", message || "");
     if (enquiryId) formData.append("enquiryId", enquiryId);
     if (templateId) formData.append("templateId", templateId);
+    if (date) formData.append("date", date);
+    if (product) formData.append("product", product);
     formData.append("trackOpen", String(Boolean(trackOpen)));
     formData.append("trackLinks", String(Boolean(trackLinks)));
     formData.append("file", {

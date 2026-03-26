@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Company = require("../models/Company");
 const Plan = require("../models/Plan");
 const CompanySubscription = require("../models/CompanySubscription");
+const WhatsAppConfig = require("../models/WhatsAppConfig");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const {
@@ -33,6 +34,18 @@ const EXPOSE_TEST_OTP =
 
 // Temporary In-Memory OTP Store (For production use Redis or DB with TTL)
 const otpStore = {};
+
+const ensureBlankWhatsappConfig = async ({ companyId, ownerUserId }) => {
+  if (!companyId || !ownerUserId) return;
+  const existing = await WhatsAppConfig.findOne({ companyId }).select("_id").lean();
+  if (existing?._id) return;
+
+  await WhatsAppConfig.create({
+    companyId,
+    ownerUserId,
+    provider: "NEO",
+  });
+};
 
 // Validation helper
 const validateEmail = (email) => {
@@ -192,9 +205,9 @@ router.post("/login-phone", async (req, res) => {
 
 	      if (company?._id) await ensureDefaultTrialSubscription(company._id);
 	
-	      user = new User({
-	        mobile: phone_number,
-	        name: "Mobile User", // Placeholder
+      user = new User({
+        mobile: phone_number,
+        name: "Mobile User", // Placeholder
         email: `mobile_${phone_number}@example.com`, // Placeholder unique email
         password: uid, // Hook will hash this
         status: "Active",
@@ -202,6 +215,10 @@ router.post("/login-phone", async (req, res) => {
         role: "Admin",
       });
       await user.save();
+      await ensureBlankWhatsappConfig({
+        companyId: company._id,
+        ownerUserId: user._id,
+      });
       // Created new user for phone login
     }
 
@@ -222,6 +239,7 @@ router.post("/login-phone", async (req, res) => {
         name: user.name,
         email: user.email,
         mobile: user.mobile,
+        logo: user.logo || "",
         role: user.role,
         status: user.status,
       },
@@ -758,6 +776,10 @@ router.post("/signup", async (req, res) => {
 	      company_id: company ? company._id : undefined,
 	    });
 	    await user.save();
+      await ensureBlankWhatsappConfig({
+        companyId: company?._id || null,
+        ownerUserId: user._id,
+      });
 
 	    if (company?._id) await ensureDefaultTrialSubscription(company._id);
 
@@ -793,6 +815,7 @@ router.post("/signup", async (req, res) => {
         name: user.name,
         email: user.email,
         mobile: user.mobile,
+        logo: user.logo || "",
         role: user.role,
         company_id: user.company_id,
         companyCode: company?.code || "",
@@ -1158,6 +1181,7 @@ router.post("/login", async (req, res) => {
         name: user.name,
         email: user.email,
         mobile: user.mobile,
+        logo: user.logo || "",
         role: user.role,
         status: user.status,
         company_id: user.company_id,

@@ -872,7 +872,8 @@ export default function HomeScreen({ navigation }) {
   const swipeHandlers = useSwipeNavigation("Home", navigation);
 
   // Responsive values
-  const { bp, w, h, isTablet, isDesktop, isPhone, isSmallPhone } = useResponsive();
+  const { bp, w, h, isTablet, isDesktop, isPhone, isSmallPhone } =
+    useResponsive();
   const hp = w - (isDesktop ? 48 : isTablet ? 36 : 36); // content width
   const hPad = isDesktop ? 24 : isTablet ? 18 : 18; // horizontal padding
 
@@ -1029,7 +1030,7 @@ export default function HomeScreen({ navigation }) {
       hint: "In progress",
     },
     {
-      label: "Won",
+      label: "Sales",
       shortLabel: "Won",
       value: stats.conv,
       color: C.emerald,
@@ -1269,8 +1270,17 @@ export default function HomeScreen({ navigation }) {
                     })
                   }
                 >
-                  <View style={[S.countIconWrap, { backgroundColor: C.violet + "20" }]}>
-                    <Ionicons name="calendar-clear-outline" size={15} color={C.violet} />
+                  <View
+                    style={[
+                      S.countIconWrap,
+                      { backgroundColor: C.violet + "20" },
+                    ]}
+                  >
+                    <Ionicons
+                      name="calendar-clear-outline"
+                      size={15}
+                      color={C.violet}
+                    />
                   </View>
                   <Text style={[S.countValue, { color: C.violet }]}>
                     {todayActivityCount}
@@ -1290,8 +1300,17 @@ export default function HomeScreen({ navigation }) {
                     })
                   }
                 >
-                  <View style={[S.countIconWrap, { backgroundColor: C.rose + "20" }]}>
-                    <Ionicons name="alert-circle-outline" size={15} color={C.rose} />
+                  <View
+                    style={[
+                      S.countIconWrap,
+                      { backgroundColor: C.rose + "20" },
+                    ]}
+                  >
+                    <Ionicons
+                      name="alert-circle-outline"
+                      size={15}
+                      color={C.rose}
+                    />
                   </View>
                   <Text style={[S.countValue, { color: C.rose }]}>
                     {missedActivityCount}
@@ -1302,7 +1321,11 @@ export default function HomeScreen({ navigation }) {
               </View>
             </View>
           </MotiView>
-
+          <SH
+            title="Revenue & Conversion"
+            sub="Live overall revenue and conversion rate"
+            titleSize={sectionTitleSize}
+          />
           <MotiView
             from={
               skipAnim
@@ -1612,7 +1635,7 @@ export default function HomeScreen({ navigation }) {
           {/* KEY METRICS - responsive grid */}
           <View style={S.section}>
             <SH
-              title="Sales Overview"
+              title="FollowUp Overview"
               sub="Lead, follow-up and conversion summary"
               titleSize={sectionTitleSize}
               right={<PulseDot color={C.emerald} size={7} />}
@@ -1704,7 +1727,7 @@ export default function HomeScreen({ navigation }) {
             style={S.section}
           >
             <SH
-              title="Pipeline Overview"
+              title="FollowUp Pipeline"
               sub="Current lead stage distribution"
               titleSize={sectionTitleSize}
             />
@@ -1951,7 +1974,6 @@ export default function HomeScreen({ navigation }) {
         </View>
         <View style={{ height: 40 }} />
       </ScrollView>
-
     </View>
   );
 }
@@ -2482,4 +2504,3 @@ const S = StyleSheet.create({
     marginBottom: 18,
   },
 });
-

@@ -94,7 +94,8 @@
     "react-native-worklets-core": "^1.6.3",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
-    "twilio": "^5.12.2"
+    "twilio": "^5.12.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@react-native-community/cli": "^20.1.1",

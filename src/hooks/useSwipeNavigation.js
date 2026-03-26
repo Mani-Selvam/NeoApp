@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { PanResponder } from "react-native";
 
 // Tab order must match AppNavigator bottom tab order
-const TAB_ORDER = ["Home", "Enquiry", "FollowUp", "Communication", "CallLog"];
+const TAB_ORDER = ["Home", "Enquiry", "FollowUp", "Communication", "Report"];
 
 /**
  * useSwipeNavigation

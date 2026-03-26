@@ -7,6 +7,24 @@ export const getProfile = async () => {
 };
 
 export const updateProfile = async (data) => {
+    const hasLogoUpload = Boolean(data?.logo && typeof data.logo === "object" && data.logo.uri);
+    if (hasLogoUpload) {
+        const formData = new FormData();
+        formData.append("name", String(data?.name || ""));
+        formData.append("logo", {
+            uri: data.logo.uri,
+            type: data.logo.type || "image/jpeg",
+            name: data.logo.name || "profile-logo.jpg",
+        });
+        const client = await getApiClient();
+        const response = await client.put("/users/profile", formData, {
+            headers: {
+                "Content-Type": "multipart/form-data",
+            },
+        });
+        return response.data;
+    }
+
     const client = await getApiClient();
     const response = await client.put("/users/profile", data);
     return response.data;

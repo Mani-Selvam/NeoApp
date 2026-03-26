@@ -126,7 +126,11 @@ const getAssignedUserLabel = (assignedTo) => {
 const EnquiryCard = React.memo(function EnquiryCard({
   item, index,
   onPress, onSwipe,
-  onCall, onWhatsApp,
+  onCall, onWhatsApp, onLongPress,
+  deleteMode = false,
+  deleting = false,
+  onDeleteConfirm,
+  onDeleteCancel,
 }) {
   const scale  = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -185,7 +189,15 @@ const EnquiryCard = React.memo(function EnquiryCard({
           activeOpacity={1}
           onPressIn={() => Animated.spring(scale,{toValue:0.98,useNativeDriver:true}).start()}
           onPressOut={() => Animated.spring(scale,{toValue:1,useNativeDriver:true}).start()}
-          onPress={() => onPress(item)}
+          onPress={() => {
+            if (deleteMode) {
+              onDeleteCancel?.();
+              return;
+            }
+            onPress(item);
+          }}
+          onLongPress={() => onLongPress?.(item)}
+          delayLongPress={350}
         >
           <Animated.View style={[S.card, {transform:[{scale}]}]}>
             {/* Left priority stripe */}
@@ -234,22 +246,48 @@ const EnquiryCard = React.memo(function EnquiryCard({
 
               {/* Action bar */}
               <View style={S.cardActions}>
-                <TouchableOpacity style={[S.actionChip,{backgroundColor:C.success+"18"}]} onPress={()=>onCall(item)}>
-                  <Ionicons name="call" size={15} color={C.success} />
-                </TouchableOpacity>
-                <TouchableOpacity style={[S.actionChip,{backgroundColor:C.whatsapp+"18"}]} onPress={()=>onWhatsApp(item)}>
-                  <Ionicons name="logo-whatsapp" size={15} color={C.whatsapp} />
-                </TouchableOpacity>
-                <View style={{flex:1}} />
-                {item.enqNo && (
-                  <View style={S.enqNoBadge}>
-                    <Text style={S.enqNoText}>#{item.enqNo}</Text>
+                {deleteMode ? (
+                  <View style={S.deleteBar}>
+                    <View style={S.deletePill}>
+                      <Ionicons name="trash-outline" size={14} color={C.danger} />
+                      <Text style={S.deletePillText}>Delete this enquiry?</Text>
+                    </View>
+                    <View style={{flex:1}} />
+                    <TouchableOpacity style={S.deleteGhostBtn} onPress={() => onDeleteCancel?.()} disabled={deleting}>
+                      <Text style={S.deleteGhostText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[S.deleteDangerBtn, deleting && S.deleteDangerBtnDisabled]}
+                      onPress={() => onDeleteConfirm?.(item)}
+                      disabled={deleting}
+                    >
+                      {deleting ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text style={S.deleteDangerText}>Delete</Text>
+                      )}
+                    </TouchableOpacity>
                   </View>
+                ) : (
+                  <>
+                    <TouchableOpacity style={[S.actionChip,{backgroundColor:C.success+"18"}]} onPress={()=>onCall(item)}>
+                      <Ionicons name="call" size={15} color={C.success} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[S.actionChip,{backgroundColor:C.whatsapp+"18"}]} onPress={()=>onWhatsApp(item)}>
+                      <Ionicons name="logo-whatsapp" size={15} color={C.whatsapp} />
+                    </TouchableOpacity>
+                    <View style={{flex:1}} />
+                    {item.enqNo && (
+                      <View style={S.enqNoBadge}>
+                        <Text style={S.enqNoText}>#{item.enqNo}</Text>
+                      </View>
+                    )}
+                    <View style={S.swipeHint}>
+                      <Ionicons name="chevron-forward" size={13} color={C.textLight} />
+                      <Text style={S.swipeHintText}>Details</Text>
+                    </View>
+                  </>
                 )}
-                <View style={S.swipeHint}>
-                  <Ionicons name="chevron-forward" size={13} color={C.textLight} />
-                  <Text style={S.swipeHintText}>Details</Text>
-                </View>
               </View>
             </View>
           </Animated.View>
@@ -494,6 +532,8 @@ export default function EnquiryListScreen({ navigation, route }) {
   const [selectedDate, setSelectedDate] = useState(null);
   const [calendarMonth,setCalendarMonth]= useState(new Date());
   const [datePickerVisible,setDatePickerVisible] = useState(false);
+  const [deleteEnquiryId, setDeleteEnquiryId] = useState(null);
+  const [deletingEnquiryId, setDeletingEnquiryId] = useState(null);
 
   // Detail page
   const [detailEnquiry,  setDetailEnquiry]  = useState(null);
@@ -575,6 +615,21 @@ export default function EnquiryListScreen({ navigation, route }) {
   }, []);
 
   useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("ENQUIRY_CREATED", ()=>fetchEnquiries(true));
+    return ()=>sub.remove();
+  }, [fetchEnquiries]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", ()=>fetchEnquiries(true));
+    return ()=>sub.remove();
+  }, [fetchEnquiries]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", ()=>fetchEnquiries(true));
+    return ()=>sub.remove();
+  }, [fetchEnquiries]);
+
+  useEffect(() => {
     const isNew = global.nativeFabricUIManager != null;
     if (Platform.OS==="android" && !isNew && UIManager.setLayoutAnimationEnabledExperimental)
       UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -648,14 +703,17 @@ export default function EnquiryListScreen({ navigation, route }) {
     navigation.navigate("AddEnquiry",{enquiry, onEnquirySaved:()=>fetchRef.current?.(true)});
   }, [navigation]);
 
-  const handleDelete = useCallback((id) => {
-    Alert.alert("Delete","Are you sure you want to delete this enquiry?",[
-      {text:"Cancel",style:"cancel"},
-      {text:"Delete",style:"destructive", onPress:async()=>{
-        try { await enquiryService.deleteEnquiry(id); setEnquiries(p=>p.filter(e=>e._id!==id)); }
-        catch(e) { Alert.alert("Failed",getUserFacingError(e, "Failed to delete.")); }
-      }},
-    ]);
+  const handleDelete = useCallback(async (id) => {
+    try {
+      setDeletingEnquiryId(id);
+      await enquiryService.deleteEnquiry(id);
+      setEnquiries((p) => p.filter((e) => e._id !== id));
+      setDeleteEnquiryId((current) => (current === id ? null : current));
+    } catch (e) {
+      Alert.alert("Failed", getUserFacingError(e, "Failed to delete."));
+    } finally {
+      setDeletingEnquiryId((current) => (current === id ? null : current));
+    }
   }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -666,8 +724,13 @@ export default function EnquiryListScreen({ navigation, route }) {
       onSwipe={openDetail}
       onCall={handleCall}
       onWhatsApp={handleWhatsApp}
+      onLongPress={(enquiry) => setDeleteEnquiryId((current) => current === enquiry._id ? null : enquiry._id)}
+      deleteMode={deleteEnquiryId === item._id}
+      deleting={deletingEnquiryId === item._id}
+      onDeleteCancel={() => setDeleteEnquiryId(null)}
+      onDeleteConfirm={(enquiry) => handleDelete(enquiry._id)}
     />
-  ), [openDetail, handleCall, handleWhatsApp]);
+  ), [openDetail, handleCall, handleWhatsApp, handleDelete, deleteEnquiryId, deletingEnquiryId]);
 
   const keyExtractor = useCallback((item)=>item._id?.toString()||item.id?.toString(),[]);
 
@@ -713,17 +776,21 @@ export default function EnquiryListScreen({ navigation, route }) {
             <Text style={S.headerLabel}>Enquiry List</Text>
             <Text style={S.headerName}>{user?.name||"User"}</Text>
           </View>
-          <View style={S.headerRight}>
-            <TouchableOpacity style={S.profileBtn} onPress={()=>navigation.navigate("ProfileScreen")}>
-              {user?.logo ? (
-                <Image source={{uri:getImageUrl(user.logo)}} style={S.profileImg} />
-              ) : (
-                <View style={S.profileFallback}>
-                  <Text style={S.profileFallbackText}>{user?.name?.[0]?.toUpperCase()||"U"}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={S.profileBtn}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate("ProfileScreen")}
+          >
+            {user?.logo ? (
+              <Image source={{ uri: getImageUrl(user.logo) }} style={S.profileImg} />
+            ) : (
+              <View style={S.profileFallback}>
+                <Text style={S.profileFallbackText}>
+                  {user?.name?.[0]?.toUpperCase() || "U"}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* Search */}
@@ -774,21 +841,19 @@ export default function EnquiryListScreen({ navigation, route }) {
       />
 
       {/* ── FAB ── */}
-      {user?.role !== "Staff" && (
-        <Animated.View style={[S.fab, {transform:[{scale:fabScale}]}]}>
-          <TouchableOpacity onPress={()=>{
-            Animated.sequence([
-              Animated.timing(fabScale,{toValue:0.85,duration:100,useNativeDriver:true}),
-              Animated.spring(fabScale,{toValue:1,useNativeDriver:true}),
-            ]).start();
-            navigation.navigate("AddEnquiry",{onEnquirySaved:()=>fetchEnquiries(true)});
-          }} activeOpacity={0.85}>
-            <LinearGradient colors={GRAD.primary} style={S.fabInner}>
-              <Ionicons name="add" size={24} color="#fff" />
-            </LinearGradient>
-          </TouchableOpacity>
-        </Animated.View>
-      )}
+      <Animated.View style={[S.fab, {transform:[{scale:fabScale}]}]}>
+        <TouchableOpacity onPress={()=>{
+          Animated.sequence([
+            Animated.timing(fabScale,{toValue:0.85,duration:100,useNativeDriver:true}),
+            Animated.spring(fabScale,{toValue:1,useNativeDriver:true}),
+          ]).start();
+          navigation.navigate("AddEnquiry",{onEnquirySaved:()=>fetchEnquiries(true)});
+        }} activeOpacity={0.85}>
+          <LinearGradient colors={GRAD.primary} style={S.fabInner}>
+            <Ionicons name="add" size={24} color="#fff" />
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
 
       {/* ── Date picker ── */}
       <Modal visible={datePickerVisible} transparent animationType="slide" onRequestClose={()=>setDatePickerVisible(false)}>
@@ -800,9 +865,14 @@ export default function EnquiryListScreen({ navigation, route }) {
                 <Ionicons name="chevron-back" size={20} color={C.textSub} />
               </TouchableOpacity>
               <Text style={S.datePickerTitle}>{calendarMonth.toLocaleString(undefined,{month:"long",year:"numeric"})}</Text>
-              <TouchableOpacity onPress={()=>{const y=calendarMonth.getFullYear(),m=calendarMonth.getMonth();setCalendarMonth(new Date(y,m+1,1));}} style={S.calNavBtn}>
-                <Ionicons name="chevron-forward" size={20} color={C.textSub} />
-              </TouchableOpacity>
+              <View style={S.datePickerHeaderActions}>
+                <TouchableOpacity onPress={()=>{const y=calendarMonth.getFullYear(),m=calendarMonth.getMonth();setCalendarMonth(new Date(y,m+1,1));}} style={S.calNavBtn}>
+                  <Ionicons name="chevron-forward" size={20} color={C.textSub} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={()=>setDatePickerVisible(false)} style={S.calCloseBtn}>
+                  <Ionicons name="close" size={18} color={C.textSub} />
+                </TouchableOpacity>
+              </View>
             </View>
             <TouchableOpacity style={S.clearDateBtn} onPress={()=>{setSelectedDate(null);setDatePickerVisible(false);}}>
               <Text style={S.clearDateText}>Show All Dates</Text>
@@ -916,7 +986,14 @@ const S = StyleSheet.create({
   enqNoText:   { fontSize:10, fontWeight:"800", color:C.primary },
   swipeHint:   { flexDirection:"row", alignItems:"center", gap:2, opacity:0.55 },
   swipeHintText:{ fontSize:10, color:C.textLight, fontWeight:"600" },
-
+  deleteBar: { flexDirection:"row", alignItems:"center", gap:8, width:"100%", backgroundColor:"#FEF2F2", borderRadius:12, paddingHorizontal:10, paddingVertical:8, borderWidth:1, borderColor:"#FECACA" },
+  deletePill: { flexDirection:"row", alignItems:"center", gap:6 },
+  deletePillText: { fontSize:12, color:"#991B1B", fontWeight:"700" },
+  deleteGhostBtn: { height:32, paddingHorizontal:12, borderRadius:10, alignItems:"center", justifyContent:"center", backgroundColor:"#fff", borderWidth:1, borderColor:"#F3D1D1" },
+  deleteGhostText: { fontSize:12, color:C.textMuted, fontWeight:"700" },
+  deleteDangerBtn: { minWidth:72, height:32, paddingHorizontal:12, borderRadius:10, alignItems:"center", justifyContent:"center", backgroundColor:C.danger },
+  deleteDangerBtnDisabled: { opacity:0.7 },
+  deleteDangerText: { fontSize:12, color:"#fff", fontWeight:"800" },
   // FAB
   fab:     { position:"absolute", bottom:28, right:18 },
   fabInner:{ width:54, height:54, borderRadius:27, justifyContent:"center", alignItems:"center", shadowColor:C.primary, shadowOffset:{width:0,height:8}, shadowOpacity:0.35, shadowRadius:14, elevation:8 },
@@ -936,8 +1013,10 @@ const S = StyleSheet.create({
   dragHandle:       { width:36, height:4, borderRadius:2, backgroundColor:C.border, alignSelf:"center", marginTop:10, marginBottom:8 },
   datePicker:       { backgroundColor:C.card, borderTopLeftRadius:24, borderTopRightRadius:24, paddingBottom:28 },
   datePickerHeader: { flexDirection:"row", justifyContent:"space-between", alignItems:"center", paddingHorizontal:20, paddingVertical:14 },
+  datePickerHeaderActions: { flexDirection:"row", alignItems:"center", gap:8 },
   datePickerTitle:  { fontSize:15, fontWeight:"800", color:C.text },
   calNavBtn:        { width:34, height:34, borderRadius:10, backgroundColor:C.bg, justifyContent:"center", alignItems:"center" },
+  calCloseBtn:      { width:34, height:34, borderRadius:10, backgroundColor:"#FEE2E2", justifyContent:"center", alignItems:"center", borderWidth:1, borderColor:"#FECACA" },
   clearDateBtn:     { marginHorizontal:20, paddingVertical:11, borderRadius:12, backgroundColor:C.primarySoft, alignItems:"center", marginBottom:14, borderWidth:1.5, borderColor:C.primaryMid },
   clearDateText:    { fontSize:14, fontWeight:"700", color:C.primary },
   weekRow:  { flexDirection:"row", paddingHorizontal:8 },

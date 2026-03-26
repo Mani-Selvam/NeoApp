@@ -1,6 +1,9 @@
 ﻿const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
+const fs = require("fs");
+const multer = require("multer");
+const path = require("path");
 const Company = require("../models/Company");
 const User = require("../models/User");
 const Plan = require("../models/Plan");
@@ -41,6 +44,25 @@ const {
 } = require("../services/razorpayService");
 
 const otpStore = {}; // Memory store for profile changes
+
+const profileUploadDir = path.join(__dirname, "../uploads/profile");
+if (!fs.existsSync(profileUploadDir)) {
+  fs.mkdirSync(profileUploadDir, { recursive: true });
+}
+
+const profileStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, profileUploadDir),
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `logo-${uniqueSuffix}${ext}`);
+  },
+});
+
+const profileUpload = multer({
+  storage: profileStorage,
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 // Simple OTP generator
 const generateOTP = () =>
@@ -460,6 +482,20 @@ const emitSubscriptionUpdate = (req, payload) => {
   }
 };
 
+const emitProfileUpdate = (req, payload) => {
+  try {
+    const io = req.app?.get("io");
+    if (!io) return;
+
+    const userId = String(payload?.id || payload?._id || payload?.userId || "");
+    if (!userId) return;
+
+    io.to(`user:${userId}`).emit("PROFILE_UPDATED", payload);
+  } catch (_socketError) {
+    // ignore socket fanout errors
+  }
+};
+
 const isPrimaryCompanyAdmin = async (user) => {
   const role = String(user?.role || "").toLowerCase();
   if (role !== "admin") return false;
@@ -489,9 +525,16 @@ router.get("/profile", verifyToken, async (req, res) => {
 });
 
 // 2. UPDATE BASIC PROFILE (Name, Logo)
-router.put("/profile", verifyToken, async (req, res) => {
+router.put("/profile", verifyToken, profileUpload.single("logo"), async (req, res) => {
   try {
-    const { name, logo } = req.body;
+    const existingUser = await User.findById(req.userId).select("logo").lean();
+    const name = String(req.body.name || "").trim();
+    const bodyLogo = typeof req.body.logo === "string" ? req.body.logo.trim() : "";
+    const clearLogo = String(req.body.clearLogo || "").trim() === "true";
+    const uploadedLogo = req.file ? `/uploads/profile/${req.file.filename}` : "";
+    const logo = clearLogo
+      ? ""
+      : uploadedLogo || bodyLogo || existingUser?.logo || "";
     const user = await User.findByIdAndUpdate(
       req.userId,
       { $set: { name, logo, updatedAt: new Date() } },
@@ -503,6 +546,17 @@ router.put("/profile", verifyToken, async (req, res) => {
       cache.invalidate("dashboard");
       cache.invalidate("enquiries");
       cache.invalidate("followups");
+      emitProfileUpdate(req, {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        mobile: user.mobile,
+        logo: user.logo || "",
+        role: user.role,
+        status: user.status,
+        company_id: user.company_id,
+        updatedAt: user.updatedAt,
+      });
     }
 
     res.json({ success: true, message: "Profile updated", user });

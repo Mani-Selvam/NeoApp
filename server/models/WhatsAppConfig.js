@@ -12,6 +12,7 @@ const WhatsAppConfigSchema = new mongoose.Schema(
         watiApiTokenEncrypted: { type: String, default: "" },
         metaWhatsappTokenEncrypted: { type: String, default: "" },
         metaPhoneNumberId: { type: String, default: "" },
+        neoBaseUrl: { type: String, default: "" },
         neoAccountName: { type: String, default: "" },
         neoApiKeyEncrypted: { type: String, default: "" },
         neoPhoneNumber: { type: String, default: "" },

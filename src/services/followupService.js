@@ -7,11 +7,15 @@ export const getFollowUps = async (
     page = 1,
     limit = 20,
     selectedDate = "",
+    extraParams = {},
 ) => {
     try {
         const client = await getApiClient();
         const params = { tab, page, limit };
         if (selectedDate) params.date = selectedDate;
+        if (extraParams && typeof extraParams === "object") {
+            Object.assign(params, extraParams);
+        }
         const response = await client.get("/followups", {
             params,
         });

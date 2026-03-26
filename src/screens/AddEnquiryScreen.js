@@ -693,6 +693,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const sc = useScale();
   const { user } = useAuth();
+  const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
 
   const editingEnquiry = route?.params?.enquiry;
   const isEditMode = !!editingEnquiry;
@@ -755,6 +756,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
   const scrollRef = useRef(null);
   const currentUserId = String(user?.id || user?._id || "");
   const assignableTeam = useMemo(() => {
+    if (isStaffUser) return [];
     const seen = new Set();
     return (staffList || [])
       .filter((member) => {
@@ -770,7 +772,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
         if (roleA !== roleB) return roleA === "admin" ? -1 : 1;
         return String(a?.name || "").localeCompare(String(b?.name || ""));
       });
-  }, [currentUserId, staffList]);
+  }, [currentUserId, isStaffUser, staffList]);
   const adminLabelMap = useMemo(() => {
     const admins = [...staffList]
       .filter((member) => String(member?.role || "").toLowerCase() === "admin")
@@ -801,8 +803,8 @@ export default function AddEnquiryScreen({ route, navigation }) {
       try {
         const d = await fn();
         setter(Array.isArray(d) ? d : []);
-      } catch (e) {
-        console.error(e);
+      } catch (_error) {
+        setter([]);
       } finally {
         setLoading_(false);
       }
@@ -812,9 +814,20 @@ export default function AddEnquiryScreen({ route, navigation }) {
       setLeadSources,
       setLoadingSources,
     );
-    fetch(staffService.getAllStaff, setStaffList, setLoadingStaff);
+    if (!isStaffUser) {
+      fetch(staffService.getAllStaff, setStaffList, setLoadingStaff);
+    } else {
+      setStaffList([]);
+      setLoadingStaff(false);
+    }
     fetch(productService.getAllProducts, setProducts, setLoadingProducts);
-  }, []);
+  }, [isStaffUser]);
+
+  useEffect(() => {
+    if (isStaffUser) {
+      setForm((prev) => ({ ...prev, assignedTo: "" }));
+    }
+  }, [isStaffUser]);
 
   useEffect(() => {
     if (isEditMode && editingEnquiry) {
@@ -830,13 +843,15 @@ export default function AddEnquiryScreen({ route, navigation }) {
         cost: editingEnquiry.cost ? String(editingEnquiry.cost) : "",
         image: editingEnquiry.image || null,
         assignedTo:
-          editingEnquiry.assignedTo?._id ||
-          editingEnquiry.assignedTo?.id ||
-          editingEnquiry.assignedTo ||
-          "",
+          isStaffUser
+            ? ""
+            : editingEnquiry.assignedTo?._id ||
+              editingEnquiry.assignedTo?.id ||
+              editingEnquiry.assignedTo ||
+              "",
       }));
     }
-  }, [isEditMode, editingEnquiry]);
+  }, [editingEnquiry, isEditMode, isStaffUser]);
 
   // ── Form helpers ──────────────────────────────────────────────────────────
   const set = (field, value) => {
@@ -1040,7 +1055,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
       const method = isEditMode ? "PUT" : "POST";
       const body = {
         ...form,
-        assignedTo: form.assignedTo || null,
+        assignedTo: isStaffUser ? null : form.assignedTo || null,
         cost: form.cost ? Number(form.cost) : undefined,
       };
 
@@ -1351,7 +1366,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
                   onPress={() => setShowSourceModal(true)}
                   sc={sc}
                 />
-                {assignableTeam.length > 0 && (
+                {!isStaffUser && assignableTeam.length > 0 && (
                   <DropBtn
                     label="Assign To"
                     value={
@@ -1363,6 +1378,16 @@ export default function AddEnquiryScreen({ route, navigation }) {
                     placeholder="Me (Auto-assign)"
                     icon="person-add-outline"
                     onPress={() => setShowStaffModal(true)}
+                    sc={sc}
+                  />
+                )}
+                {isStaffUser && (
+                  <DropBtn
+                    label="Assign To"
+                    value={user?.name || "You"}
+                    placeholder="Assigned to you"
+                    icon="person-add-outline"
+                    onPress={() => {}}
                     sc={sc}
                   />
                 )}

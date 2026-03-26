@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -280,45 +281,49 @@ export default function EmailSettingsScreen({ navigation }) {
     const [fromEmail, setFromEmail] = useState("");
     const [smtpSecure, setSmtpSecure] = useState(false);
 
-    useEffect(() => {
-        let mounted = true;
-        (async () => {
-            try {
-                setLoading(true);
-                const res = await getEmailSettings();
-                const s = res?.settings || null;
-                if (!mounted) return;
-                if (s) {
-                    setSmtpHost(s.smtpHost || "");
-                    setSmtpPort(String(s.smtpPort || 587));
-                    setSmtpSecure(Boolean(s.smtpSecure));
-                    setSmtpUser(s.smtpUser || "");
-                    setSmtpPass(s.hasPassword ? PASSWORD_MASK : "");
-                    setSaveSentCopy(Boolean(s.saveSentCopy));
-                    setImapHost(s.imapHost || "");
-                    setImapPort(String(s.imapPort || 993));
-                    setImapSecure(s.imapSecure !== false);
-                    setImapUser(s.imapUser || "");
-                    setImapPass(s.hasImapPassword ? PASSWORD_MASK : "");
-                    setSentFolder(s.sentFolder || "Sent");
-                    setFromName(s.fromName || "");
-                    setFromEmail(s.fromEmail || "");
-                }
-            } catch (e) {
+    const applyEmailSettings = (s = null) => {
+        if (!s) return;
+        setSmtpHost(s.smtpHost || "");
+        setSmtpPort(String(s.smtpPort || 587));
+        setSmtpSecure(Boolean(s.smtpSecure));
+        setSmtpUser(s.smtpUser || "");
+        setSmtpPass(s.hasPassword ? PASSWORD_MASK : "");
+        setSaveSentCopy(Boolean(s.saveSentCopy));
+        setImapHost(s.imapHost || "");
+        setImapPort(String(s.imapPort || 993));
+        setImapSecure(s.imapSecure !== false);
+        setImapUser(s.imapUser || "");
+        setImapPass(s.hasImapPassword ? PASSWORD_MASK : "");
+        setSentFolder(s.sentFolder || "Sent");
+        setFromName(s.fromName || "");
+        setFromEmail(s.fromEmail || "");
+    };
+
+    const loadEmailSettings = async ({ showError = true } = {}) => {
+        try {
+            setLoading(true);
+            const res = await getEmailSettings();
+            applyEmailSettings(res?.settings || null);
+        } catch (e) {
+            if (showError) {
                 Alert.alert(
                     "Email Settings",
                     e?.response?.data?.message ||
                         e.message ||
                         "Failed to load settings",
                 );
-            } finally {
-                if (mounted) setLoading(false);
             }
-        })();
-        return () => {
-            mounted = false;
-        };
-    }, []);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useFocusEffect(
+        useCallback(() => {
+            loadEmailSettings({ showError: true });
+            return () => {};
+        }, [])
+    );
 
     const onEncryptionChange = (val) => {
         setSmtpSecure(val);
@@ -364,6 +369,7 @@ export default function EmailSettingsScreen({ navigation }) {
                 fromName: fromName.trim(),
                 fromEmail: fromEmail.trim(),
             });
+            await loadEmailSettings({ showError: false });
             Alert.alert("✓ Saved", "Email settings saved successfully.");
         } catch (e) {
             Alert.alert(

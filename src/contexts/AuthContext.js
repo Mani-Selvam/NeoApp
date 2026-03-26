@@ -127,6 +127,25 @@ export const AuthProvider = ({ children }) => {
         submitError: "",
     });
 
+    const fetchLatestProfile = useCallback(async (tokenOverride = "") => {
+        const token = tokenOverride || (await getAuthToken());
+        if (!token) return null;
+
+        const res = await fetch(`${API_URL}/users/profile`, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+        });
+
+        if (!res.ok) {
+            throw new Error(`Profile fetch failed (${res.status})`);
+        }
+
+        const data = await res.json();
+        return data?.user || null;
+    }, []);
+
     const syncBillingUiState = useCallback(async (nextInfo, { forcePrompt = false } = {}) => {
         setBillingInfo(nextInfo);
         setBillingPlan(nextInfo?.plan || null);
@@ -199,6 +218,17 @@ export const AuthProvider = ({ children }) => {
                 }
 
                 try {
+                    const latestUser = await fetchLatestProfile(token);
+                    if (latestUser) {
+                        await AsyncStorage.setItem("user", JSON.stringify(latestUser));
+                        setUser(latestUser);
+                        setUserStatus(latestUser.status || "Active");
+                    }
+                } catch (_error) {
+                    console.log("Failed to refresh latest profile", _error?.message || _error);
+                }
+
+                try {
                     const cachedPlan = await AsyncStorage.getItem("billingPlan");
                     if (cachedPlan) {
                         setBillingPlan(JSON.parse(cachedPlan));
@@ -225,7 +255,7 @@ export const AuthProvider = ({ children }) => {
             setIsLoading(false);
         };
         checkStatus();
-    }, []);
+    }, [fetchLatestProfile]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("FORCE_LOGOUT", async (payload) => {
@@ -273,6 +303,33 @@ export const AuthProvider = ({ children }) => {
             sub?.remove?.();
         };
     }, [isLoggedIn, refreshBillingPlan]);
+
+    useEffect(() => {
+        const sub = DeviceEventEmitter.addListener("PROFILE_UPDATED", async (payload) => {
+            const incomingUserId = String(payload?.id || payload?._id || payload?.userId || "");
+            const selfUserId = String(user?.id || user?._id || "");
+            if (!isLoggedIn || !incomingUserId || !selfUserId || incomingUserId !== selfUserId) {
+                return;
+            }
+
+            try {
+                const latestUser = await fetchLatestProfile();
+                const nextUser = latestUser || { ...user, ...payload };
+                await AsyncStorage.setItem("user", JSON.stringify(nextUser));
+                setUser(nextUser);
+                setUserStatus(nextUser.status || "Active");
+            } catch (_error) {
+                const nextUser = { ...user, ...payload };
+                await AsyncStorage.setItem("user", JSON.stringify(nextUser));
+                setUser(nextUser);
+                setUserStatus(nextUser.status || "Active");
+            }
+        });
+
+        return () => {
+            sub?.remove?.();
+        };
+    }, [fetchLatestProfile, isLoggedIn, user]);
 
     useEffect(() => {
         // Global auth error handler (e.g., company suspended => 403)
@@ -399,11 +456,24 @@ export const AuthProvider = ({ children }) => {
     }, [isLoggedIn, user, userStatus]);
 
     const login = async (token, userObj) => {
-        if (token) await setAuthToken(token);
+        if (token) {
+            await setAuthToken(token);
+            clearApiClient();
+        }
         if (userObj) {
             await AsyncStorage.setItem("user", JSON.stringify(userObj));
             setUser(userObj);
             setUserStatus(userObj.status || "Active");
+        }
+        try {
+            const latestUser = await fetchLatestProfile(token);
+            if (latestUser) {
+                await AsyncStorage.setItem("user", JSON.stringify(latestUser));
+                setUser(latestUser);
+                setUserStatus(latestUser.status || "Active");
+            }
+        } catch (_error) {
+            // keep login resilient even if profile refresh fails
         }
         setIsLoggedIn(true);
         refreshBillingPlan().catch(() => {});

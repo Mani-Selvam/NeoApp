@@ -18,8 +18,19 @@ const PROVIDERS = {
 
 const NEO_NOT_CONFIGURED_MESSAGE =
   "Neo credentials are saved, but the Neo send API endpoint is not configured yet.";
-const NEO_MESSAGES_URL =
-  "https://aiwhatsappapi.neophrontech.com/v1/message/send-message";
+const NEO_DEFAULT_SEND_PATH = "/v1/message/send-message";
+
+const getPublicServerBaseUrl = () => {
+  const explicitBaseUrl = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (explicitBaseUrl) return explicitBaseUrl.replace(/\/+$/, "");
+
+  const apiBaseUrl = String(
+    process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || "",
+  ).trim();
+  if (apiBaseUrl) return apiBaseUrl.replace(/\/api\/?$/, "").replace(/\/+$/, "");
+
+  return "";
+};
 
 const buildEnvFallbackConfig = () => {
   const provider = normalizeProvider(
@@ -40,6 +51,12 @@ const buildEnvFallbackConfig = () => {
     ).trim(),
     metaWhatsappToken: String(process.env.META_WHATSAPP_TOKEN || "").trim(),
     metaPhoneNumberId: String(process.env.META_PHONE_NUMBER_ID || "").trim(),
+    neoBaseUrl: String(
+      process.env.NEO_BASE_URL ||
+        process.env.NEO_MESSAGES_URL ||
+        process.env.NEO_API_URL ||
+        "",
+    ).trim(),
     neoAccountName: String(
       process.env.NEO_ACCOUNT_NAME || process.env.WHATSAPP_DEFAULT_NAME || "",
     ).trim(),
@@ -74,6 +91,7 @@ const buildEnvFallbackConfig = () => {
       envCfg.metaPhoneNumberId &&
       envCfg.metaWhatsappToken) ||
     (provider === PROVIDERS.NEO &&
+      envCfg.neoBaseUrl &&
       envCfg.neoAccountName &&
       envCfg.neoPhoneNumber &&
       (envCfg.neoApiKey || envCfg.neoBearerToken)) ||
@@ -128,6 +146,108 @@ const normalizePhoneNumber = (raw, defaultCountry = "91") => {
   return clean;
 };
 
+const buildNeoApiKeyCandidates = (primaryApiKey) =>
+  [...new Set([String(primaryApiKey || "").trim()].filter(Boolean))];
+
+const buildNeoSendTargets = ({ baseUrl, apiKey, bearerToken }) => {
+  const rawBaseUrl = String(baseUrl || "").trim();
+  if (!rawBaseUrl) return [];
+
+  const normalizedBaseUrl = rawBaseUrl.replace(
+    /\/v1\/message\/send-message(?:\?|$)/i,
+    (match) => match.replace(/send-message/i, "send-message"),
+  );
+  const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
+  const hasSendPath =
+    lowerBaseUrl.includes("/send-message") ||
+    lowerBaseUrl.includes("/message/send");
+  const endpoint = hasSendPath
+    ? normalizedBaseUrl
+    : `${normalizedBaseUrl.replace(/\/+$/, "")}${NEO_DEFAULT_SEND_PATH}`;
+
+  const targets = [];
+  const apiKeyCandidates = buildNeoApiKeyCandidates(apiKey);
+  for (const candidate of apiKeyCandidates) {
+    targets.push({
+      url: `${endpoint}${endpoint.includes("?") ? "&" : "?"}token=${encodeURIComponent(candidate)}`,
+      useTokenQuery: true,
+    });
+  }
+  if (bearerToken || apiKeyCandidates.length === 0) {
+    targets.push({ url: endpoint, useTokenQuery: false });
+  }
+  return targets;
+};
+
+const buildNeoMediaPayload = ({ filePath, fileName, mimeType, content }) => {
+  if (!filePath) return null;
+
+  const publicBaseUrl = getPublicServerBaseUrl();
+  if (!publicBaseUrl) {
+    throw new Error(
+      "PUBLIC_BASE_URL is required to send WhatsApp media through Neo.",
+    );
+  }
+
+  const normalizedPath = String(filePath || "")
+    .replace(/\\/g, "/")
+    .replace(/^.*?uploads\//i, "/uploads/");
+  const mediaUrl = normalizedPath.startsWith("/uploads/")
+    ? `${publicBaseUrl}${normalizedPath}`
+    : `${publicBaseUrl}/uploads/${normalizedPath.replace(/^\/+/, "")}`;
+
+  const caption = String(content || "").trim();
+  const safeFileName = String(fileName || "attachment").trim() || "attachment";
+  const safeMimeType = String(mimeType || "").trim().toLowerCase();
+
+  if (safeMimeType.startsWith("image/")) {
+    return {
+      type: "image",
+      image: {
+        link: mediaUrl,
+        ...(caption ? { caption } : {}),
+      },
+      mediaUrl,
+      url: mediaUrl,
+    };
+  }
+
+  if (safeMimeType.startsWith("video/")) {
+    return {
+      type: "video",
+      video: {
+        link: mediaUrl,
+        ...(caption ? { caption } : {}),
+      },
+      mediaUrl,
+      url: mediaUrl,
+    };
+  }
+
+  if (safeMimeType.startsWith("audio/")) {
+    return {
+      type: "audio",
+      audio: {
+        link: mediaUrl,
+      },
+      mediaUrl,
+      url: mediaUrl,
+    };
+  }
+
+  return {
+    type: "document",
+    document: {
+      link: mediaUrl,
+      filename: safeFileName,
+      ...(caption ? { caption } : {}),
+    },
+    mediaUrl,
+    url: mediaUrl,
+    fileName: safeFileName,
+  };
+};
+
 const buildConfigView = (cfg) => {
   if (!cfg) return null;
   const provider = normalizeProvider(cfg.provider);
@@ -149,6 +269,7 @@ const buildConfigView = (cfg) => {
     watiApiToken,
     metaWhatsappToken,
     metaPhoneNumberId: cfg.metaPhoneNumberId || "",
+    neoBaseUrl: cfg.neoBaseUrl || "",
     neoAccountName: cfg.neoAccountName || "",
     neoApiKey,
     neoPhoneNumber: cfg.neoPhoneNumber || "",
@@ -203,6 +324,7 @@ const getConfigSummary = (cfg) => {
     watiApiToken: maskSecret(cfg.watiApiToken || cfg.apiToken || ""),
     metaWhatsappToken: maskSecret(cfg.metaWhatsappToken || ""),
     metaPhoneNumberId: cfg.metaPhoneNumberId || "",
+    neoBaseUrl: cfg.neoBaseUrl || "",
     neoAccountName: cfg.neoAccountName || "",
     neoApiKey: maskSecret(cfg.neoApiKey || ""),
     neoPhoneNumber: cfg.neoPhoneNumber || "",
@@ -215,6 +337,7 @@ const getConfigSummary = (cfg) => {
     ),
     hasMetaCredentials: Boolean(cfg.metaPhoneNumberId && cfg.metaWhatsappToken),
     hasNeoCredentials: Boolean(
+      cfg.neoBaseUrl &&
       cfg.neoAccountName &&
       cfg.neoPhoneNumber &&
       (cfg.neoApiKey || cfg.neoBearerToken),
@@ -247,12 +370,14 @@ const loadWhatsappConfig = async (opts = {}) => {
         companyId: opts.companyId,
       }).lean();
     }
-    if (!cfg && opts.ownerUserId) {
+    if (!cfg && !opts.companyId && opts.ownerUserId) {
       cfg = await WhatsAppConfig.findOne({
         ownerUserId: opts.ownerUserId,
       }).lean();
     }
-    const hydrated = buildConfigView(cfg) || buildEnvFallbackConfig();
+    const hydrated =
+      buildConfigView(cfg) ||
+      (!opts.companyId ? buildEnvFallbackConfig() : null);
     _whConfigCache.set(key, hydrated || null);
     _whConfigCacheAt.set(key, Date.now());
     return hydrated || null;
@@ -287,6 +412,13 @@ const buildStoredConfig = (payload = {}, ownerUserId) => {
   ).trim();
   const metaPhoneNumberId = String(
     payload.metaPhoneNumberId || payload.META_PHONE_NUMBER_ID || "",
+  ).trim();
+  const neoBaseUrl = String(
+    payload.neoBaseUrl ||
+      payload.NEO_BASE_URL ||
+      payload.baseUrl ||
+      payload.NEO_MESSAGES_URL ||
+      "",
   ).trim();
   const neoAccountName = String(
     payload.neoAccountName || payload.NEO_ACCOUNT_NAME || payload.name || "",
@@ -330,6 +462,7 @@ const buildStoredConfig = (payload = {}, ownerUserId) => {
       ? { metaWhatsappTokenEncrypted: encrypt(metaWhatsappToken) }
       : {}),
     metaPhoneNumberId,
+    neoBaseUrl,
     neoAccountName,
     neoApiKeyEncrypted: neoApiKey ? encrypt(neoApiKey) : "",
     neoPhoneNumber,
@@ -360,21 +493,65 @@ const buildStoredConfig = (payload = {}, ownerUserId) => {
   };
 };
 
+const ensureUniqueCompanyWhatsappCredentials = async ({
+  existingId = null,
+  provider,
+  companyId,
+  payload = {},
+}) => {
+  if (!companyId) return;
+
+  const normalizedProvider = normalizeProvider(provider || payload.provider);
+  if (normalizedProvider !== PROVIDERS.NEO) return;
+
+  const requestedNeoApiKey = String(
+    payload.neoApiKey || payload.NEO_API_KEY || payload.apiKey || "",
+  ).trim();
+  const requestedNeoBearerToken = String(
+    payload.neoBearerToken || payload.NEO_BEARER_TOKEN || payload.bearerToken || "",
+  ).trim();
+
+  if (!requestedNeoApiKey && !requestedNeoBearerToken) return;
+
+  const otherConfigs = await WhatsAppConfig.find({
+    companyId: { $ne: companyId, $type: "objectId" },
+    provider: PROVIDERS.NEO,
+    ...(existingId ? { _id: { $ne: existingId } } : {}),
+  }).lean();
+
+  for (const config of otherConfigs) {
+    const otherApiKey = decrypt(config?.neoApiKeyEncrypted || "");
+    const otherBearerToken = decrypt(config?.neoBearerTokenEncrypted || "");
+    const sameApiKey = requestedNeoApiKey && otherApiKey && requestedNeoApiKey === otherApiKey;
+    const sameBearerToken =
+      requestedNeoBearerToken &&
+      otherBearerToken &&
+      requestedNeoBearerToken === otherBearerToken;
+
+    if (sameApiKey || sameBearerToken) {
+      throw new Error(
+        "This Neo WhatsApp token is already assigned to another company. Each company must use its own separate WhatsApp credentials.",
+      );
+    }
+  }
+};
+
 const saveWhatsappConfig = async ({ ownerUserId, payload = {} }) => {
-  const matches = await WhatsAppConfig.find({
-    $or: [
-      ...(payload.companyId ? [{ companyId: payload.companyId }] : []),
-      { ownerUserId },
-    ],
-  })
+  const query = payload.companyId
+    ? { companyId: payload.companyId }
+    : { ownerUserId };
+  const matches = await WhatsAppConfig.find(query)
     .sort({ updatedAt: -1, createdAt: -1 })
     .lean();
 
-  const existing =
-    matches.find((item) => String(item?.companyId || "") === String(payload.companyId || "")) ||
-    matches.find((item) => String(item?.ownerUserId || "") === String(ownerUserId || "")) ||
-    matches[0] ||
-    null;
+  const existing = matches[0] || null;
+
+  await ensureUniqueCompanyWhatsappCredentials({
+    existingId: existing?._id || null,
+    provider: payload.provider || existing?.provider || null,
+    companyId: payload.companyId || null,
+    payload,
+  });
 
   const data = buildStoredConfig(
     {
@@ -383,6 +560,22 @@ const saveWhatsappConfig = async ({ ownerUserId, payload = {} }) => {
     },
     ownerUserId,
   );
+  if (!String(payload.watiApiToken || payload.apiToken || payload.WATI_API_TOKEN || "").trim()) {
+    data.apiTokenEncrypted = existing?.apiTokenEncrypted || "";
+    data.watiApiTokenEncrypted = existing?.watiApiTokenEncrypted || existing?.apiTokenEncrypted || "";
+  }
+  if (!String(payload.metaWhatsappToken || payload.META_WHATSAPP_TOKEN || "").trim()) {
+    data.metaWhatsappTokenEncrypted = existing?.metaWhatsappTokenEncrypted || "";
+  }
+  if (!String(payload.neoApiKey || payload.NEO_API_KEY || payload.apiKey || "").trim()) {
+    data.neoApiKeyEncrypted = existing?.neoApiKeyEncrypted || "";
+  }
+  if (!String(payload.neoBearerToken || payload.NEO_BEARER_TOKEN || payload.bearerToken || "").trim()) {
+    data.neoBearerTokenEncrypted = existing?.neoBearerTokenEncrypted || "";
+  }
+  if (!String(payload.twilioAuthToken || payload.TWILIO_AUTH_TOKEN || "").trim()) {
+    data.twilioAuthTokenEncrypted = existing?.twilioAuthTokenEncrypted || "";
+  }
 
   let updated;
   if (existing?._id) {
@@ -490,20 +683,22 @@ const sendViaMeta = async ({ cfg, phoneNumber, content }) => {
   });
 };
 
-const sendViaNeo = async ({ cfg, phoneNumber, content, filePath }) => {
+const sendViaNeo = async ({
+  cfg,
+  phoneNumber,
+  content,
+  filePath,
+  fileName,
+  mimeType,
+}) => {
   if (
+    !cfg?.neoBaseUrl ||
     !cfg?.neoAccountName ||
     !cfg?.neoPhoneNumber ||
     (!cfg?.neoApiKey && !cfg?.neoBearerToken)
   ) {
     throw new Error("Neo WhatsApp credentials are missing");
   }
-  if (filePath) {
-    throw new Error(
-      `${NEO_NOT_CONFIGURED_MESSAGE} Media sending is also not configured.`,
-    );
-  }
-
   const toNumber = normalizePhoneNumber(phoneNumber, cfg.defaultCountry);
   const fromNumber = normalizePhoneNumber(
     cfg.neoPhoneNumber,
@@ -516,43 +711,88 @@ const sendViaNeo = async ({ cfg, phoneNumber, content, filePath }) => {
   const apiKey = bearerToken
     ? ""
     : String(rawApiKey || "").replace(/^Bearer\s+/i, "").trim();
-  const payload = {
+  const basePayload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
     name: cfg.neoAccountName,
     phone: toNumber,
     phoneNumber: toNumber,
     to: toNumber,
-    message: String(content || ""),
-    text: String(content || ""),
     from: fromNumber,
     senderPhoneNumber: fromNumber,
   };
+  const mediaPayload = buildNeoMediaPayload({
+    filePath,
+    fileName,
+    mimeType,
+    content,
+  });
+  const payload = mediaPayload
+    ? {
+        ...basePayload,
+        ...mediaPayload,
+        message: String(content || ""),
+      }
+    : {
+        ...basePayload,
+        type: "text",
+        message: String(content || ""),
+        text: {
+          body: String(content || ""),
+        },
+      };
 
-  const headers = {
-    "Content-Type": "application/json",
+  const buildNeoAuthHeaders = () => {
+    const baseHeaders = { "Content-Type": "application/json" };
+    if (bearerToken && !apiKey) {
+      return [
+        {
+          ...baseHeaders,
+          Authorization: `Bearer ${bearerToken.replace(/^Bearer\s+/i, "")}`,
+        },
+      ];
+    }
+    return [baseHeaders];
   };
-  if (bearerToken) {
-    headers.Authorization = `Bearer ${bearerToken.replace(/^Bearer\s+/i, "")}`;
-  }
-  if (apiKey) {
-    headers["X-API-Key"] = apiKey;
-    headers.apiKey = apiKey;
-  }
+  const authHeaderVariants = buildNeoAuthHeaders();
+  const requestTargets = buildNeoSendTargets({
+    baseUrl: cfg.neoBaseUrl,
+    apiKey,
+    bearerToken,
+  });
 
   console.log("[WhatsApp][NEO] Sending message", {
     configSource: cfg?.source || "unknown",
     isFallback: Boolean(cfg?.isFallback),
     authMode: bearerToken ? "bearer" : apiKey ? "apiKey" : "missing",
+    authVariants: authHeaderVariants.length,
     companyId: cfg?.companyId ? String(cfg.companyId) : null,
     ownerUserId: cfg?.ownerUserId ? String(cfg.ownerUserId) : null,
     accountName: cfg?.neoAccountName || "",
+    baseUrl: cfg?.neoBaseUrl || "",
+    resolvedTargets: requestTargets.map((target) => target.url),
+    messageType: payload.type,
     fromPhoneSuffix: fromNumber ? String(fromNumber).slice(-4) : "",
     toPhoneSuffix: toNumber ? String(toNumber).slice(-4) : "",
   });
 
-  return axios.post(NEO_MESSAGES_URL, payload, {
-    headers,
-    timeout: 20000,
-  });
+  let lastError = null;
+  for (const target of requestTargets) {
+    for (const headers of authHeaderVariants) {
+      const requestHeaders = target.useTokenQuery
+        ? { "Content-Type": "application/json" }
+        : headers;
+      try {
+        return await axios.post(target.url, payload, {
+          headers: requestHeaders,
+          timeout: 20000,
+        });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+  throw lastError || new Error("Neo WhatsApp send failed");
 };
 
 const sendViaTwilio = async ({ cfg, phoneNumber, content }) => {
@@ -682,7 +922,14 @@ const sendWhatsAppMessage = async ({
     return {
       provider,
       cfg,
-      response: await sendViaNeo({ cfg, phoneNumber, content, filePath }),
+      response: await sendViaNeo({
+        cfg,
+        phoneNumber,
+        content,
+        filePath,
+        fileName,
+        mimeType,
+      }),
     };
   }
 

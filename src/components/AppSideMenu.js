@@ -801,7 +801,7 @@ export default function AppSideMenu({
             />
             <MenuItem
               icon="list-outline"
-              label="Call Logs"
+              label="Calls"
               onPress={() => nav("CallLog")}
               active={isActive("CallLog")}
             />
@@ -816,17 +816,6 @@ export default function AppSideMenu({
               active={isActive("CommunicationScreen")}
             />
           </MenuSection>
-
-          {/* Analytics */}
-          <MenuSection title="Analytics">
-            <MenuItem
-              icon="bar-chart-outline"
-              label="Reports"
-              onPress={() => nav("Report")}
-              active={isActive("Report")}
-            />
-          </MenuSection>
-
           {/* Footer */}
           <FooterSection version={version} bottomInset={insets.bottom} />
         </ScrollView>

@@ -1,14 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
+import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Sharing from "expo-sharing";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calendar } from "react-native-calendars";
 import {
+    Alert,
     Animated,
+    DeviceEventEmitter,
     Dimensions,
     Modal,
+    Platform,
     ScrollView,
-    Share,
     StatusBar,
     StyleSheet,
     Text,
@@ -16,6 +20,10 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import Svg, { Circle, G, Path } from "react-native-svg";
+import * as XLSX from "xlsx";
+import AppSideMenu from "../components/AppSideMenu";
+import { useAuth } from "../contexts/AuthContext";
 import { SkeletonBox, SkeletonCard, SkeletonLine, SkeletonPulse, SkeletonSpacer } from "../components/skeleton/Skeleton";
 import { getCallLogs } from "../services/callLogService";
 import { getAllEnquiries } from "../services/enquiryService";
@@ -50,6 +58,45 @@ const C = {
 };
 
 const CHART_COLORS = [C.gold, C.teal, C.rose, C.violet, C.sky, C.amber, C.emerald];
+const ALL_STAFF = "All Staff";
+const ALL_STATUS = "All Statuses";
+const REPORT_STATUS_OPTIONS = [
+    "New",
+    "Contacted",
+    "Interested",
+    "Not Interested",
+    "Converted",
+    "Closed",
+];
+const saveExportToDevice = async ({ fileName, mimeType, base64Content }) => {
+    const localDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
+    if (!localDir) throw new Error("Export directory not available");
+    const localUri = `${localDir}${fileName}`;
+    await FileSystem.writeAsStringAsync(localUri, base64Content, {
+        encoding: FileSystem.EncodingType.Base64,
+    });
+
+    if (Platform.OS === "android" && FileSystem.StorageAccessFramework) {
+        try {
+            const permission = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+            if (permission.granted && permission.directoryUri) {
+                const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
+                    permission.directoryUri,
+                    fileName,
+                    mimeType
+                );
+                await FileSystem.writeAsStringAsync(targetUri, base64Content, {
+                    encoding: FileSystem.EncodingType.Base64,
+                });
+                return { uri: targetUri, downloaded: true };
+            }
+        } catch (error) {
+            console.error("Direct download failed", error);
+        }
+    }
+
+    return { uri: localUri, downloaded: false };
+};
 
 // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const normalizeList = (p) => Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : [];
@@ -66,11 +113,6 @@ const toIsoDate = (value = new Date()) => {
     const d = safeDate(value) || new Date();
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 };
-const shiftIsoDate = (value, amount) => {
-    const d = safeDate(value) || new Date();
-    d.setDate(d.getDate() + amount);
-    return toIsoDate(d);
-};
 const formatDayLabel = (value) => {
     const d = safeDate(value) || new Date();
     return d.toLocaleDateString("en-IN", {
@@ -80,10 +122,63 @@ const formatDayLabel = (value) => {
         year: "numeric",
     });
 };
+const formatShortDate = (value) => {
+    const d = safeDate(value);
+    if (!d) return "-";
+    return d.toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+    });
+};
 const inRange = (v, r) => { if (!r) return true; const p=safeDate(v); if (!p) return false; return p>=r.start&&p<=r.end; };
 const getEnqDate  = (i) => i?.enquiryDateTime||i?.date||i?.createdAt||null;
 const getFupDate  = (i) => i?.nextFollowUpDate||i?.followUpDate||i?.date||i?.createdAt||null;
 const getCallDate = (i) => i?.callTime||i?.createdAt||null;
+const getStaffName = (item) => item?.assignedTo?.name || item?.staffName || item?.assignedToName || "Unassigned";
+const normalizeStatusValue = (status) => {
+    if (!status) return "";
+    if (status === "Sales") return "Converted";
+    if (status === "Drop") return "Closed";
+    return status;
+};
+const getItemStatus = (item) => normalizeStatusValue(item?.status || item?.enqId?.status || item?.enquiryStatus || "");
+const buildExplicitDateRange = (fromDate, toDate) => {
+    const from = safeDate(fromDate) || new Date();
+    const to = safeDate(toDate) || from;
+    const safeFrom = from <= to ? from : to;
+    const safeTo = to >= from ? to : from;
+    return {
+        start: new Date(safeFrom.getFullYear(), safeFrom.getMonth(), safeFrom.getDate(), 0, 0, 0, 0),
+        end: new Date(safeTo.getFullYear(), safeTo.getMonth(), safeTo.getDate(), 23, 59, 59, 999),
+    };
+};
+const formatAppliedRangeLabel = (fromDate, toDate) => `${formatShortDate(fromDate)} - ${formatShortDate(toDate)}`;
+const isSameIsoDate = (left, right) => String(left || "") === String(right || "");
+const matchesStaffFilter = (item, staffFilter) => (
+    staffFilter === ALL_STAFF || getStaffName(item) === staffFilter
+);
+const matchesStatusFilter = (item, statusFilter) => (
+    statusFilter === ALL_STATUS || getItemStatus(item) === statusFilter
+);
+const polarToCartesian = (cx, cy, radius, angleInDegrees) => {
+    const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+    return {
+        x: cx + radius * Math.cos(angleInRadians),
+        y: cy + radius * Math.sin(angleInRadians),
+    };
+};
+const describeSlice = (cx, cy, radius, startAngle, endAngle) => {
+    const start = polarToCartesian(cx, cy, radius, endAngle);
+    const end = polarToCartesian(cx, cy, radius, startAngle);
+    const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+    return [
+        `M ${cx} ${cy}`,
+        `L ${start.x} ${start.y}`,
+        `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
+        "Z",
+    ].join(" ");
+};
 const statusColor = (s) => {
     const v = String(s||"").toLowerCase();
     if (v.includes("converted")||v.includes("closed")) return C.emerald;
@@ -111,15 +206,17 @@ const AnimCounter = ({ value, style, prefix="" }) => {
 
 // â”€â”€â”€ Donut Chart (pure RN view layers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // â”€â”€â”€ Animated Bar Chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const DonutChart = ({ data, size = 130, strokeWidth = 20, centerLabel = "TOTAL" }) => {
+const LeadPieChart = ({ data, size = 162 }) => {
     const total = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
     if (total <= 0) {
         return (
             <View style={{ width: size, height: size, alignItems:"center", justifyContent:"center" }}>
-                <View style={{ width: size, height: size, borderRadius: size/2, borderWidth: strokeWidth, borderColor: C.border, position:"absolute" }} />
-                <View style={{ width: size - strokeWidth*2 - 10, height: size - strokeWidth*2 - 10, borderRadius: 999, backgroundColor: C.surface, alignItems:"center", justifyContent:"center" }}>
-                    <Text style={{ fontSize:20, fontWeight:"800", color:C.text }}>0</Text>
-                    <Text style={{ fontSize:9, color:C.textMuted, fontWeight:"600", letterSpacing:0.5 }}>{centerLabel}</Text>
+                <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                    <Circle cx={size/2} cy={size/2} r={(size/2)-8} fill={C.border} />
+                </Svg>
+                <View style={st.pieCenterLabel}>
+                    <Text style={st.pieCenterValue}>0</Text>
+                    <Text style={st.pieCenterText}>LEADS</Text>
                 </View>
             </View>
         );
@@ -135,28 +232,26 @@ const DonutChart = ({ data, size = 130, strokeWidth = 20, centerLabel = "TOTAL" 
 
     return (
         <View style={{ width: size, height: size, alignItems:"center", justifyContent:"center" }}>
-            <View style={{ width: size, height: size, borderRadius: size/2, borderWidth: strokeWidth, borderColor: C.border, position:"absolute" }} />
-            {segments.map((seg, i) => {
-                const deg = seg.pct * 360;
-                if (deg < 2) return null;
-                const start = seg.startPct * 360;
-                return (
-                    <View key={i} style={{ position:"absolute", width: size, height: size, borderRadius: size/2, overflow:"hidden" }}>
-                        <View style={{
-                            position:"absolute", width: size, height: size, borderRadius: size/2,
-                            borderWidth: strokeWidth, borderColor:"transparent",
-                            borderTopColor: seg.color,
-                            borderRightColor: deg > 90 ? seg.color : "transparent",
-                            borderBottomColor: deg > 180 ? seg.color : "transparent",
-                            borderLeftColor: deg > 270 ? seg.color : "transparent",
-                            transform: [{ rotate: `${start - 90}deg` }],
-                        }} />
-                    </View>
-                );
-            })}
-            <View style={{ width: size - strokeWidth*2 - 10, height: size - strokeWidth*2 - 10, borderRadius: 999, backgroundColor: C.surface, alignItems:"center", justifyContent:"center" }}>
-                <Text style={{ fontSize:20, fontWeight:"800", color:C.text }}>{total}</Text>
-                <Text style={{ fontSize:9, color:C.textMuted, fontWeight:"600", letterSpacing:0.5 }}>{centerLabel}</Text>
+            <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                <G>
+                    {segments.map((seg, i) => {
+                        const start = seg.startPct * 360;
+                        const end = start + seg.pct * 360;
+                        return (
+                            <Path
+                                key={seg.label || i}
+                                d={describeSlice(size / 2, size / 2, size / 2 - 6, start, end)}
+                                fill={seg.color}
+                                stroke={C.surface}
+                                strokeWidth={2}
+                            />
+                        );
+                    })}
+                </G>
+            </Svg>
+            <View style={st.pieCenterLabel}>
+                <Text style={st.pieCenterValue}>{total}</Text>
+                <Text style={st.pieCenterText}>LEADS</Text>
             </View>
         </View>
     );
@@ -236,10 +331,11 @@ const FilterPill = ({ label, value, onPress, icon, accent, isOpen }) => (
     </TouchableOpacity>
 );
 
-const FilterDropdownMenu = ({ options, selectedValue, onSelect, accent }) => (
+const FilterDropdownMenu = ({ options, selectedValue, onSelect, accent, getOptionLabel }) => (
     <View style={[st.filterMenu, { borderColor:`${accent||C.gold}30` }]}>
         {options.map((option) => {
             const isSelected = option === selectedValue;
+            const label = typeof getOptionLabel === "function" ? getOptionLabel(option) : option;
             return (
                 <TouchableOpacity
                     key={option}
@@ -247,7 +343,7 @@ const FilterDropdownMenu = ({ options, selectedValue, onSelect, accent }) => (
                     onPress={() => onSelect(option)}
                     activeOpacity={0.75}>
                     <Text style={[st.filterMenuText, isSelected && { color:accent||C.gold, fontWeight:"700" }]}>
-                        {option}
+                        {label}
                     </Text>
                     {isSelected && <Ionicons name="checkmark" size={14} color={accent||C.gold} />}
                 </TouchableOpacity>
@@ -270,11 +366,23 @@ const CardHeader = ({ title, icon, accent, right }) => (
 );
 
 // â”€â”€â”€ MAIN SCREEN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-export default function ReportScreen() {
+export default function ReportScreen({ navigation }) {
     const insets = useSafeAreaInsets();
+    const { user, logout } = useAuth();
+    const todayIso = useMemo(() => toIsoDate(new Date()), []);
 
     const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
     const [calendarVisible, setCalendarVisible] = useState(false);
+    const [calendarTarget, setCalendarTarget] = useState("from");
+    const [menuVisible, setMenuVisible] = useState(false);
+    const [exportMenuVisible, setExportMenuVisible] = useState(false);
+    const [openFilterMenu, setOpenFilterMenu] = useState(null);
+    const [draftFromDate, setDraftFromDate] = useState(todayIso);
+    const [draftToDate, setDraftToDate] = useState(todayIso);
+    const [fromDate, setFromDate] = useState(todayIso);
+    const [toDate, setToDate] = useState(todayIso);
+    const [staffFilter, setStaffFilter] = useState(user?.role === "Staff" ? (user?.name || "Unassigned") : ALL_STAFF);
+    const [statusFilter, setStatusFilter] = useState(ALL_STATUS);
     const [isLoading, setIsLoading] = useState(true);
     const [reportData, setReportData] = useState({ enquiries:[], followups:[], callLogs:[] });
 
@@ -293,57 +401,363 @@ export default function ReportScreen() {
 
     useFocusEffect(useCallback(() => { loadReportData(); }, [loadReportData]));
 
-    const filterRange = useMemo(() => toDayRange(selectedDate), [selectedDate]);
+    useEffect(() => {
+        const subEnquiry = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () => {
+            loadReportData();
+        });
+        const subFollowup = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () => {
+            loadReportData();
+        });
+        const subCreated = DeviceEventEmitter.addListener("ENQUIRY_CREATED", () => {
+            loadReportData();
+        });
+        const subCall = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
+            loadReportData();
+        });
+        return () => {
+            subEnquiry.remove();
+            subFollowup.remove();
+            subCreated.remove();
+            subCall.remove();
+        };
+    }, [loadReportData]);
+
+    const filterRange = useMemo(() => buildExplicitDateRange(fromDate, toDate), [fromDate, toDate]);
+    const rangeLabel = useMemo(() => formatAppliedRangeLabel(fromDate, toDate), [fromDate, toDate]);
+    const hasPendingDateChanges = useMemo(
+        () => !isSameIsoDate(draftFromDate, fromDate) || !isSameIsoDate(draftToDate, toDate),
+        [draftFromDate, draftToDate, fromDate, toDate]
+    );
+    const staffOptions = useMemo(() => {
+        const uniqueStaff = Array.from(new Set(
+            [...reportData.enquiries, ...reportData.followups, ...reportData.callLogs]
+                .map((item) => getStaffName(item))
+                .filter(Boolean)
+        )).sort((a, b) => a.localeCompare(b));
+        if (user?.role === "Staff") {
+            return [user?.name || uniqueStaff[0] || "Unassigned"];
+        }
+        return [ALL_STAFF, ...uniqueStaff];
+    }, [reportData.callLogs, reportData.enquiries, reportData.followups, user?.name, user?.role]);
+    const statusOptions = useMemo(() => [
+        ALL_STATUS,
+        ...REPORT_STATUS_OPTIONS,
+    ], []);
+    useEffect(() => {
+        if (user?.role === "Staff") {
+            setStaffFilter(user?.name || "Unassigned");
+        }
+    }, [user?.name, user?.role]);
+    const applyDateRange = useCallback(() => {
+        const fromValue = safeDate(draftFromDate) || safeDate(todayIso) || new Date();
+        const toValue = safeDate(draftToDate) || fromValue;
+        const normalizedFrom = fromValue > toValue ? draftToDate : draftFromDate;
+        const normalizedTo = toValue < fromValue ? draftFromDate : draftToDate;
+        setFromDate(normalizedFrom);
+        setToDate(normalizedTo);
+        setSelectedDate(normalizedTo);
+    }, [draftFromDate, draftToDate, todayIso]);
+    const setQuickRange = useCallback((type) => {
+        const baseDate = new Date();
+        let nextFrom = toIsoDate(baseDate);
+        let nextTo = toIsoDate(baseDate);
+        if (type === "week") {
+            const start = new Date(baseDate);
+            start.setDate(baseDate.getDate() - 6);
+            nextFrom = toIsoDate(start);
+        } else if (type === "month") {
+            const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+            nextFrom = toIsoDate(start);
+        }
+        setDraftFromDate(nextFrom);
+        setDraftToDate(nextTo);
+        setFromDate(nextFrom);
+        setToDate(nextTo);
+        setSelectedDate(nextTo);
+        setOpenFilterMenu(null);
+        setCalendarVisible(false);
+    }, []);
+    const activeQuickRange = useMemo(() => {
+        const today = todayIso;
+        const baseDate = new Date();
+        const weekStart = new Date(baseDate);
+        weekStart.setDate(baseDate.getDate() - 6);
+        const monthStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+        const weekStartIso = toIsoDate(weekStart);
+        const monthStartIso = toIsoDate(monthStart);
+        if (fromDate === today && toDate === today) return "today";
+        if (fromDate === weekStartIso && toDate === today) return "week";
+        if (fromDate === monthStartIso && toDate === today) return "month";
+        return "";
+    }, [fromDate, toDate, todayIso]);
 
     const filteredEnq   = useMemo(() => reportData.enquiries.filter(item => {
         if (!inRange(getEnqDate(item),filterRange)) return false;
+        if (!matchesStaffFilter(item, staffFilter)) return false;
+        if (!matchesStatusFilter(item, statusFilter)) return false;
         return true;
-    }), [filterRange,reportData.enquiries]);
+    }), [filterRange, reportData.enquiries, staffFilter, statusFilter]);
 
     const filteredFups  = useMemo(() => reportData.followups.filter(item => {
         if (!inRange(getFupDate(item),filterRange)) return false;
+        if (!matchesStaffFilter(item, staffFilter)) return false;
+        if (!matchesStatusFilter(item, statusFilter)) return false;
         return true;
-    }), [filterRange,reportData.followups]);
+    }), [filterRange, reportData.followups, staffFilter, statusFilter]);
 
-    const filteredCalls = useMemo(() => reportData.callLogs.filter(i => inRange(getCallDate(i),filterRange)), [filterRange,reportData.callLogs]);
+    const filteredCalls = useMemo(() => reportData.callLogs.filter((item) => {
+        if (!inRange(getCallDate(item), filterRange)) return false;
+        if (!matchesStaffFilter(item, staffFilter)) return false;
+        const itemStatus = getItemStatus(item);
+        if (statusFilter !== ALL_STATUS && itemStatus && itemStatus !== statusFilter) return false;
+        return true;
+    }), [filterRange, reportData.callLogs, staffFilter, statusFilter]);
 
     const leadM = useMemo(() => {
         const counts = filteredEnq.reduce((a,i)=>{const k=i?.status||"New";a[k]=(a[k]||0)+1;return a;},{});
-        return { total:filteredEnq.length, new:counts.New||0, qualified:counts.Interested||0, lost:counts["Not Interested"]||0, converted:counts.Converted||0, counts };
+        const chartData = [
+            { label: "New", value: counts.New || 0, color: C.amber },
+            { label: "Connected", value: counts.Contacted || 0, color: C.sky },
+            { label: "Followup", value: counts.Interested || 0, color: C.violet },
+            { label: "Sales", value: counts.Converted || 0, color: C.emerald },
+            { label: "Lost", value: (counts["Not Interested"] || 0) + (counts.Closed || 0), color: C.rose },
+        ];
+        return {
+            total: filteredEnq.length,
+            new: counts.New || 0,
+            connected: counts.Contacted || 0,
+            followup: counts.Interested || 0,
+            qualified: counts.Interested || 0,
+            lost: (counts["Not Interested"] || 0) + (counts.Closed || 0),
+            converted: counts.Converted || 0,
+            counts,
+            chartData,
+        };
     },[filteredEnq]);
 
-    const salesPerf = useMemo(() => {
+    const staffPerf = useMemo(() => {
         const map={};
-        filteredFups.forEach(i=>{const n=i?.staffName||"Unassigned";if(!map[n])map[n]={name:n,leads:0,followups:0,converted:0};map[n].followups++;if(i?.enqId?.status==="Converted")map[n].converted++;});
-        filteredEnq.forEach(i=>{const n=i?.assignedTo?.name||"Unassigned";if(!map[n])map[n]={name:n,leads:0,followups:0,converted:0};map[n].leads++;});
-        return Object.values(map).sort((a,b)=>b.converted-a.converted).slice(0,6);
+        filteredEnq.forEach(i=>{
+            const n=getStaffName(i);
+            if(!map[n]) map[n]={name:n,enquiriesCreated:0,followupsDone:0,salesLeads:0};
+            map[n].enquiriesCreated++;
+            if (i?.status === "Converted") map[n].salesLeads++;
+        });
+        filteredFups.forEach(i=>{
+            const n=getStaffName(i);
+            if(!map[n]) map[n]={name:n,enquiriesCreated:0,followupsDone:0,salesLeads:0};
+            map[n].followupsDone++;
+        });
+        return Object.values(map).sort((a,b)=>{
+            if (b.salesLeads !== a.salesLeads) return b.salesLeads - a.salesLeads;
+            if (b.enquiriesCreated !== a.enquiriesCreated) return b.enquiriesCreated - a.enquiriesCreated;
+            return b.followupsDone - a.followupsDone;
+        });
     },[filteredEnq,filteredFups]);
 
     const revenueM = useMemo(() => {
-        const convertedEnquiries = reportData.enquiries.filter(i => i?.status === "Converted");
+        const convertedEnquiries = filteredEnq.filter(i => i?.status === "Converted");
         const total = convertedEnquiries.reduce((s, i) => s + Number(i?.cost || 0), 0);
-        const now = new Date();
-        const month = convertedEnquiries
+        const anchorDate = safeDate(toDate) || safeDate(fromDate) || new Date();
+        const month = reportData.enquiries
             .filter(i => {
                 const d = safeDate(getEnqDate(i));
-                return d && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                return d
+                    && i?.status === "Converted"
+                    && matchesStaffFilter(i, staffFilter)
+                    && matchesStatusFilter(i, statusFilter)
+                    && d.getMonth() === anchorDate.getMonth()
+                    && d.getFullYear() === anchorDate.getFullYear();
             })
             .reduce((s, i) => s + Number(i?.cost || 0), 0);
-        const today = filteredEnq
+        const today = reportData.enquiries
             .filter(i => i?.status === "Converted")
+            .filter(i => matchesStaffFilter(i, staffFilter))
+            .filter(i => matchesStatusFilter(i, statusFilter))
+            .filter(i => inRange(getEnqDate(i), toDayRange(toDate)))
             .reduce((s, i) => s + Number(i?.cost || 0), 0);
         return { total, month, today };
-    },[filteredEnq, reportData.enquiries]);
+    }, [filteredEnq, reportData.enquiries, fromDate, toDate, staffFilter, statusFilter]);
 
-    const exportReport = async () => {
+    const exportReport = async (format = "excel") => {
         try {
-            await Share.share({title:"CRM Report", message:[`CRM Report - ${formatDayLabel(selectedDate)}`,`Leads: ${leadM.total}`,`Sales: ${leadM.converted}`,`Revenue: ${fmt(revenueM.total)}`].join("\n")});
-        } catch(e){console.error(e);}
+            const available = await Sharing.isAvailableAsync();
+            const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+            const exportDate = toIsoDate(new Date());
+            if (!baseDir) throw new Error("Export directory not available");
+
+            const summaryRows = [
+                ["Report", "Leads Report"],
+                ["Generated On", formatDayLabel(new Date())],
+                ["Date Range", rangeLabel],
+                ["Range Value", rangeLabel],
+                ["Staff Filter", staffFilter],
+                ["Status Filter", statusFilter === ALL_STATUS ? ALL_STATUS : displayStatusLabel(statusFilter)],
+                ["Leads", String(leadM.total)],
+                ["Sales", String(leadM.converted)],
+                ["Interested", String(leadM.qualified)],
+                ["Revenue", String(revenueM.total || 0)],
+                ["Follow Ups", String(filteredFups.length)],
+                ["Calls", String(filteredCalls.length)],
+            ];
+            const leadRows = filteredEnq.map((item) => ({
+                EnquiryNo: item?.enqNo || "-",
+                Name: item?.name || "-",
+                Mobile: item?.mobile || "-",
+                Status: displayStatusLabel(item?.status || "New"),
+                Staff: getStaffName(item),
+                Product: item?.product || "-",
+                Source: item?.source || "-",
+                Date: formatShortDate(getEnqDate(item)),
+                Cost: Number(item?.cost || 0),
+            }));
+            const followupRows = filteredFups.map((item) => ({
+                EnquiryNo: item?.enqNo || item?.enqId?.enqNo || "-",
+                Name: item?.name || item?.enqId?.name || "-",
+                Mobile: item?.mobile || item?.enqId?.mobile || "-",
+                Status: displayStatusLabel(getItemStatus(item) || "-"),
+                Staff: getStaffName(item),
+                ScheduledDate: formatShortDate(getFupDate(item)),
+                Remarks: item?.remarks || item?.note || "-",
+                NextAction: item?.nextAction || item?.activityType || "-",
+            }));
+            const teamRows = staffPerf.map((item) => ({
+                "Staff Name": item?.name || "Unassigned",
+                "Enquiries Created": item?.enquiriesCreated || 0,
+                "Followups Done": item?.followupsDone || 0,
+                "Sales Leads": item?.salesLeads || 0,
+            }));
+            const callRows = filteredCalls.map((item) => ({
+                Name: item?.name || item?.customerName || "-",
+                Mobile: item?.mobile || item?.phoneNumber || item?.number || "-",
+                Staff: getStaffName(item),
+                Status: displayStatusLabel(getItemStatus(item) || "-"),
+                Date: formatShortDate(getCallDate(item)),
+                Duration: item?.duration || item?.callDuration || "-",
+                Direction: item?.direction || item?.callType || "-",
+            }));
+
+            if (format === "csv") {
+                const csvEscape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+                const csvText = [
+                    summaryRows.map((row) => row.map(csvEscape).join(",")).join("\n"),
+                    "",
+                    ["Enquiry No", "Name", "Mobile", "Status", "Staff", "Product", "Source", "Date", "Cost"].map(csvEscape).join(","),
+                    ...leadRows.map((row) => [
+                        row.EnquiryNo,
+                        row.Name,
+                        row.Mobile,
+                        row.Status,
+                        row.Staff,
+                        row.Product,
+                        row.Source,
+                        row.Date,
+                        row.Cost,
+                    ].map(csvEscape).join(",")),
+                ].join("\n");
+                const csvUri = `${baseDir}report-leads-${exportDate}.csv`;
+                await FileSystem.writeAsStringAsync(csvUri, csvText, {
+                    encoding: FileSystem.EncodingType.UTF8,
+                });
+                if (available) {
+                    await Sharing.shareAsync(csvUri, {
+                        mimeType: "text/csv",
+                        dialogTitle: "Export report CSV",
+                        UTI: "public.comma-separated-values-text",
+                    });
+                } else {
+                    Alert.alert("Export Ready", `CSV saved at:\n${csvUri}`);
+                }
+                return;
+            }
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summaryRows), "Summary");
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(leadRows), "Leads");
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(followupRows), "FollowUps");
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teamRows), "Staff Performance");
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(callRows), "Calls");
+
+            const workbookBase64 = XLSX.write(workbook, { bookType: "xlsx", type: "base64" });
+            const fileName = `report-leads-${exportDate}.xlsx`;
+            const savedFile = await saveExportToDevice({
+                fileName,
+                mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                base64Content: workbookBase64,
+            });
+
+            if (savedFile.downloaded) {
+                Alert.alert("Download Complete", `${fileName} saved successfully.`);
+            } else if (available) {
+                await Sharing.shareAsync(savedFile.uri, {
+                    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    dialogTitle: "Download report Excel",
+                    UTI: "org.openxmlformats.spreadsheetml.sheet",
+                });
+            } else {
+                Alert.alert("Export Ready", `Excel saved at:\n${savedFile.uri}`);
+            }
+        } catch(e){
+            console.error(e);
+            Alert.alert("Export Failed", e?.message || "Unable to export report");
+        }
     };
 
     return (
         <SafeAreaView style={st.container} edges={["top"]}>
             <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+            <AppSideMenu
+                visible={menuVisible}
+                onClose={() => setMenuVisible(false)}
+                navigation={navigation}
+                user={user}
+                onLogout={logout}
+                activeRouteName="Report"
+                resolveImageUrl={(value) => value}
+            />
+
+            <View style={[st.topHeader, { paddingTop: insets.top > 0 ? 8 : 14 }]}>
+                <TouchableOpacity
+                    style={st.topHeaderBtn}
+                    onPress={() => setMenuVisible(true)}
+                    activeOpacity={0.85}>
+                    <Ionicons name="menu" size={20} color={C.text} />
+                </TouchableOpacity>
+                <Text style={st.topHeaderTitle}>Reports</Text>
+                <View style={st.topHeaderRight}>
+                    <TouchableOpacity
+                        style={st.exportHeaderBtn}
+                        onPress={() => setExportMenuVisible((prev) => !prev)}
+                        activeOpacity={0.85}>
+                        <Ionicons name="download-outline" size={15} color={C.gold} />
+                        <Text style={st.exportHeaderText}>Export</Text>
+                    </TouchableOpacity>
+                    {exportMenuVisible ? (
+                        <View style={st.exportMenu}>
+                            <TouchableOpacity
+                                style={st.exportMenuItem}
+                                onPress={() => {
+                                    setExportMenuVisible(false);
+                                    exportReport("excel");
+                                }}
+                                activeOpacity={0.8}>
+                                <Ionicons name="grid-outline" size={14} color={C.text} />
+                                <Text style={st.exportMenuText}>Download Excel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[st.exportMenuItem, st.exportMenuItemLast]}
+                                onPress={() => {
+                                    setExportMenuVisible(false);
+                                    exportReport("csv");
+                                }}
+                                activeOpacity={0.8}>
+                                <Ionicons name="document-text-outline" size={14} color={C.text} />
+                                <Text style={st.exportMenuText}>Export CSV</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : null}
+                </View>
+            </View>
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[st.scroll, {paddingTop: insets.top > 0 ? 4 : 12}]}>
 
@@ -361,12 +775,8 @@ export default function ReportScreen() {
                                     <Text style={st.heroPillText}>CRM Analytics</Text>
                                 </View>
                                 <Text style={st.heroTitle}>Reports</Text>
-                                <Text style={st.heroSub}>{formatDayLabel(selectedDate)} - {filteredEnq.length} leads</Text>
+                                <Text style={st.heroSub}>{rangeLabel} - {filteredEnq.length} leads</Text>
                             </View>
-                            <TouchableOpacity style={st.exportBtn} onPress={exportReport} activeOpacity={0.8}>
-                                <Ionicons name="share-social-outline" size={14} color="#FFF" />
-                                <Text style={st.exportBtnText}>Export</Text>
-                            </TouchableOpacity>
                         </View>
 
                         {/* 4-KPI strip */}
@@ -394,42 +804,123 @@ export default function ReportScreen() {
                     <Card>
                         <View style={st.filterCardTop}>
                             <Ionicons name="calendar-outline" size={15} color={C.gold} />
-                            <Text style={st.filterCardTitle}>Daily Report</Text>
+                            <Text style={st.filterCardTitle}>Report Filters</Text>
                         </View>
-                        <View style={st.dayNav}>
-                            <TouchableOpacity
-                                style={st.dayNavBtn}
-                                onPress={() => setSelectedDate((prev) => shiftIsoDate(prev, -1))}
-                                activeOpacity={0.8}>
-                                <Ionicons name="chevron-back" size={16} color={C.text} />
-                            </TouchableOpacity>
-                            <View style={st.dayNavCenter}>
-                                <Text style={st.dayNavLabel}>Selected Day</Text>
-                                <Text style={st.dayNavValue}>{formatDayLabel(selectedDate)}</Text>
+                        <View style={st.rangeSummary}>
+                            <View style={st.rangeSummaryMain}>
+                                <Text style={st.rangeSummaryLabel}>Applied Range</Text>
+                                <Text style={st.rangeSummaryValue}>{rangeLabel}</Text>
                             </View>
-                            <TouchableOpacity
-                                style={st.dayNavBtn}
-                                onPress={() => setSelectedDate((prev) => shiftIsoDate(prev, 1))}
-                                activeOpacity={0.8}>
-                                <Ionicons name="chevron-forward" size={16} color={C.text} />
-                            </TouchableOpacity>
+                            {hasPendingDateChanges ? (
+                                <View style={st.pendingBadge}>
+                                    <Text style={st.pendingBadgeText}>Pending changes</Text>
+                                </View>
+                            ) : null}
                         </View>
-                        <TouchableOpacity
-                            style={st.calendarTrigger}
-                            onPress={() => setCalendarVisible(true)}
-                            activeOpacity={0.85}>
-                            <Ionicons name="calendar-clear-outline" size={16} color={C.gold} />
-                            <Text style={st.calendarTriggerText}>Open Calendar</Text>
-                        </TouchableOpacity>
                         <View style={st.dayActions}>
                             <TouchableOpacity
-                                style={st.todayBtn}
-                                onPress={() => setSelectedDate(toIsoDate(new Date()))}
+                                style={[st.todayBtn, activeQuickRange === "today" && st.quickRangeBtnActive]}
+                                onPress={() => {
+                                    setQuickRange("today");
+                                }}
                                 activeOpacity={0.8}>
-                                <Ionicons name="flash-outline" size={14} color={C.gold} />
-                                <Text style={st.todayBtnText}>Today</Text>
+                                <Ionicons name="flash-outline" size={14} color={activeQuickRange === "today" ? "#FFFFFF" : C.gold} />
+                                <Text style={[st.todayBtnText, activeQuickRange === "today" && st.quickRangeBtnTextActive]}>Today</Text>
                             </TouchableOpacity>
-                            <Text style={st.dayHint}>All report cards update for this selected day.</Text>
+                            <TouchableOpacity
+                                style={[st.quickRangeBtn, activeQuickRange === "week" && st.quickRangeBtnActive]}
+                                onPress={() => setQuickRange("week")}
+                                activeOpacity={0.8}>
+                                <Text style={[st.quickRangeBtnText, activeQuickRange === "week" && st.quickRangeBtnTextActive]}>Last 7 Days</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[st.quickRangeBtn, activeQuickRange === "month" && st.quickRangeBtnActive]}
+                                onPress={() => setQuickRange("month")}
+                                activeOpacity={0.8}>
+                                <Text style={[st.quickRangeBtnText, activeQuickRange === "month" && st.quickRangeBtnTextActive]}>This Month</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <View style={st.filterGroup}>
+                            <View style={st.dateRow}>
+                                <View style={st.dateWrap}>
+                                    <Text style={st.dateLabel}>From Date</Text>
+                                    <TouchableOpacity
+                                        style={st.dateInput}
+                                        onPress={() => {
+                                            setCalendarTarget("from");
+                                            setSelectedDate(draftFromDate);
+                                            setCalendarVisible(true);
+                                        }}
+                                        activeOpacity={0.85}>
+                                        <Text style={st.dateInputText}>{formatShortDate(draftFromDate)}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                                <View style={st.dateWrap}>
+                                    <Text style={st.dateLabel}>To Date</Text>
+                                    <TouchableOpacity
+                                        style={st.dateInput}
+                                        onPress={() => {
+                                            setCalendarTarget("to");
+                                            setSelectedDate(draftToDate);
+                                            setCalendarVisible(true);
+                                        }}
+                                        activeOpacity={0.85}>
+                                        <Text style={st.dateInputText}>{formatShortDate(draftToDate)}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
+                            <TouchableOpacity
+                                style={st.applyFilterBtn}
+                                onPress={applyDateRange}
+                                activeOpacity={0.85}>
+                                <Ionicons name="filter-outline" size={15} color="#FFFFFF" />
+                                <Text style={st.applyFilterText}>Apply Filter</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <View style={st.filterGrid}>
+                            <View style={st.filterGroup}>
+                                <FilterPill
+                                    label="Staff"
+                                    value={staffFilter}
+                                    icon="person-outline"
+                                    accent={C.sky}
+                                    isOpen={openFilterMenu === "staff"}
+                                    onPress={() => setOpenFilterMenu((prev) => prev === "staff" ? null : "staff")}
+                                />
+                                {openFilterMenu === "staff" ? (
+                                    <FilterDropdownMenu
+                                        options={staffOptions}
+                                        selectedValue={staffFilter}
+                                        onSelect={(option) => {
+                                            setStaffFilter(option);
+                                            setOpenFilterMenu(null);
+                                        }}
+                                        accent={C.sky}
+                                    />
+                                ) : null}
+                            </View>
+                            <View style={st.filterGroup}>
+                                <FilterPill
+                                    label="Status"
+                                    value={statusFilter === ALL_STATUS ? ALL_STATUS : displayStatusLabel(statusFilter)}
+                                    icon="git-branch-outline"
+                                    accent={C.emerald}
+                                    isOpen={openFilterMenu === "status"}
+                                    onPress={() => setOpenFilterMenu((prev) => prev === "status" ? null : "status")}
+                                />
+                                {openFilterMenu === "status" ? (
+                                    <FilterDropdownMenu
+                                        options={statusOptions}
+                                        selectedValue={statusFilter}
+                                        getOptionLabel={(option) => option === ALL_STATUS ? ALL_STATUS : (option === "Contacted" ? "Connected" : displayStatusLabel(option))}
+                                        onSelect={(option) => {
+                                            setStatusFilter(option);
+                                            setOpenFilterMenu(null);
+                                        }}
+                                        accent={C.emerald}
+                                    />
+                                ) : null}
+                            </View>
                         </View>
                     </Card>
                 </FadeIn>
@@ -449,7 +940,9 @@ export default function ReportScreen() {
                             style={st.calendarModalCard}>
                             <View style={st.calendarModalHeader}>
                                 <View>
-                                    <Text style={st.calendarModalTitle}>Select Report Date</Text>
+                                    <Text style={st.calendarModalTitle}>
+                                        {calendarTarget === "from" ? "Select From Date" : "Select To Date"}
+                                    </Text>
                                     <Text style={st.calendarModalSub}>{formatDayLabel(selectedDate)}</Text>
                                 </View>
                                 <TouchableOpacity
@@ -464,11 +957,16 @@ export default function ReportScreen() {
                                 onDayPress={(day) => {
                                     if (day?.dateString) {
                                         setSelectedDate(day.dateString);
+                                        if (calendarTarget === "from") {
+                                            setDraftFromDate(day.dateString);
+                                        } else {
+                                            setDraftToDate(day.dateString);
+                                        }
                                         setCalendarVisible(false);
                                     }
                                 }}
                                 markedDates={{
-                                    [selectedDate]: {
+                                    [calendarTarget === "from" ? draftFromDate : draftToDate]: {
                                         selected: true,
                                         selectedColor: C.gold,
                                         selectedTextColor: "#FFFFFF",
@@ -524,25 +1022,11 @@ export default function ReportScreen() {
                         <FadeIn delay={100}>
                             <Card>
                                 <CardHeader title="Lead Overview" icon="people-outline" accent={C.sky} />
+                                <Text style={st.subHeading}>Lead Status Overview</Text>
                                 <View style={st.donutRow}>
-                                    <DonutChart
-                                        size={130}
-                                        strokeWidth={20}
-                                        centerLabel="LEADS"
-                                        data={[
-                                            {label:"New",       value:leadM.new,       color:C.amber},
-                                            {label:"Interested",value:leadM.qualified, color:C.sky},
-                                            {label:"Lost",      value:leadM.lost,      color:C.rose},
-                                            {label:"Sales", value:leadM.converted, color:C.emerald},
-                                        ]}
-                                    />
+                                    <LeadPieChart size={162} data={leadM.chartData} />
                                     <View style={st.donutLegend}>
-                                        {[
-                                            {label:"New",       value:leadM.new,       color:C.amber},
-                                            {label:"Interested",value:leadM.qualified, color:C.sky},
-                                            {label:"Lost",      value:leadM.lost,      color:C.rose},
-                                            {label:"Sales", value:leadM.converted, color:C.emerald},
-                                        ].map(item => (
+                                        {leadM.chartData.map(item => (
                                             <View
                                                 key={item.label}
                                                 style={[st.legendRow, { borderColor:`${item.color}20`, backgroundColor:`${item.color}08` }]}>
@@ -571,15 +1055,15 @@ export default function ReportScreen() {
                         {/* â”€â”€ TEAM PERFORMANCE â€” colored table â”€â”€ */}
                         <FadeIn delay={140}>
                             <Card>
-                                <CardHeader title="Team Performance" icon="podium-outline" accent={C.rose} />
+                                <CardHeader title="Staff Performance Report" icon="podium-outline" accent={C.rose} />
                                 <View style={st.tableHead}>
-                                    {["Person","Leads","F-ups","Won"].map((h,i)=>(
+                                    {["Staff Name","Enquiries Created","Followups Done","Sales Leads"].map((h,i)=>(
                                         <Text key={h} style={[st.thCell, i===0&&st.thNameCell]}>{h}</Text>
                                     ))}
                                 </View>
-                                {salesPerf.length===0
+                                {staffPerf.length===0
                                     ? <Text style={st.emptyNote}>No performance data</Text>
-                                    : salesPerf.map((item,idx)=>(
+                                    : staffPerf.map((item,idx)=>(
                                         <View key={item.name} style={[st.tableRow, idx%2===1&&{backgroundColor:`${C.gold}08`}]}>
                                             <View style={[st.thNameCell,{flexDirection:"row",alignItems:"center",gap:8}]}>
                                                 <View style={[st.teamAvatar,{backgroundColor:`${CHART_COLORS[idx%CHART_COLORS.length]}22`}]}>
@@ -589,11 +1073,11 @@ export default function ReportScreen() {
                                                 </View>
                                                 <Text style={st.tdName} numberOfLines={1}>{item.name}</Text>
                                             </View>
-                                            <Text style={st.tdCell}>{item.leads}</Text>
-                                            <Text style={st.tdCell}>{item.followups}</Text>
+                                            <Text style={st.tdCell}>{item.enquiriesCreated}</Text>
+                                            <Text style={st.tdCell}>{item.followupsDone}</Text>
                                             <View style={[st.tdCell,{alignItems:"center"}]}>
-                                                <View style={[st.wonBadge,{backgroundColor:item.converted>0?C.emeraldLight:C.border}]}>
-                                                    <Text style={[st.wonText,{color:item.converted>0?C.emerald:C.textMuted}]}>{item.converted}</Text>
+                                                <View style={[st.wonBadge,{backgroundColor:item.salesLeads>0?C.emeraldLight:C.border}]}>
+                                                    <Text style={[st.wonText,{color:item.salesLeads>0?C.emerald:C.textMuted}]}>{item.salesLeads}</Text>
                                                 </View>
                                             </View>
                                         </View>
@@ -647,6 +1131,88 @@ export default function ReportScreen() {
 const st = StyleSheet.create({
     container: { flex:1, backgroundColor:C.bg },
     scroll: { paddingHorizontal:14, paddingBottom:40, gap:14 },
+    topHeader: {
+        backgroundColor: C.surface,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: 14,
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: C.border,
+        zIndex: 20,
+    },
+    topHeaderBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: C.border,
+        backgroundColor: C.surfaceWarm,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    topHeaderTitle: {
+        flex: 1,
+        marginLeft: 12,
+        fontSize: 20,
+        fontWeight: "800",
+        color: C.text,
+        letterSpacing: -0.4,
+    },
+    topHeaderRight: {
+        position: "relative",
+        alignItems: "flex-end",
+    },
+    exportHeaderBtn: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: `${C.gold}35`,
+        backgroundColor: `${C.gold}10`,
+        paddingHorizontal: 12,
+        height: 40,
+    },
+    exportHeaderText: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: C.gold,
+    },
+    exportMenu: {
+        position: "absolute",
+        top: 46,
+        right: 0,
+        width: 154,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: C.border,
+        backgroundColor: C.surface,
+        overflow: "hidden",
+        shadowColor: "#000",
+        shadowOpacity: 0.12,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 8,
+    },
+    exportMenuItem: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 11,
+        borderBottomWidth: 1,
+        borderBottomColor: C.border,
+    },
+    exportMenuItemLast: {
+        borderBottomWidth: 0,
+    },
+    exportMenuText: {
+        fontSize: 13,
+        fontWeight: "600",
+        color: C.text,
+    },
 
     // Hero
     hero: { borderRadius:24, padding:20, gap:14, borderWidth:1, borderColor:C.border, overflow:"hidden", position:"relative" },
@@ -658,8 +1224,6 @@ const st = StyleSheet.create({
     heroPillText: { fontSize:10, fontWeight:"700", color:C.gold, letterSpacing:1.3, textTransform:"uppercase" },
     heroTitle: { fontSize:36, fontWeight:"800", color:C.text, letterSpacing:-0.8 },
     heroSub: { fontSize:13, color:C.textSec, marginTop:2 },
-    exportBtn: { flexDirection:"row", alignItems:"center", gap:6, backgroundColor:C.gold, paddingHorizontal:13, paddingVertical:8, borderRadius:20 },
-    exportBtnText: { fontSize:12, fontWeight:"700", color:"#FFF" },
     heroKpis: { flexDirection:"row", backgroundColor:"rgba(255,255,255,0.75)", borderRadius:18, borderWidth:1, borderColor:C.border, overflow:"hidden" },
     heroKpi: { flex:1, alignItems:"center", paddingVertical:11, gap:3 },
     heroKpiBorder: { borderRightWidth:1, borderRightColor:C.border },
@@ -670,6 +1234,30 @@ const st = StyleSheet.create({
     // Filters
     filterCardTop: { flexDirection:"row", alignItems:"center", gap:8 },
     filterCardTitle: { fontSize:16, fontWeight:"700", color:C.text },
+    rangeSummary: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: `${C.gold}22`,
+        backgroundColor: `${C.gold}0D`,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+    },
+    rangeSummaryMain: { flex: 1 },
+    rangeSummaryLabel: { fontSize: 11, fontWeight: "700", color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.6 },
+    rangeSummaryValue: { fontSize: 15, fontWeight: "800", color: C.text, marginTop: 4 },
+    pendingBadge: {
+        borderRadius: 999,
+        backgroundColor: `${C.rose}12`,
+        borderWidth: 1,
+        borderColor: `${C.rose}28`,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+    },
+    pendingBadgeText: { fontSize: 11, fontWeight: "700", color: C.rose },
     dayNav: { flexDirection:"row", alignItems:"center", gap:12 },
     dayNavBtn: {
         width: 40,
@@ -743,7 +1331,7 @@ const st = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
-    dayActions: { flexDirection:"row", alignItems:"center", justifyContent:"space-between", gap:12 },
+    dayActions: { flexDirection:"row", alignItems:"center", gap:10, flexWrap:"wrap" },
     todayBtn: {
         flexDirection:"row",
         alignItems:"center",
@@ -755,8 +1343,21 @@ const st = StyleSheet.create({
         paddingHorizontal: 12,
         paddingVertical: 10,
     },
+    quickRangeBtn: {
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: `${C.sky}28`,
+        backgroundColor: `${C.sky}0C`,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+    },
+    quickRangeBtnText: { fontSize: 12, fontWeight: "700", color: C.sky },
     todayBtnText: { fontSize:13, fontWeight:"700", color:C.gold },
-    dayHint: { flex:1, fontSize:12, color:C.textSec, textAlign:"right" },
+    quickRangeBtnActive: {
+        backgroundColor: C.sky,
+        borderColor: C.sky,
+    },
+    quickRangeBtnTextActive: { color: "#FFFFFF" },
     filterGrid: { gap:10 },
     filterGroup: { gap:6 },
     filterPill: { flexDirection:"row", alignItems:"center", gap:10, borderRadius:14, borderWidth:1, paddingHorizontal:12, paddingVertical:10 },
@@ -768,7 +1369,20 @@ const st = StyleSheet.create({
     dateRow: { flexDirection:"row", gap:10 },
     dateWrap: { flex:1, gap:4 },
     dateLabel: { fontSize:11, fontWeight:"700", color:C.textMuted, textTransform:"uppercase" },
-    dateInput: { backgroundColor:C.bg, borderRadius:12, borderWidth:1, borderColor:C.border, paddingHorizontal:12, paddingVertical:10, color:C.text, fontSize:14 },
+    dateInput: { backgroundColor:C.bg, borderRadius:12, borderWidth:1, borderColor:C.border, paddingHorizontal:12, paddingVertical:10 },
+    dateInputText: { color:C.text, fontSize:14, fontWeight:"700" },
+    applyFilterBtn: {
+        marginTop: 10,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        backgroundColor: C.gold,
+        borderRadius: 14,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+    },
+    applyFilterText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
 
     // Card base
     card: { backgroundColor:C.surface, borderRadius:22, borderWidth:1, borderColor:C.border, padding:16, gap:14, shadowColor:"#A09070", shadowOffset:{width:0,height:3}, shadowOpacity:0.07, shadowRadius:10, elevation:2 },
@@ -781,6 +1395,25 @@ const st = StyleSheet.create({
     // Lead overview
     donutRow: { flexDirection:"row", alignItems:"center", gap:18, paddingVertical:4 },
     donutLegend: { flex:1, gap:10 },
+    pieCenterLabel: {
+        position: "absolute",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "rgba(255,255,255,0.86)",
+        width: 74,
+        height: 74,
+        borderRadius: 37,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    pieCenterValue: { fontSize: 20, fontWeight: "800", color: C.text },
+    pieCenterText: {
+        fontSize: 9,
+        fontWeight: "700",
+        color: C.textMuted,
+        letterSpacing: 0.7,
+        marginTop: 2,
+    },
     legendRow: {
         flexDirection:"row",
         alignItems:"center",

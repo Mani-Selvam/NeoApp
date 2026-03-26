@@ -55,6 +55,26 @@ export const initSocket = (userId) => {
         DeviceEventEmitter.emit("SUBSCRIPTION_UPDATED", payload);
     });
 
+    socket.on("PROFILE_UPDATED", (payload) => {
+        console.log("Profile update via socket:", payload);
+        DeviceEventEmitter.emit("PROFILE_UPDATED", payload);
+    });
+
+    socket.on("ENQUIRY_CREATED", (payload) => {
+        console.log("Enquiry created via socket:", payload);
+        DeviceEventEmitter.emit("ENQUIRY_CREATED", payload);
+    });
+
+    socket.on("ENQUIRY_UPDATED", (payload) => {
+        console.log("Enquiry updated via socket:", payload);
+        DeviceEventEmitter.emit("ENQUIRY_UPDATED", payload);
+    });
+
+    socket.on("FOLLOWUP_CHANGED", (payload) => {
+        console.log("Follow-up changed via socket:", payload);
+        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", payload);
+    });
+
     socket.on("disconnect", () => {
         console.log("Socket disconnected");
     });

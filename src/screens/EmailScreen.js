@@ -206,6 +206,13 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
         route?.params?.enquiryId || route?.params?._id || null;
     const initialLeadName =
         route?.params?.leadName || route?.params?.name || "";
+    const initialProduct =
+        route?.params?.product || route?.params?.productName || "";
+    const initialDate =
+        route?.params?.date ||
+        route?.params?.meetingDate ||
+        route?.params?.followUpDate ||
+        "";
 
     const [tab, setTab] = useState("compose");
     const [loading, setLoading] = useState(false);
@@ -419,12 +426,14 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                 message: String(message),
                 enquiryId: composeEnquiryIdRef.current,
                 templateId,
+                date: initialDate,
+                product: initialProduct,
                 trackOpen,
                 trackLinks,
                 file,
             });
             if (!res?.ok) throw new Error(res?.message || "Send failed");
-            Alert.alert("✓ Sent", "Your email was delivered.");
+            Alert.alert("✓ Sent", "Email was accepted by the server.");
             setFile(null);
             setTemplateId(null);
             setSubject("");
@@ -1108,7 +1117,13 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                     </TouchableOpacity>
                     <FlatList
                         data={templates}
-                        keyExtractor={(i) => String(i._id)}
+                        keyExtractor={(item, index) =>
+                            String(
+                                item?._id
+                                    ? `${item._id}-${item?.name || "template"}-${index}`
+                                    : `template-${index}`,
+                            )
+                        }
                         renderItem={renderTemplateRow}
                         contentContainerStyle={{
                             paddingBottom: 30 + (insets.bottom || 0),
@@ -1140,7 +1155,13 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                     style={{ flex: 1, paddingHorizontal: 18, paddingTop: 20 }}>
                     <FlatList
                         data={logs}
-                        keyExtractor={(i) => String(i._id)}
+                        keyExtractor={(item, index) =>
+                            String(
+                                item?._id
+                                    ? `${item._id}-${item?.to || "log"}-${index}`
+                                    : `log-${index}`,
+                            )
+                        }
                         renderItem={renderLogRow}
                         onEndReached={() => {
                             if (refreshing || loading || !logsHasMore) return;
@@ -1223,9 +1244,9 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                             contentContainerStyle={{ paddingBottom: 8 }}>
                             <View style={S.detailCard}>
                                 <Text style={S.detailLabel}>To</Text>
-                                <Text style={S.detailValue}>{selectedLog?.to || "â€“"}</Text>
+                                <Text style={S.detailValue}>{selectedLog?.to || "-"}</Text>
                                 <Text style={S.detailLabel}>Subject</Text>
-                                <Text style={S.detailValue}>{selectedLog?.subject || "â€“"}</Text>
+                                <Text style={S.detailValue}>{selectedLog?.subject || "-"}</Text>
                                 <Text style={S.detailLabel}>Sent At</Text>
                                 <Text style={S.detailValue}>
                                     {formatDateTime(
@@ -1234,23 +1255,23 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                                 </Text>
                                 <Text style={S.detailLabel}>Message ID</Text>
                                 <Text style={S.detailCode}>
-                                    {selectedLog?.messageId || "â€“"}
+                                    {selectedLog?.messageId || "-"}
                                 </Text>
                                 <Text style={S.detailLabel}>SMTP Response</Text>
                                 <Text style={S.detailCode}>
-                                    {selectedLog?.smtpResponse || "â€“"}
+                                    {selectedLog?.smtpResponse || "-"}
                                 </Text>
                                 <Text style={S.detailLabel}>Accepted</Text>
                                 <Text style={S.detailValue}>
                                     {(selectedLog?.acceptedRecipients || []).length
                                         ? selectedLog.acceptedRecipients.join(", ")
-                                        : "â€“"}
+                                        : "-"}
                                 </Text>
                                 <Text style={S.detailLabel}>Rejected</Text>
                                 <Text style={S.detailValue}>
                                     {(selectedLog?.rejectedRecipients || []).length
                                         ? selectedLog.rejectedRecipients.join(", ")
-                                        : "â€“"}
+                                        : "-"}
                                 </Text>
                                 <Text style={S.detailLabel}>Error</Text>
                                 <Text
@@ -1258,7 +1279,7 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                                         S.detailValue,
                                         selectedLog?.error ? { color: T.bad } : null,
                                     ]}>
-                                    {selectedLog?.error || "â€“"}
+                                    {selectedLog?.error || "-"}
                                 </Text>
                             </View>
                         </ScrollView>
@@ -1344,12 +1365,16 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                         !showAllTemplates ? (
                             <View style={{ marginBottom: 12 }}>
                                 <Text style={S.sectionLabel}>⚡ Most Used</Text>
-                                {mostUsedTemplates.map((item) => {
+                                {mostUsedTemplates.map((item, index) => {
                                     const u =
                                         templateUsage?.[String(item._id)] || {};
                                     return (
                                         <TouchableOpacity
-                                            key={String(item._id)}
+                                            key={String(
+                                                item?._id
+                                                    ? `${item._id}-${item?.name || "template"}-${index}`
+                                                    : `most-used-${index}`,
+                                            )}
                                             onPress={() =>
                                                 applySelectedTemplateToCompose(
                                                     item,
@@ -1396,7 +1421,13 @@ export default function EmailScreen({ navigation, route, embedded = false }) {
                                 </Text>
                                 <FlatList
                                     data={sortedTemplates}
-                                    keyExtractor={(i) => String(i._id)}
+                                    keyExtractor={(item, index) =>
+                                        String(
+                                            item?._id
+                                                ? `${item._id}-${item?.name || "template"}-${index}`
+                                                : `sorted-template-${index}`,
+                                        )
+                                    }
                                     renderItem={({ item }) => {
                                         const u =
                                             templateUsage?.[String(item._id)] ||

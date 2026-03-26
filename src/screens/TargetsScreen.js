@@ -547,10 +547,17 @@ export default function TargetsScreen({ navigation }) {
             {/* ── Header ── */}
             <View
                 style={{
-                    backgroundColor: C.ink,
+                    backgroundColor: "#FFFDF9",
                     paddingTop: 56,
                     paddingBottom: 20,
                     paddingHorizontal: 20,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#EFE7DA",
+                    shadowColor: "#D7C7AF",
+                    shadowOpacity: 0.12,
+                    shadowRadius: 14,
+                    shadowOffset: { width: 0, height: 5 },
+                    elevation: 4,
                 }}>
                 <View
                     style={{
@@ -564,13 +571,13 @@ export default function TargetsScreen({ navigation }) {
                             width: 40,
                             height: 40,
                             borderRadius: 12,
-                            backgroundColor: "rgba(255,255,255,0.1)",
+                            backgroundColor: "#FFFFFF",
                             justifyContent: "center",
                             alignItems: "center",
                             borderWidth: 1,
-                            borderColor: "rgba(255,255,255,0.15)",
+                            borderColor: "#E8DED0",
                         }}>
-                        <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+                        <Ionicons name="arrow-back" size={20} color={C.ink} />
                     </TouchableOpacity>
 
                     <View style={{ flex: 1, paddingHorizontal: 14 }}>
@@ -593,7 +600,7 @@ export default function TargetsScreen({ navigation }) {
                                 style={{
                                     color: C.goldBorder,
                                     fontSize: 10,
-                                    fontWeight: "700",
+                                    fontWeight: "800",
                                     letterSpacing: 2,
                                 }}>
                                 MONTHLY TARGETS
@@ -601,9 +608,9 @@ export default function TargetsScreen({ navigation }) {
                         </View>
                         <Text
                             style={{
-                                color: "#FFFFFF",
-                                fontSize: 20,
-                                fontWeight: "700",
+                                color: C.ink,
+                                fontSize: 21,
+                                fontWeight: "800",
                                 letterSpacing: -0.3,
                             }}>
                             {headerSubtitle}
@@ -622,9 +629,9 @@ export default function TargetsScreen({ navigation }) {
                                 paddingVertical: 9,
                                 paddingHorizontal: 14,
                                 borderRadius: 12,
-                                backgroundColor: "rgba(255,255,255,0.1)",
+                                backgroundColor: "#FFFFFF",
                                 borderWidth: 1,
-                                borderColor: "rgba(255,255,255,0.15)",
+                                borderColor: "#E8DED0",
                                 flexDirection: "row",
                                 alignItems: "center",
                                 gap: 6,
@@ -636,7 +643,7 @@ export default function TargetsScreen({ navigation }) {
                             />
                             <Text
                                 style={{
-                                    color: "#FFFFFF",
+                                    color: C.ink,
                                     fontWeight: "700",
                                     fontSize: 13,
                                 }}>
@@ -651,9 +658,9 @@ export default function TargetsScreen({ navigation }) {
                                     paddingVertical: 9,
                                     paddingHorizontal: 12,
                                     borderRadius: 12,
-                                    backgroundColor: "rgba(223,200,122,0.18)",
+                                    backgroundColor: "#FFF6DE",
                                     borderWidth: 1,
-                                    borderColor: "rgba(223,200,122,0.35)",
+                                    borderColor: "#E4CF90",
                                     flexDirection: "row",
                                     alignItems: "center",
                                     gap: 6,
@@ -669,7 +676,7 @@ export default function TargetsScreen({ navigation }) {
                                 />
                                 <Text
                                     style={{
-                                        color: "#FFFFFF",
+                                        color: C.goldText,
                                         fontWeight: "800",
                                         fontSize: 13,
                                     }}>
@@ -686,7 +693,7 @@ export default function TargetsScreen({ navigation }) {
                 style={{
                     height: 2,
                     backgroundColor: C.goldBorder,
-                    opacity: 0.6,
+                    opacity: 0.9,
                 }}
             />
 

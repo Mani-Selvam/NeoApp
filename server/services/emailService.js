@@ -5,6 +5,11 @@ const EmailSettings = require("../models/EmailSettings");
 const { decrypt } = require("../utils/crypto");
 
 const normalizeEmail = (value) => String(value || "").trim();
+const normalizeAddressForCompare = (value) => {
+    const raw = String(value || "").trim();
+    const match = raw.match(/<([^>]+)>/);
+    return normalizeEmail(match ? match[1] : raw).toLowerCase();
+};
 
 const isValidEmail = (value) => {
     const email = normalizeEmail(value);
@@ -82,17 +87,19 @@ const assertAcceptedRecipients = (result, recipient) => {
     const accepted = Array.isArray(result?.accepted) ? result.accepted : [];
     const rejected = Array.isArray(result?.rejected) ? result.rejected : [];
     const pending = Array.isArray(result?.pending) ? result.pending : [];
-    const expected = normalizeEmail(recipient);
+    const expected = normalizeAddressForCompare(recipient);
+    const acceptedNormalized = accepted.map(normalizeAddressForCompare).filter(Boolean);
+    const rejectedNormalized = rejected.map(normalizeAddressForCompare).filter(Boolean);
+    const pendingNormalized = pending.map(normalizeAddressForCompare).filter(Boolean);
 
-    if (accepted.length > 0 && accepted.includes(expected) && rejected.length === 0) {
+    if (acceptedNormalized.includes(expected) && !rejectedNormalized.includes(expected) && !pendingNormalized.includes(expected)) {
         return true;
     }
-
-    if (accepted.length > 0 && rejected.length === 0 && pending.length === 0) {
-        return true;
-    }
-
-    const rejectedList = rejected.length ? rejected.join(", ") : expected;
+    const rejectedList = rejectedNormalized.length
+        ? rejectedNormalized.join(", ")
+        : pendingNormalized.length
+            ? pendingNormalized.join(", ")
+            : expected;
     throw new Error(
         `Email was not accepted by the mail server for delivery${rejectedList ? `: ${rejectedList}` : ""}.`,
     );

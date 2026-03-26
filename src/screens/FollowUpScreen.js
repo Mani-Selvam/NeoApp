@@ -134,12 +134,15 @@ const STATUS_TABS = [
     color: C.violet,
   },
   {
-    value: "Missed",
-    label: "Missed",
-    icon: "alert-circle-outline",
-    color: C.danger,
+    value: "Sales",
+    label: "Sales",
+    icon: "cash-outline",
+    color: C.success,
   },
 ];
+
+const tabUsesExactDateFilter = (tab) =>
+  tab === "Today" || tab === "Missed" || tab === "Sales";
 
 // Detail tabs
 const DETAIL_TABS = [
@@ -731,9 +734,13 @@ function FollowUpEmailPanel({ enquiry }) {
                 style={DV.emailTemplateScroll}
                 contentContainerStyle={{ gap: 8 }}
               >
-                {templateOptions.map((item) => (
+                {templateOptions.map((item, index) => (
                   <TouchableOpacity
-                    key={String(item?._id || item?.name)}
+                    key={String(
+                      item?._id
+                        ? `${item._id}-${item?.name || "template"}-${index}`
+                        : `${item?.name || "template"}-${index}`,
+                    )}
                     onPress={() => applyTemplateToComposer(item)}
                     activeOpacity={0.8}
                     style={DV.emailTemplateRow}
@@ -819,7 +826,11 @@ function FollowUpEmailPanel({ enquiry }) {
         ) : (
           logs.map((item, index) => (
             <View
-              key={String(item?._id || `${item?.to || "mail"}-${index}`)}
+              key={String(
+                item?._id
+                  ? `${item._id}-${item?.to || "mail"}-${index}`
+                  : `${item?.to || "mail"}-${index}`,
+              )}
               style={[
                 DV.emailLogRow,
                 index === logs.length - 1 && { marginBottom: 0 },
@@ -862,6 +873,16 @@ const toMonthKey = (value) => {
   if (Number.isNaN(dt.getTime())) return "";
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
 };
+const getMonthDateRange = (value) => {
+  const dt = value ? new Date(value) : new Date();
+  if (Number.isNaN(dt.getTime())) return { dateFrom: "", dateTo: "" };
+  const start = new Date(dt.getFullYear(), dt.getMonth(), 1);
+  const end = new Date(dt.getFullYear(), dt.getMonth() + 1, 0);
+  return {
+    dateFrom: toIso(start),
+    dateTo: toIso(end),
+  };
+};
 const getFollowUpCalendarDate = (item) => {
   const raw =
     item?.nextFollowUpDate ||
@@ -890,6 +911,16 @@ const fmtDate = (v) => {
     ? v
     : d.toLocaleDateString(undefined, {
         day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+};
+const fmtMonthYear = (v) => {
+  if (!v) return "Select month";
+  const d = new Date(v);
+  return isNaN(d.getTime())
+    ? v
+    : d.toLocaleDateString(undefined, {
         month: "short",
         year: "numeric",
       });
@@ -1039,10 +1070,26 @@ const mapEnquiryToFollowUpCard = (item = {}) => ({
   product: item?.product || "General",
   image: item?.image || null,
   assignedTo: item?.assignedTo || null,
-  latestFollowUpDate: null,
-  nextFollowUpDate: null,
-  followUpDate: null,
-  date: null,
+  latestFollowUpDate:
+    item?.latestFollowUpDate ||
+    item?.selectedFollowUpDate ||
+    item?.nextFollowUpDate ||
+    item?.followUpDate ||
+    item?.date ||
+    null,
+  nextFollowUpDate:
+    item?.selectedFollowUpDate ||
+    item?.latestFollowUpDate ||
+    item?.nextFollowUpDate ||
+    item?.followUpDate ||
+    item?.date ||
+    null,
+  followUpDate: item?.followUpDate || item?.selectedFollowUpDate || null,
+  date:
+    item?.selectedFollowUpDate ||
+    item?.date ||
+    item?.latestFollowUpDate ||
+    null,
   activityTime:
     item?.latestFollowUpAt || item?.enquiryDateTime || item?.createdAt || null,
   createdAt: item?.createdAt || item?.enquiryDateTime || null,
@@ -1053,6 +1100,36 @@ const mapEnquiryToFollowUpCard = (item = {}) => ({
   requirements: "",
   isVirtualNew: true,
 });
+const getHistoryEditStatus = (item = {}) => {
+  const explicit = normalizeStatus(item?.enquiryStatus || item?.status || "");
+  if (
+    [
+      "New",
+      "Contacted",
+      "Interested",
+      "Not Interested",
+      "Converted",
+      "Closed",
+    ].includes(explicit)
+  ) {
+    return explicit;
+  }
+  const nextAction = String(item?.nextAction || "")
+    .trim()
+    .toLowerCase();
+  if (nextAction === "sales") return "Converted";
+  if (nextAction === "drop") return "Not Interested";
+  if (explicit === "Completed") return "Converted";
+  return "Contacted";
+};
+const getCalendarSummaryBucket = (item = {}) => {
+  const status = getHistoryEditStatus(item);
+  if (["New", "Contacted", "Interested"].includes(status)) return "followup";
+  if (status === "Converted") return "sales";
+  if (status === "Closed") return "drop";
+  if (status === "Not Interested") return "notInterested";
+  return "followup";
+};
 const toTs = (value) => {
   if (!value) return 0;
   const t = new Date(value).getTime();
@@ -1082,15 +1159,87 @@ const dedupeByLatestActivity = (items = []) => {
   }
   return Array.from(latestByKey.values());
 };
+const mergeUniqueFollowUpCards = (prevItems = [], nextItems = []) =>
+  dedupeByLatestActivity([...(prevItems || []), ...(nextItems || [])]);
 
-const getTabUniqueCount = async (tab, referenceDate = "") => {
-  const response = await followupService.getFollowUps(tab, 1, 500, referenceDate);
+const getTabUniqueCount = async (
+  tab,
+  referenceDate = "",
+  {
+    followUpParams = {},
+    includeNewEnquiries = false,
+    enquiryParams = {},
+    useEnquirySource = false,
+    allowedStatuses = [],
+  } = {},
+) => {
+  if (useEnquirySource) {
+    const enquiryResponse = await enquiryService.getAllEnquiries(
+      1,
+      500,
+      "",
+      "",
+      "",
+      referenceDate,
+    );
+    const enquiryItems = Array.isArray(enquiryResponse?.data)
+      ? enquiryResponse.data
+      : Array.isArray(enquiryResponse)
+        ? enquiryResponse
+        : [];
+    const allowedStatusSet = new Set(
+      allowedStatuses.map((status) => normalizeStatus(status)),
+    );
+    return dedupeByLatestActivity(
+      enquiryItems
+        .map(mapEnquiryToFollowUpCard)
+        .filter((item) =>
+          allowedStatusSet.size > 0
+            ? allowedStatusSet.has(normalizeStatus(item?.status))
+            : true,
+        ),
+    ).length;
+  }
+  const response = await followupService.getFollowUps(
+    tab,
+    1,
+    500,
+    referenceDate,
+    followUpParams,
+  );
   const rawItems = Array.isArray(response?.data)
     ? response.data
     : Array.isArray(response)
       ? response
       : [];
-  return dedupeByLatestActivity(rawItems.map(mapFollowUpItemToEnquiryCard)).length;
+  let items = rawItems.map(mapFollowUpItemToEnquiryCard);
+  if (tab === "All" && includeNewEnquiries) {
+    try {
+      const enquiryResponse = await enquiryService.getAllEnquiries(
+        1,
+        500,
+        "",
+        "New",
+        "",
+        "",
+        enquiryParams,
+      );
+      const enquiryItems = Array.isArray(enquiryResponse?.data)
+        ? enquiryResponse.data
+        : Array.isArray(enquiryResponse)
+          ? enquiryResponse
+          : [];
+      items = [
+        ...enquiryItems
+          .filter((item) => !item?.latestFollowUpDate)
+          .map(mapEnquiryToFollowUpCard),
+        ...items,
+      ];
+    } catch (_error) {
+      // Keep follow-up counts working even if enquiry lookup fails.
+    }
+  }
+  return dedupeByLatestActivity(items).length;
 };
 
 // ─── FollowUp List Card (left-swipe → details) ────────────────────────────────
@@ -1230,7 +1379,9 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                         { color: sCfg.color, fontSize: sc.f.xs },
                       ]}
                     >
-                      {norm === "Contacted" ? "Connected" : displayStatusLabel(norm)}
+                      {norm === "Contacted"
+                        ? "Connected"
+                        : displayStatusLabel(norm)}
                     </Text>
                   </View>
                 </View>
@@ -1461,6 +1612,7 @@ const DetailView = ({
   setEditNextTime,
   editAmount,
   setEditAmount,
+  editFollowUpId,
   isSavingEdit,
   showDatePicker,
   setTimePickerValue,
@@ -1470,6 +1622,8 @@ const DetailView = ({
   setEditTimeMeridian,
   timePickerValue,
   onSaveFollowUp,
+  onEditScheduledFollowUp,
+  onCancelScheduledEdit,
   onStartCall,
   sc,
   currentStatus,
@@ -1483,12 +1637,20 @@ const DetailView = ({
   const [showFollowUpForm, setShowFollowUpForm] = useState(false);
   const tabRef = useRef(0);
   const tabGestureLockedRef = useRef(false);
+  const followUpFormScrollRef = useRef(null);
 
   const norm = normalizeStatus(enquiry?.status);
   const sCfg = statusCfg(norm);
   const cols = avatarGrad(enquiry?.name);
   const statusOptions = useMemo(
-    () => ["New", "Contacted", "Interested", "Not Interested", "Converted", "Closed"],
+    () => [
+      "New",
+      "Contacted",
+      "Interested",
+      "Not Interested",
+      "Converted",
+      "Closed",
+    ],
     [],
   );
 
@@ -1672,7 +1834,9 @@ const DetailView = ({
               <View style={[DV.chip, { backgroundColor: sCfg.bg }]}>
                 <View style={[DV.chipDot, { backgroundColor: sCfg.color }]} />
                 <Text style={[DV.chipText, { color: sCfg.color }]}>
-                  {norm === "Contacted" ? "Connected" : displayStatusLabel(norm)}
+                  {norm === "Contacted"
+                    ? "Connected"
+                    : displayStatusLabel(norm)}
                 </Text>
               </View>
               {enquiry.source ? (
@@ -1779,7 +1943,9 @@ const DetailView = ({
                   },
                   {
                     label: "Status",
-                    value: displayStatusLabel(normalizeStatus(enquiry.status)) || "-",
+                    value:
+                      displayStatusLabel(normalizeStatus(enquiry.status)) ||
+                      "-",
                     icon: "flag-outline",
                   },
                   {
@@ -1816,10 +1982,11 @@ const DetailView = ({
 
           {/* ── TAB 2: WhatsApp ── */}
           {tabIdx === 2 && (
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, minHeight: 0 }}>
               <ChatScreen
                 key={`followup-whatsapp-${enquiry?._id || enquiry?.enqNo || enquiry?.mobile || "chat"}`}
                 embedded
+                manualKeyboardLift={Platform.OS === "android"}
                 route={{ params: { enquiry } }}
               />
             </View>
@@ -1844,9 +2011,12 @@ const DetailView = ({
             <KeyboardAvoidingView
               style={{ flex: 1 }}
               behavior={Platform.OS === "ios" ? "padding" : "height"}
-              keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 96 : 24}
+              keyboardVerticalOffset={
+                Platform.OS === "ios" ? insets.top + 96 : 24
+              }
             >
               <ScrollView
+                ref={followUpFormScrollRef}
                 style={{ flex: 1 }}
                 contentContainerStyle={{
                   padding: 14,
@@ -1855,351 +2025,409 @@ const DetailView = ({
                 }}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+                keyboardDismissMode={
+                  Platform.OS === "ios" ? "interactive" : "on-drag"
+                }
                 nestedScrollEnabled
               >
                 {selectedEnquiry && (
                   <View style={{ gap: 12 }}>
-                  <TouchableOpacity
-                    onPress={() => setShowFollowUpForm((prev) => !prev)}
-                    style={FU.toggleBtn}
-                    activeOpacity={0.9}
-                  >
-                    <View style={FU.toggleBtnIcon}>
-                      <Ionicons
-                        name={
-                          showFollowUpForm ? "remove-outline" : "add-outline"
-                        }
-                        size={18}
-                        color={C.primary}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={FU.toggleBtnTitle}>Add Follow-up</Text>
-                      <Text style={FU.toggleBtnSub}>
-                        Tap to {showFollowUpForm ? "hide" : "open"} the
-                        follow-up form
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name={showFollowUpForm ? "chevron-up" : "chevron-down"}
-                      size={18}
-                      color={C.textMuted}
-                    />
-                  </TouchableOpacity>
-
-                  {showFollowUpForm && (
-                    <>
-                      <View style={FU.sectionCard}>
-                        <Text style={FU.sectionTitle}>Conversation Notes</Text>
-                        <Text style={FU.sectionSub}>
-                          Capture the latest update before scheduling the next
-                          action.
-                        </Text>
-                        <Text style={FU.label}>Remarks *</Text>
-                        <FloatingInput
-                          label="Follow-up notes"
-                          value={editRemarks}
-                          onChangeText={setEditRemarks}
-                          placeholder="Add notes"
-                          multiline
-                          minHeight={88}
-                          scrollEnabled={false}
+                    <TouchableOpacity
+                      onPress={() => setShowFollowUpForm((prev) => !prev)}
+                      style={FU.toggleBtn}
+                      activeOpacity={0.9}
+                    >
+                      <View style={FU.toggleBtnIcon}>
+                        <Ionicons
+                          name={
+                            showFollowUpForm ? "remove-outline" : "add-outline"
+                          }
+                          size={18}
+                          color={C.primary}
                         />
                       </View>
-
-                      <View style={FU.sectionCard}>
-                        <Text style={FU.sectionTitle}>Activity Type</Text>
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={{ gap: 8, paddingBottom: 4 }}
-                        >
-                          {ACTIVITY_OPTIONS.map((a) => {
-                            const active = editActivityType === a;
-                            const icon =
-                              a === "Phone Call"
-                                ? "call-outline"
-                                : a === "WhatsApp"
-                                  ? "logo-whatsapp"
-                                  : a === "Email"
-                                    ? "mail-outline"
-                                    : "people-outline";
-                            return (
-                              <TouchableOpacity
-                                key={a}
-                                onPress={() => setEditActivityType(a)}
-                                style={[
-                                  FU.pill,
-                                  active && {
-                                    borderColor: C.primaryMid,
-                                    backgroundColor: C.primarySoft,
-                                  },
-                                ]}
-                              >
-                                <Ionicons
-                                  name={icon}
-                                  size={14}
-                                  color={active ? C.primary : C.textMuted}
-                                />
-                                <Text
-                                  style={[
-                                    FU.pillText,
-                                    active && { color: C.primary },
-                                  ]}
-                                >
-                                  {a}
-                                </Text>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </ScrollView>
+                      <View style={{ flex: 1 }}>
+                        <Text style={FU.toggleBtnTitle}>Add Follow-up</Text>
+                        <Text style={FU.toggleBtnSub}>
+                          Tap to {showFollowUpForm ? "hide" : "open"} the
+                          follow-up form
+                        </Text>
                       </View>
+                      <Ionicons
+                        name={showFollowUpForm ? "chevron-up" : "chevron-down"}
+                        size={18}
+                        color={C.textMuted}
+                      />
+                    </TouchableOpacity>
 
-                      <View style={FU.sectionCard}>
-                        <Text style={FU.sectionTitle}>Status & Schedule</Text>
-                        <View
-                          style={{
-                            flexDirection: "row",
-                            flexWrap: "wrap",
-                            gap: 8,
-                            marginBottom: 8,
-                          }}
-                        >
-                          {[
-                            {
-                              id: "New",
-                              icon: "sparkles-outline",
-                              color: C.info,
-                            },
-                            {
-                              id: "Contacted",
-                              label: "Connected",
-                              icon: "call-outline",
-                              color: C.warning,
-                            },
-                            {
-                              id: "Interested",
-                              icon: "thumbs-up-outline",
-                              color: C.teal,
-                            },
-                            {
-                              id: "Not Interested",
-                              icon: "close-circle-outline",
-                              color: C.danger,
-                            },
-                            {
-                              id: "Converted",
-                              label: "Sales",
-                              icon: "cash-outline",
-                              color: C.success,
-                            },
-                            {
-                              id: "Closed",
-                              label: "Drop",
-                              icon: "archive-outline",
-                              color: C.textLight,
-                            },
-                          ]
-                            .filter((s) => statusOptions.includes(s.id))
-                            .map((s) => {
-                              const active = editStatus === s.id;
+                    {showFollowUpForm && (
+                      <>
+                        {editFollowUpId && (
+                          <View style={FU.editingBanner}>
+                            <Ionicons
+                              name="create-outline"
+                              size={15}
+                              color={C.primary}
+                            />
+                            <Text style={FU.editingBannerText}>
+                              Editing scheduled follow-up
+                            </Text>
+                          </View>
+                        )}
+                        <View style={FU.sectionCard}>
+                          <Text style={FU.sectionTitle}>
+                            Conversation Notes
+                          </Text>
+                          <Text style={FU.sectionSub}>
+                            Capture the latest update before scheduling the next
+                            action.
+                          </Text>
+                          <Text style={FU.label}>Remarks *</Text>
+                          <FloatingInput
+                            label="Follow-up notes"
+                            value={editRemarks}
+                            onChangeText={setEditRemarks}
+                            placeholder="Add notes"
+                            multiline
+                            minHeight={88}
+                            scrollEnabled={false}
+                          />
+                        </View>
+
+                        <View style={FU.sectionCard}>
+                          <Text style={FU.sectionTitle}>Activity Type</Text>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{ gap: 8, paddingBottom: 4 }}
+                          >
+                            {ACTIVITY_OPTIONS.map((a) => {
+                              const active = editActivityType === a;
+                              const icon =
+                                a === "Phone Call"
+                                  ? "call-outline"
+                                  : a === "WhatsApp"
+                                    ? "logo-whatsapp"
+                                    : a === "Email"
+                                      ? "mail-outline"
+                                      : "people-outline";
                               return (
                                 <TouchableOpacity
-                                  key={s.id}
-                                  onPress={() => setEditStatus(s.id)}
+                                  key={a}
+                                  onPress={() => setEditActivityType(a)}
                                   style={[
-                                    FU.statusBtn,
+                                    FU.pill,
                                     active && {
-                                      borderColor: s.color,
-                                      backgroundColor: s.color + "12",
+                                      borderColor: C.primaryMid,
+                                      backgroundColor: C.primarySoft,
                                     },
                                   ]}
                                 >
                                   <Ionicons
-                                    name={s.icon}
+                                    name={icon}
                                     size={14}
-                                    color={s.color}
+                                    color={active ? C.primary : C.textMuted}
                                   />
                                   <Text
                                     style={[
-                                      {
-                                        fontSize: 12,
-                                        fontWeight: "600",
-                                        color: C.textMuted,
-                                      },
-                                      active && {
-                                        color: s.color,
-                                        fontWeight: "700",
-                                      },
+                                      FU.pillText,
+                                      active && { color: C.primary },
                                     ]}
                                   >
-                                    {s.label || s.id}
+                                    {a}
                                   </Text>
                                 </TouchableOpacity>
                               );
                             })}
+                          </ScrollView>
                         </View>
 
-                        {["New", "Contacted", "Interested"].includes(
-                          editStatus,
-                        ) && (
-                          <>
-                            <Text style={FU.label}>Next Date *</Text>
-                            <TouchableOpacity
-                              style={FU.datePicker}
-                              onPress={() => showDatePicker("add")}
-                            >
-                              <Ionicons
-                                name="calendar-outline"
-                                size={18}
-                                color={C.primary}
-                              />
-                              <Text
-                                style={[
-                                  FU.dateText,
-                                  !editNextDate && { color: C.textLight },
-                                ]}
-                              >
-                                {editNextDate || "Select date"}
-                              </Text>
-                            </TouchableOpacity>
-                            {editNextDate && (
-                              <>
-                                <Text style={FU.label}>Time</Text>
-                                <View style={FU.datePicker}>
-                                  <Ionicons
-                                    name="time-outline"
-                                    size={18}
-                                    color={C.primary}
-                                  />
-                                  <Text
-                                    style={[
-                                      FU.dateText,
-                                      !editNextTime && { color: C.textLight },
-                                    ]}
-                                  >
-                                    {editNextTime || "Auto-selected"}
-                                  </Text>
-                                </View>
-                                {isTimePickerVisible &&
-                                  Platform.OS !== "web" && (
-                                    <DateTimePicker
-                                      value={timePickerValue}
-                                      mode="time"
-                                      is24Hour={false}
-                                      display="default"
-                                      onChange={handleConfirmTime}
-                                    />
-                                  )}
-                              </>
-                            )}
-                          </>
-                        )}
-                      </View>
-
-                      {editStatus === "Converted" && (
                         <View style={FU.sectionCard}>
-                          <Text style={FU.label}>Amount (₹) *</Text>
-                          <FloatingInput
-                            label="Amount"
-                            value={editAmount}
-                            onChangeText={setEditAmount}
-                            placeholder="0.00"
-                            keyboardType="numeric"
-                            containerStyle={{ marginTop: 4 }}
-                            inputStyle={{ minHeight: 46 }}
-                          />
-                        </View>
-                      )}
-
-                      <TouchableOpacity
-                        onPress={onSaveFollowUp}
-                        disabled={isSavingEdit}
-                        style={{ marginTop: 16 }}
-                      >
-                        <LinearGradient
-                          colors={
-                            isSavingEdit ? ["#ccc", "#bbb"] : GRAD.primary
-                          }
-                          style={FU.btnPrimary}
-                        >
-                          <Text
+                          <Text style={FU.sectionTitle}>Status & Schedule</Text>
+                          <View
                             style={{
-                              color: "#fff",
-                              fontWeight: "700",
-                              fontSize: 14,
+                              flexDirection: "row",
+                              flexWrap: "wrap",
+                              gap: 8,
+                              marginBottom: 8,
                             }}
                           >
-                            {isSavingEdit ? "Saving…" : "Create Follow-up"}
-                          </Text>
-                        </LinearGradient>
-                      </TouchableOpacity>
-                    </>
-                  )}
+                            {[
+                              {
+                                id: "New",
+                                icon: "sparkles-outline",
+                                color: C.info,
+                              },
+                              {
+                                id: "Contacted",
+                                label: "Connected",
+                                icon: "call-outline",
+                                color: C.warning,
+                              },
+                              {
+                                id: "Interested",
+                                icon: "thumbs-up-outline",
+                                color: C.teal,
+                              },
+                              {
+                                id: "Not Interested",
+                                icon: "close-circle-outline",
+                                color: C.danger,
+                              },
+                              {
+                                id: "Converted",
+                                label: "Sales",
+                                icon: "cash-outline",
+                                color: C.success,
+                              },
+                              {
+                                id: "Closed",
+                                label: "Drop",
+                                icon: "archive-outline",
+                                color: C.textLight,
+                              },
+                            ]
+                              .filter((s) => statusOptions.includes(s.id))
+                              .map((s) => {
+                                const active = editStatus === s.id;
+                                return (
+                                  <TouchableOpacity
+                                    key={s.id}
+                                    onPress={() => setEditStatus(s.id)}
+                                    style={[
+                                      FU.statusBtn,
+                                      active && {
+                                        borderColor: s.color,
+                                        backgroundColor: s.color + "12",
+                                      },
+                                    ]}
+                                  >
+                                    <Ionicons
+                                      name={s.icon}
+                                      size={14}
+                                      color={s.color}
+                                    />
+                                    <Text
+                                      style={[
+                                        {
+                                          fontSize: 12,
+                                          fontWeight: "600",
+                                          color: C.textMuted,
+                                        },
+                                        active && {
+                                          color: s.color,
+                                          fontWeight: "700",
+                                        },
+                                      ]}
+                                    >
+                                      {s.label || s.id}
+                                    </Text>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                          </View>
 
-                  <View style={FU.sectionCard}>
-                    <Text style={FU.sectionTitle}>Scheduled Timeline</Text>
-                    <Text style={FU.sectionSub}>
-                      Follow-up entries and next scheduled dates.
-                    </Text>
-                    {historyLoading ? (
-                      <ActivityIndicator
-                        color={C.primary}
-                        style={{ marginVertical: 18 }}
-                      />
-                    ) : history.length === 0 ? (
-                      <View style={FU.timelineEmpty}>
-                        <Ionicons
-                          name="time-outline"
-                          size={20}
-                          color={C.textLight}
-                        />
-                        <Text style={FU.timelineEmptyText}>
-                          No scheduled follow-up timeline yet
-                        </Text>
-                      </View>
-                    ) : (
-                      history.map((h, i) => {
-                        const tc = getTypeIcon(h.type || h.activityType);
-                        const nextDate =
-                          h.nextFollowUpDate || h.followUpDate || h.date || "-";
-                        return (
-                          <View
-                            key={`inline-${h._id || i}`}
-                            style={[
-                              FU.timelineCard,
-                              i < history.length - 1 && FU.timelineCardGap,
-                            ]}
+                          {["New", "Contacted", "Interested"].includes(
+                            editStatus,
+                          ) && (
+                            <>
+                              <Text style={FU.label}>Next Date *</Text>
+                              <TouchableOpacity
+                                style={FU.datePicker}
+                                onPress={() => showDatePicker("add")}
+                              >
+                                <Ionicons
+                                  name="calendar-outline"
+                                  size={18}
+                                  color={C.primary}
+                                />
+                                <Text
+                                  style={[
+                                    FU.dateText,
+                                    !editNextDate && { color: C.textLight },
+                                  ]}
+                                >
+                                  {editNextDate || "Select date"}
+                                </Text>
+                              </TouchableOpacity>
+                              {editNextDate && (
+                                <>
+                                  <Text style={FU.label}>Time</Text>
+                                  <View style={FU.datePicker}>
+                                    <Ionicons
+                                      name="time-outline"
+                                      size={18}
+                                      color={C.primary}
+                                    />
+                                    <Text
+                                      style={[
+                                        FU.dateText,
+                                        !editNextTime && { color: C.textLight },
+                                      ]}
+                                    >
+                                      {editNextTime || "Auto-selected"}
+                                    </Text>
+                                  </View>
+                                  {isTimePickerVisible &&
+                                    Platform.OS !== "web" && (
+                                      <DateTimePicker
+                                        value={timePickerValue}
+                                        mode="time"
+                                        is24Hour={false}
+                                        display="default"
+                                        onChange={handleConfirmTime}
+                                      />
+                                    )}
+                                </>
+                              )}
+                            </>
+                          )}
+                        </View>
+
+                        {editStatus === "Converted" && (
+                          <View style={FU.sectionCard}>
+                            <Text style={FU.label}>Amount (₹) *</Text>
+                            <FloatingInput
+                              label="Amount"
+                              value={editAmount}
+                              onChangeText={setEditAmount}
+                              placeholder="0.00"
+                              keyboardType="numeric"
+                              containerStyle={{ marginTop: 4 }}
+                              inputStyle={{ minHeight: 46 }}
+                            />
+                          </View>
+                        )}
+
+                        <TouchableOpacity
+                          onPress={onSaveFollowUp}
+                          disabled={isSavingEdit}
+                          style={{ marginTop: 16 }}
+                        >
+                          <LinearGradient
+                            colors={
+                              isSavingEdit ? ["#ccc", "#bbb"] : GRAD.primary
+                            }
+                            style={FU.btnPrimary}
                           >
+                            <Text
+                              style={{
+                                color: "#fff",
+                                fontWeight: "700",
+                                fontSize: 14,
+                              }}
+                            >
+                              {isSavingEdit
+                                ? "Saving…"
+                                : editFollowUpId
+                                  ? "Update Scheduled Follow-up"
+                                  : "Create Follow-up"}
+                            </Text>
+                          </LinearGradient>
+                        </TouchableOpacity>
+                        {editFollowUpId && (
+                          <TouchableOpacity
+                            onPress={onCancelScheduledEdit}
+                            disabled={isSavingEdit}
+                            style={FU.btnSecondary}
+                          >
+                            <Text style={FU.btnSecondaryText}>Cancel Edit</Text>
+                          </TouchableOpacity>
+                        )}
+                      </>
+                    )}
+
+                    <View style={FU.sectionCard}>
+                      <Text style={FU.sectionTitle}>Scheduled Timeline</Text>
+                      <Text style={FU.sectionSub}>
+                        Follow-up entries and next scheduled dates.
+                      </Text>
+                      {historyLoading ? (
+                        <ActivityIndicator
+                          color={C.primary}
+                          style={{ marginVertical: 18 }}
+                        />
+                      ) : history.length === 0 ? (
+                        <View style={FU.timelineEmpty}>
+                          <Ionicons
+                            name="time-outline"
+                            size={20}
+                            color={C.textLight}
+                          />
+                          <Text style={FU.timelineEmptyText}>
+                            No scheduled follow-up timeline yet
+                          </Text>
+                        </View>
+                      ) : (
+                        history.map((h, i) => {
+                          const tc = getTypeIcon(h.type || h.activityType);
+                          const nextDate =
+                            h.nextFollowUpDate ||
+                            h.followUpDate ||
+                            h.date ||
+                            "-";
+                          const isEditable = Boolean(h?._id);
+                          return (
                             <View
+                              key={`inline-${h._id || "history"}-${h.activityType || h.type || "row"}-${i}`}
                               style={[
-                                FU.timelineBadge,
-                                { backgroundColor: `${tc.color}18` },
+                                FU.timelineCard,
+                                i < history.length - 1 && FU.timelineCardGap,
                               ]}
                             >
-                              <Ionicons
-                                name={tc.icon}
-                                size={14}
-                                color={tc.color}
-                              />
+                              <View
+                                style={[
+                                  FU.timelineBadge,
+                                  { backgroundColor: `${tc.color}18` },
+                                ]}
+                              >
+                                <Ionicons
+                                  name={tc.icon}
+                                  size={14}
+                                  color={tc.color}
+                                />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={FU.timelineTitle}>
+                                  {h.activityType || h.type || "Follow-up"}
+                                </Text>
+                                <Text style={FU.timelineDate}>
+                                  Next follow-up: {nextDate}
+                                </Text>
+                                <Text style={FU.timelineNote}>
+                                  {h.remarks || h.note || "-"}
+                                </Text>
+                              </View>
+                              {isEditable && (
+                                <TouchableOpacity
+                                  onPress={() => {
+                                    setShowFollowUpForm(true);
+                                    onEditScheduledFollowUp?.(h);
+                                    setTimeout(() => {
+                                      followUpFormScrollRef.current?.scrollTo?.(
+                                        {
+                                          y: 0,
+                                          animated: true,
+                                        },
+                                      );
+                                    }, 50);
+                                  }}
+                                  style={FU.timelineEditBtnRight}
+                                  activeOpacity={0.85}
+                                >
+                                  <Ionicons
+                                    name="create-outline"
+                                    size={13}
+                                    color={C.primary}
+                                  />
+                                  <Text style={FU.timelineEditText}>Edit</Text>
+                                </TouchableOpacity>
+                              )}
                             </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={FU.timelineTitle}>
-                                {h.activityType || h.type || "Follow-up"}
-                              </Text>
-                              <Text style={FU.timelineDate}>
-                                Next follow-up: {nextDate}
-                              </Text>
-                              <Text style={FU.timelineNote}>
-                                {h.remarks || h.note || "-"}
-                              </Text>
-                            </View>
-                          </View>
-                        );
-                      })
-                    )}
-                  </View>
+                          );
+                        })
+                      )}
+                    </View>
                   </View>
                 )}
               </ScrollView>
@@ -2214,7 +2442,7 @@ const DetailView = ({
                 position: "absolute",
                 left: 0,
                 top: 0,
-                bottom: 142,
+                bottom: 92,
                 width: 34,
                 zIndex: 20,
                 elevation: 20,
@@ -2228,7 +2456,7 @@ const DetailView = ({
                 position: "absolute",
                 right: 0,
                 top: 0,
-                bottom: 130,
+                bottom: 92,
                 width: 34,
                 zIndex: 20,
                 elevation: 20,
@@ -2897,6 +3125,37 @@ const FU = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  btnSecondary: {
+    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  btnSecondaryText: {
+    color: C.textMuted,
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  editingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: C.primarySoft,
+    borderWidth: 1,
+    borderColor: C.primaryMid,
+  },
+  editingBannerText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: C.primaryDark,
+  },
   timelineEmpty: {
     alignItems: "center",
     justifyContent: "center",
@@ -2946,6 +3205,39 @@ const FU = StyleSheet.create({
     lineHeight: 16,
     marginTop: 4,
   },
+  timelineEditBtn: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: C.primarySoft,
+    borderWidth: 1,
+    borderColor: C.primaryMid,
+  },
+  timelineEditBtnRight: {
+    marginLeft: 10,
+    minWidth: 72,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: C.primarySoft,
+    borderWidth: 1,
+    borderColor: C.primaryMid,
+  },
+  timelineEditText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: C.primary,
+  },
 });
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
@@ -2958,7 +3250,13 @@ export default function FollowUpScreen({ navigation, route }) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [activeTab, setActiveTab] = useState("All");
   const [followUps, setFollowUps] = useState([]);
-  const [tabCounts, setTabCounts] = useState({ All: 0, Today: 0, Missed: 0 });
+  const [tabCounts, setTabCounts] = useState({
+    All: 0,
+    Today: 0,
+    Missed: 0,
+    Sales: 0,
+    Dropped: 0,
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
@@ -2966,6 +3264,9 @@ export default function FollowUpScreen({ navigation, route }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedDate, setSelectedDate] = useState(toIso(new Date()));
   const [showMissedModal, setShowMissedModal] = useState(false);
+  const [missedModalItems, setMissedModalItems] = useState([]);
+  const [showDroppedModal, setShowDroppedModal] = useState(false);
+  const [droppedModalItems, setDroppedModalItems] = useState([]);
 
   // Detail view
   const [detailEnquiry, setDetailEnquiry] = useState(null);
@@ -2981,6 +3282,7 @@ export default function FollowUpScreen({ navigation, route }) {
   const [editNextTime, setEditNextTime] = useState("");
   const [editTimeMeridian, setEditTimeMeridian] = useState("AM");
   const [editAmount, setEditAmount] = useState("");
+  const [editFollowUpId, setEditFollowUpId] = useState(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
   const [datePickerTarget, setDatePickerTarget] = useState("add");
@@ -3004,8 +3306,8 @@ export default function FollowUpScreen({ navigation, route }) {
   const lastFocusDate = useRef(null);
   const lastFocusKey = useRef(null);
 
-  const missedItems = useMemo(() => followUps.filter(isMissed), [followUps]);
   const missedAlertCount = Number(tabCounts?.Missed || 0);
+  const droppedAlertCount = Number(tabCounts?.Dropped || 0);
 
   // ── Focus ────────────────────────────────────────────────────────────────
   useFocusEffect(
@@ -3059,7 +3361,6 @@ export default function FollowUpScreen({ navigation, route }) {
       STATUS_TABS.some((t) => t.value === route.params.focusTab)
     )
       setActiveTab(route.params.focusTab);
-    else if (route.params?.openMissedModal) setActiveTab("Missed");
     else setActiveTab("All");
     if (route.params?.focusSearch != null)
       setSearchQuery(String(route.params.focusSearch));
@@ -3080,10 +3381,20 @@ export default function FollowUpScreen({ navigation, route }) {
     return () => clearTimeout(t);
   }, [searchQuery]);
   useEffect(() => {
-    if (activeTab === "All") return;
+    if (activeTab !== "All" && !tabUsesExactDateFilter(activeTab)) return;
     lastFetch.current = 0;
     fetchFollowUps(activeTab, true);
   }, [selectedDate, activeTab]);
+
+  useEffect(() => {
+    if (!showMissedModal) return;
+    loadMissedModalItems(selectedDate);
+  }, [showMissedModal, selectedDate]);
+
+  useEffect(() => {
+    if (!showDroppedModal) return;
+    loadDroppedModalItems();
+  }, [showDroppedModal]);
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
@@ -3143,6 +3454,24 @@ export default function FollowUpScreen({ navigation, route }) {
   }, [activeTab]);
 
   useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () => {
+      lastFetch.current = 0;
+      fetchFollowUps(activeTab, true);
+      if (showMissedModal) loadMissedModalItems(selectedDate);
+      if (showDroppedModal) loadDroppedModalItems();
+    });
+    return () => sub.remove();
+  }, [activeTab, selectedDate, showMissedModal, showDroppedModal]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () => {
+      lastFetch.current = 0;
+      fetchFollowUps(activeTab, true);
+    });
+    return () => sub.remove();
+  }, [activeTab]);
+
+  useEffect(() => {
     const unsub = navigation.addListener("blur", () => {
       setDetailEnquiry(null);
       setDetailHistory([]);
@@ -3154,18 +3483,78 @@ export default function FollowUpScreen({ navigation, route }) {
   // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchTabCounts = async (referenceDate = selectedDate) => {
     try {
-      const [allCount, todayCount, missedCount] = await Promise.all([
-        getTabUniqueCount("All", ""),
-        getTabUniqueCount("Today", referenceDate),
-        getTabUniqueCount("Missed", referenceDate),
-      ]);
+      const monthRange = getMonthDateRange(referenceDate);
+      const [allCount, todayCount, missedCount, salesCount, droppedCount] =
+        await Promise.all([
+          getTabUniqueCount("All", "", {
+            followUpParams: monthRange,
+            includeNewEnquiries: true,
+            enquiryParams: monthRange,
+          }),
+          getTabUniqueCount("Today", referenceDate, {
+            useEnquirySource: true,
+            allowedStatuses: ["New", "Contacted", "Interested"],
+          }),
+          getTabUniqueCount("Missed", referenceDate),
+          getTabUniqueCount("Sales", referenceDate, {
+            useEnquirySource: true,
+            allowedStatuses: ["Converted"],
+          }),
+          getTabUniqueCount("Dropped", ""),
+        ]);
       setTabCounts({
         All: Number(allCount || 0),
         Today: Number(todayCount || 0),
         Missed: Number(missedCount || 0),
+        Sales: Number(salesCount || 0),
+        Dropped: Number(droppedCount || 0),
       });
     } catch (_error) {
       // Keep current tab counts if the summary request fails.
+    }
+  };
+
+  const loadMissedModalItems = async (referenceDate = selectedDate) => {
+    try {
+      const response = await followupService.getFollowUps(
+        "Missed",
+        1,
+        200,
+        referenceDate,
+      );
+      const rawItems = Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray(response)
+          ? response
+          : [];
+      const items = dedupeByLatestActivity(
+        rawItems.map(mapFollowUpItemToEnquiryCard),
+      );
+      setMissedModalItems(items);
+    } catch (_error) {
+      setMissedModalItems([]);
+    }
+  };
+
+  const loadDroppedModalItems = async () => {
+    try {
+      const response = await followupService.getFollowUps(
+        "Dropped",
+        1,
+        200,
+        "",
+      );
+      const rawItems = Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray(response)
+          ? response
+          : [];
+      const items = dedupeByLatestActivity(
+        rawItems.map(mapFollowUpItemToEnquiryCard),
+      );
+      setDroppedModalItems(items);
+    } catch (_error) {
+      setDroppedModalItems([]);
     }
   };
 
@@ -3182,8 +3571,51 @@ export default function FollowUpScreen({ navigation, route }) {
     }
     try {
       const pg = refresh ? 1 : page;
-      const filterDate = tab === "All" ? "" : selectedDate;
-      const res = await followupService.getFollowUps(tab, pg, 20, filterDate);
+      const monthRange = getMonthDateRange(selectedDate);
+      const filterDate = tabUsesExactDateFilter(tab) ? selectedDate : "";
+      if (tab === "Today" || tab === "Sales") {
+        const enquiryRes = await enquiryService.getAllEnquiries(
+          pg,
+          20,
+          searchQuery.trim(),
+          "",
+          "",
+          selectedDate,
+        );
+        let data = [],
+          total = 1;
+        if (Array.isArray(enquiryRes)) {
+          data = enquiryRes;
+        } else if (enquiryRes?.data) {
+          data = enquiryRes.data;
+          total = enquiryRes.pagination?.pages || 1;
+        }
+        if (rid !== fetchIdRef.current) return;
+        const allowedStatuses =
+          tab === "Sales" ? ["Converted"] : ["New", "Contacted", "Interested"];
+        data = data
+          .map(mapEnquiryToFollowUpCard)
+          .filter((item) =>
+            allowedStatuses.includes(normalizeStatus(item?.status)),
+          );
+        data = dedupeByLatestActivity(data);
+        setHasMore(Array.isArray(enquiryRes) ? false : pg < total);
+        if (refresh) setFollowUps(data);
+        else setFollowUps((p) => mergeUniqueFollowUpCards(p, data));
+        if (refresh) fetchTabCounts(selectedDate);
+        lastFetch.current = Date.now();
+        if (!refresh) setPage((p) => p + 1);
+        else if (data.length > 0 && pg < total) setPage(2);
+        return;
+      }
+      const requestParams = tab === "All" ? monthRange : {};
+      const res = await followupService.getFollowUps(
+        tab,
+        pg,
+        20,
+        filterDate,
+        requestParams,
+      );
       let data = [],
         total = 1;
       if (Array.isArray(res)) {
@@ -3198,11 +3630,12 @@ export default function FollowUpScreen({ navigation, route }) {
         try {
           const enquiryRes = await enquiryService.getAllEnquiries(
             1,
-            100,
+            500,
             searchQuery.trim(),
             "New",
             "",
             "",
+            monthRange,
           );
           const enquiryItems = Array.isArray(enquiryRes?.data)
             ? enquiryRes.data
@@ -3235,8 +3668,8 @@ export default function FollowUpScreen({ navigation, route }) {
       data = dedupeByLatestActivity(data);
       setHasMore(Array.isArray(res) ? false : pg < total);
       if (refresh) setFollowUps(data);
-      else setFollowUps((p) => [...p, ...data]);
-      if (refresh) fetchTabCounts(selectedDate);
+      else setFollowUps((p) => mergeUniqueFollowUpCards(p, data));
+      if (refresh) fetchTabCounts(filterDate || selectedDate);
       lastFetch.current = Date.now();
       if (!refresh) setPage((p) => p + 1);
       else if (data.length > 0 && pg < total) setPage(2);
@@ -3292,6 +3725,7 @@ export default function FollowUpScreen({ navigation, route }) {
     setEditNextTime("");
     setEditTimeMeridian("AM");
     setEditAmount("");
+    setEditFollowUpId(null);
     setDetailEnquiry(fb);
     setSelectedEnquiry(fb);
     try {
@@ -3314,6 +3748,44 @@ export default function FollowUpScreen({ navigation, route }) {
       setDetailHistory([]);
     } finally {
       setHistoryLoading(false);
+    }
+  }, []);
+
+  const resetFollowUpComposer = useCallback(() => {
+    setEditRemarks("");
+    setEditActivityType("Phone Call");
+    setEditStatus("Contacted");
+    setEditNextDate("");
+    setEditNextTime("");
+    setEditTimeMeridian("AM");
+    setEditAmount("");
+    setEditFollowUpId(null);
+  }, []);
+
+  const handleEditScheduledFollowUp = useCallback((item) => {
+    if (!item?._id) return;
+    setEditFollowUpId(item._id);
+    setEditRemarks(String(item?.remarks || item?.note || ""));
+    setEditActivityType(item?.activityType || item?.type || "Phone Call");
+    setEditStatus(getHistoryEditStatus(item));
+    const nextDate =
+      item?.nextFollowUpDate || item?.followUpDate || item?.date || "";
+    setEditNextDate(nextDate);
+    const rawTime = String(item?.time || "").trim();
+    setEditNextTime(rawTime);
+    setEditAmount(
+      item?.amount != null && item?.amount !== 0 ? String(item.amount) : "",
+    );
+    if (rawTime) {
+      const [hoursRaw, minutesRaw] = rawTime.split(":");
+      const hours = Number(hoursRaw);
+      const minutes = Number(minutesRaw);
+      if (Number.isFinite(hours) && Number.isFinite(minutes)) {
+        const nextTime = new Date();
+        nextTime.setHours(hours, minutes, 0, 0);
+        setTimePickerValue(nextTime);
+        setEditTimeMeridian(hours >= 12 ? "PM" : "AM");
+      }
     }
   }, []);
 
@@ -3346,7 +3818,11 @@ export default function FollowUpScreen({ navigation, route }) {
       const rawAT =
         selectedEnquiry.assignedTo?._id || selectedEnquiry.assignedTo;
       const atId = typeof rawAT === "string" ? rawAT : "";
-      const effDate = editNextDate || toIso(new Date());
+      const todayIso = toIso(new Date());
+      const usesScheduledDate = ["New", "Contacted", "Interested"].includes(
+        editStatus,
+      );
+      const effDate = usesScheduledDate ? editNextDate || todayIso : todayIso;
       const nextAction =
         editStatus === "Converted"
           ? "Sales"
@@ -3359,7 +3835,7 @@ export default function FollowUpScreen({ navigation, route }) {
           : nextAction === "Drop"
             ? "Drop"
             : "Scheduled";
-      await followupService.createFollowUp({
+      const payload = {
         enqId: selectedEnquiry._id,
         enqNo: selectedEnquiry.enqNo,
         name: selectedEnquiry.name,
@@ -3384,7 +3860,12 @@ export default function FollowUpScreen({ navigation, route }) {
                 Number(editAmount.toString().replace(/[^0-9.]/g, "")) || 0,
             }
           : {}),
-      });
+      };
+      if (editFollowUpId) {
+        await followupService.updateFollowUp(editFollowUpId, payload);
+      } else {
+        await followupService.createFollowUp(payload);
+      }
       await enquiryService.updateEnquiry(
         selectedEnquiry._id || selectedEnquiry.enqNo,
         {
@@ -3402,16 +3883,15 @@ export default function FollowUpScreen({ navigation, route }) {
       fetchFollowUps(activeTab, true);
       if (["Contacted", "Interested", "Converted"].includes(editStatus))
         confettiRef.current?.play?.();
-      setEditRemarks("");
-      setEditActivityType("Phone Call");
-      setEditStatus("Contacted");
-      setEditNextDate("");
-      setEditNextTime("");
-      setEditTimeMeridian("AM");
-      setEditAmount("");
+      resetFollowUpComposer();
       setSelectedEnquiry(null);
       setDetailEnquiry(null);
-      Alert.alert("Success", "Follow-up saved successfully.");
+      Alert.alert(
+        "Success",
+        editFollowUpId
+          ? "Scheduled follow-up updated successfully."
+          : "Follow-up saved successfully.",
+      );
     } catch (e) {
       Alert.alert("Error", e.response?.data?.message || "Could not save");
     } finally {
@@ -3449,7 +3929,10 @@ export default function FollowUpScreen({ navigation, route }) {
     setCallStarted(true);
     setCallStartTime(Date.now());
     try {
-      if (Platform.OS === "android" && RNImmediatePhoneCall?.immediatePhoneCall) {
+      if (
+        Platform.OS === "android" &&
+        RNImmediatePhoneCall?.immediatePhoneCall
+      ) {
         RNImmediatePhoneCall.immediatePhoneCall(digits);
         return;
       }
@@ -3466,7 +3949,9 @@ export default function FollowUpScreen({ navigation, route }) {
   const showDatePicker = (target = "add") => {
     setDatePickerTarget(target);
     const baseDate =
-      target === "filter" ? selectedDate : editNextDate || selectedDate || toIso(new Date());
+      target === "filter"
+        ? selectedDate
+        : editNextDate || selectedDate || toIso(new Date());
     setCalendarMonth(toMonthKey(baseDate || new Date()));
     setDatePickerVisible(true);
   };
@@ -3489,25 +3974,23 @@ export default function FollowUpScreen({ navigation, route }) {
     let active = true;
     const loadCalendarSummary = async () => {
       try {
-        const [allRes, missedRes] = await Promise.all([
-          followupService.getFollowUps("All", 1, 500, ""),
-          followupService.getFollowUps("Missed", 1, 500, ""),
-        ]);
+        const allRes = await followupService.getFollowUps("All", 1, 500, "");
         if (!active) return;
         const allItems = Array.isArray(allRes?.data) ? allRes.data : [];
-        const missedItems = Array.isArray(missedRes?.data) ? missedRes.data : [];
         const summary = {};
         allItems.forEach((item) => {
           const iso = getFollowUpCalendarDate(item);
           if (!iso || toMonthKey(iso) !== calendarMonth) return;
-          if (!summary[iso]) summary[iso] = { total: 0, missed: 0 };
-          summary[iso].total += 1;
-        });
-        missedItems.forEach((item) => {
-          const iso = getFollowUpCalendarDate(item);
-          if (!iso || toMonthKey(iso) !== calendarMonth) return;
-          if (!summary[iso]) summary[iso] = { total: 0, missed: 0 };
-          summary[iso].missed += 1;
+          if (!summary[iso]) {
+            summary[iso] = {
+              followup: 0,
+              sales: 0,
+              drop: 0,
+              notInterested: 0,
+            };
+          }
+          const bucket = getCalendarSummaryBucket(item);
+          summary[iso][bucket] += 1;
         });
         setCalendarDateSummary(summary);
       } catch (_error) {
@@ -3563,7 +4046,19 @@ export default function FollowUpScreen({ navigation, route }) {
     [openDetail, sc],
   );
   const keyExtractor = useCallback(
-    (item, i) => item?._id?.toString() || `item-${i}`,
+    (item, i) =>
+      String(
+        item?.listKey ||
+          [
+            item?.enqId || item?._id || item?.enqNo || `item-${i}`,
+            normalizeStatus(item?.status || ""),
+            item?.nextFollowUpDate ||
+              item?.latestFollowUpDate ||
+              item?.date ||
+              "",
+            item?.isVirtualNew ? "virtual" : "history",
+          ].join("-"),
+      ),
     [],
   );
 
@@ -3702,11 +4197,7 @@ export default function FollowUpScreen({ navigation, route }) {
             <TouchableOpacity
               style={MS.headerBtn}
               onPress={() => {
-                if (activeTab !== "Missed") {
-                  handleTabChange("Missed");
-                } else {
-                  fetchFollowUps("Missed", true);
-                }
+                setShowMissedModal(true);
               }}
             >
               <Ionicons
@@ -3723,24 +4214,20 @@ export default function FollowUpScreen({ navigation, route }) {
               )}
             </TouchableOpacity>
             <TouchableOpacity
-              style={MS.profileBtn}
-              onPress={() => navigation.navigate("ProfileScreen")}
+              style={MS.headerBtn}
+              onPress={() => {
+                setShowDroppedModal(true);
+              }}
             >
-              {user?.logo ? (
-                <Image
-                  source={{ uri: getImageUrl(user.logo) }}
-                  style={{ width: "100%", height: "100%" }}
-                />
-              ) : (
-                <View style={MS.profileFallback}>
-                  <Text
-                    style={{
-                      color: C.primaryDark,
-                      fontWeight: "900",
-                      fontSize: 15,
-                    }}
-                  >
-                    {user?.name?.[0]?.toUpperCase() || "U"}
+              <Ionicons
+                name="archive-outline"
+                size={20}
+                color={droppedAlertCount > 0 ? C.textMuted : C.textSub}
+              />
+              {droppedAlertCount > 0 && (
+                <View style={[MS.notifBadge, MS.dropBadge]}>
+                  <Text style={MS.notifBadgeText}>
+                    {droppedAlertCount > 9 ? "9+" : droppedAlertCount}
                   </Text>
                 </View>
               )}
@@ -3770,7 +4257,11 @@ export default function FollowUpScreen({ navigation, route }) {
             <Text
               style={{ fontSize: 11, color: C.primaryDark, fontWeight: "700" }}
             >
-              {fmtDate(selectedDate)}
+              {activeTab === "All"
+                ? fmtMonthYear(selectedDate)
+                : tabUsesExactDateFilter(activeTab)
+                  ? fmtDate(selectedDate)
+                  : "All dates"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -3896,7 +4387,9 @@ export default function FollowUpScreen({ navigation, route }) {
                 No enquiries found
               </Text>
               <Text style={{ fontSize: 13, color: C.textLight }}>
-                No {activeTab} enquiries for this date
+                {tabUsesExactDateFilter(activeTab)
+                  ? `No ${activeTab} enquiries for this date`
+                  : `No ${activeTab} enquiries found`}
               </Text>
             </View>
           )
@@ -3934,7 +4427,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 <Text
                   style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}
                 >
-                  {missedItems.length} items need attention
+                  {missedModalItems.length} items need attention
                 </Text>
               </View>
               <TouchableOpacity
@@ -3951,14 +4444,18 @@ export default function FollowUpScreen({ navigation, route }) {
                 <Ionicons name="close" size={16} color={C.textMuted} />
               </TouchableOpacity>
             </View>
-            {missedItems.length > 0 ? (
+            {missedModalItems.length > 0 ? (
               <ScrollView
                 style={{ maxHeight: 300 }}
                 showsVerticalScrollIndicator={false}
               >
-                {missedItems.map((item, i) => (
+                {missedModalItems.map((item, i) => (
                   <TouchableOpacity
-                    key={item?._id || i}
+                    key={String(
+                      item?._id
+                        ? `${item._id}-${item?.status || "missed"}-${i}`
+                        : `missed-${i}`,
+                    )}
                     onPress={() => {
                       setShowMissedModal(false);
                       openDetail(item);
@@ -3970,7 +4467,7 @@ export default function FollowUpScreen({ navigation, route }) {
                         paddingVertical: 11,
                         gap: 10,
                       },
-                      i < missedItems.length - 1 && {
+                      i < missedModalItems.length - 1 && {
                         borderBottomWidth: 1,
                         borderBottomColor: C.divider,
                       },
@@ -4045,6 +4542,136 @@ export default function FollowUpScreen({ navigation, route }) {
         </TouchableOpacity>
       </Modal>
 
+      <Modal
+        visible={showDroppedModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDroppedModal(false)}
+      >
+        <TouchableOpacity
+          style={MS.center}
+          activeOpacity={1}
+          onPress={() => setShowDroppedModal(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={MS.missedCard}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                marginBottom: 14,
+              }}
+            >
+              <View>
+                <Text
+                  style={{ fontSize: 17, fontWeight: "900", color: C.text }}
+                >
+                  Dropped Enquiries
+                </Text>
+                <Text
+                  style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}
+                >
+                  {droppedModalItems.length} items are dropped
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowDroppedModal(false)}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 15,
+                  backgroundColor: C.bg,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name="close" size={16} color={C.textMuted} />
+              </TouchableOpacity>
+            </View>
+            {droppedModalItems.length > 0 ? (
+              <ScrollView
+                style={{ maxHeight: 300 }}
+                showsVerticalScrollIndicator={false}
+              >
+                {droppedModalItems.map((item, i) => (
+                  <TouchableOpacity
+                    key={String(
+                      item?._id
+                        ? `${item._id}-${item?.status || "dropped"}-${i}`
+                        : `dropped-${i}`,
+                    )}
+                    onPress={() => {
+                      setShowDroppedModal(false);
+                      openDetail(item);
+                    }}
+                    style={[
+                      {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingVertical: 11,
+                        gap: 10,
+                      },
+                      i < droppedModalItems.length - 1 && {
+                        borderBottomWidth: 1,
+                        borderBottomColor: C.divider,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 10,
+                        backgroundColor: C.textLight + "18",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Ionicons name="archive" size={15} color={C.textMuted} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          fontWeight: "800",
+                          color: C.text,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {item?.name || "Unnamed enquiry"}
+                      </Text>
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          color: C.textMuted,
+                          marginTop: 2,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {[item?.enqNo, item?.mobile]
+                          .filter(Boolean)
+                          .join(" • ")}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <View
+                style={{
+                  paddingVertical: 18,
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ fontSize: 13, color: C.textMuted }}>
+                  No dropped enquiries
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ── Calendar ── */}
       <Modal
         visible={isDatePickerVisible}
@@ -4089,7 +4716,12 @@ export default function FollowUpScreen({ navigation, route }) {
               hideExtraDays
               dayComponent={({ date, state }) => {
                 const iso = date?.dateString || "";
-                const summary = calendarDateSummary[iso] || { total: 0, missed: 0 };
+                const summary = calendarDateSummary[iso] || {
+                  followup: 0,
+                  sales: 0,
+                  drop: 0,
+                  notInterested: 0,
+                };
                 const target =
                   datePickerTarget === "filter"
                     ? selectedDate
@@ -4100,10 +4732,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 return (
                   <TouchableOpacity
                     activeOpacity={0.8}
-                    style={[
-                      MS.calDayWrap,
-                      isSelected && MS.calDayWrapSelected,
-                    ]}
+                    style={[MS.calDayWrap, isSelected && MS.calDayWrapSelected]}
                     onPress={() => {
                       if (!iso) return;
                       handleConfirmDate(new Date(`${iso}T00:00:00`));
@@ -4120,7 +4749,7 @@ export default function FollowUpScreen({ navigation, route }) {
                       {date?.day}
                     </Text>
                     <View style={MS.calCountRow}>
-                      {summary.total > 0 ? (
+                      {summary.followup > 0 ? (
                         <View
                           style={[
                             MS.calCountBadge,
@@ -4133,24 +4762,58 @@ export default function FollowUpScreen({ navigation, route }) {
                               isSelected && MS.calCountBadgeTextSelected,
                             ]}
                           >
-                            F+{summary.total}
+                            F+{summary.followup}
                           </Text>
                         </View>
                       ) : null}
-                      {summary.missed > 0 ? (
+                      {summary.sales > 0 ? (
                         <View
                           style={[
-                            MS.calMissedBadge,
-                            isSelected && MS.calMissedBadgeSelected,
+                            MS.calSalesBadge,
+                            isSelected && MS.calStatusBadgeSelected,
                           ]}
                         >
                           <Text
                             style={[
-                              MS.calMissedBadgeText,
-                              isSelected && MS.calMissedBadgeTextSelected,
+                              MS.calSalesBadgeText,
+                              isSelected && MS.calStatusBadgeTextSelected,
                             ]}
                           >
-                            M+{summary.missed}
+                            S+{summary.sales}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {summary.drop > 0 ? (
+                        <View
+                          style={[
+                            MS.calDropBadge,
+                            isSelected && MS.calStatusBadgeSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              MS.calDropBadgeText,
+                              isSelected && MS.calStatusBadgeTextSelected,
+                            ]}
+                          >
+                            D+{summary.drop}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {summary.notInterested > 0 ? (
+                        <View
+                          style={[
+                            MS.calNotInterestedBadge,
+                            isSelected && MS.calStatusBadgeSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              MS.calNotInterestedBadgeText,
+                              isSelected && MS.calStatusBadgeTextSelected,
+                            ]}
+                          >
+                            N+{summary.notInterested}
                           </Text>
                         </View>
                       ) : null}
@@ -4214,6 +4877,7 @@ export default function FollowUpScreen({ navigation, route }) {
             setEditNextTime={setEditNextTime}
             editAmount={editAmount}
             setEditAmount={setEditAmount}
+            editFollowUpId={editFollowUpId}
             isSavingEdit={isSavingEdit}
             showDatePicker={showDatePicker}
             setTimePickerValue={setTimePickerValue}
@@ -4223,6 +4887,8 @@ export default function FollowUpScreen({ navigation, route }) {
             setEditTimeMeridian={setEditTimeMeridian}
             timePickerValue={timePickerValue}
             onSaveFollowUp={handleSaveEdit}
+            onEditScheduledFollowUp={handleEditScheduledFollowUp}
+            onCancelScheduledEdit={resetFollowUpComposer}
             onStartCall={() => handleStartContactCall(detailEnquiry)}
             sc={sc}
             currentStatus={selectedEnquiry?.status || detailEnquiry?.status}
@@ -4511,21 +5177,43 @@ const MS = StyleSheet.create({
   calCountBadgeTextSelected: {
     color: "#fff",
   },
-  calMissedBadge: {
+  calStatusBadgeSelected: {
+    backgroundColor: "rgba(255,255,255,0.22)",
+  },
+  calStatusBadgeTextSelected: {
+    color: "#fff",
+  },
+  calSalesBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: "#DCFCE7",
+  },
+  calSalesBadgeText: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: C.success,
+  },
+  calDropBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 999,
+    backgroundColor: "#E5E7EB",
+  },
+  calDropBadgeText: {
+    fontSize: 8,
+    fontWeight: "800",
+    color: C.textMuted,
+  },
+  calNotInterestedBadge: {
     paddingHorizontal: 4,
     paddingVertical: 1,
     borderRadius: 999,
     backgroundColor: C.dangerSoft || "#FEE2E2",
   },
-  calMissedBadgeSelected: {
-    backgroundColor: "rgba(255,255,255,0.22)",
-  },
-  calMissedBadgeText: {
+  calNotInterestedBadgeText: {
     fontSize: 8,
     fontWeight: "800",
     color: C.danger,
-  },
-  calMissedBadgeTextSelected: {
-    color: "#fff",
   },
 });

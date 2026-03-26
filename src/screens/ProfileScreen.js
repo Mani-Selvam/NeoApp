@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { MotiView } from "moti";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -113,70 +114,58 @@ const ProfileScreen = ({ navigation }) => {
         }
     }, [user]);
 
-    useEffect(() => {
+    const loadSettingsStatus = useCallback(async () => {
         if (isStaffUser) return;
+        try {
+            const client = await getApiClient();
+            const [waResp, emailResp] = await Promise.allSettled([
+                client.get("/whatsapp/config"),
+                getEmailSettings(),
+            ]);
 
-        const loadSettingsStatus = async () => {
-            try {
-                const client = await getApiClient();
-                const [waResp, emailResp] = await Promise.allSettled([
-                    client.get("/whatsapp/config"),
-                    getEmailSettings(),
-                ]);
+            const waConfig =
+                waResp.status === "fulfilled" ? waResp.value?.data?.config || {} : {};
+            const emailConfig =
+                emailResp.status === "fulfilled" ? emailResp.value || {} : {};
 
-                const waConfig =
-                    waResp.status === "fulfilled" ? waResp.value?.data?.config || {} : {};
-                const emailConfig =
-                    emailResp.status === "fulfilled" ? emailResp.value || {} : {};
+            const provider = String(waConfig?.provider || "").toUpperCase();
+            const whatsappConfigured =
+                (provider === "WATI" &&
+                    Boolean(waConfig?.hasWatiCredentials || (waConfig?.watiBaseUrl && (waConfig?.apiToken || waConfig?.watiApiToken)))) ||
+                (provider === "META" &&
+                    Boolean(waConfig?.hasMetaCredentials || (waConfig?.metaWhatsappToken && waConfig?.metaPhoneNumberId))) ||
+                (provider === "NEO" &&
+                    Boolean(waConfig?.hasNeoCredentials || (waConfig?.neoAccountName && waConfig?.neoPhoneNumber && (waConfig?.neoApiKey || waConfig?.neoBearerToken)))) ||
+                (provider === "TWILIO" &&
+                    Boolean(waConfig?.hasTwilioCredentials || (waConfig?.twilioAccountSid && waConfig?.twilioAuthToken && waConfig?.twilioWhatsappNumber))) ||
+                false;
 
-                const whatsappConfigured = (() => {
-                    const provider = String(waConfig?.provider || "").toUpperCase();
-                    if (provider === "WATI") {
-                        return Boolean(waConfig?.watiBaseUrl && waConfig?.apiToken);
-                    }
-                    if (provider === "META") {
-                        return Boolean(
-                            waConfig?.metaWhatsappToken && waConfig?.metaPhoneNumberId,
-                        );
-                    }
-                    if (provider === "NEO") {
-                        return Boolean(
-                            waConfig?.neoAccountName &&
-                                waConfig?.neoApiKey &&
-                                waConfig?.neoPhoneNumber,
-                        );
-                    }
-                    if (provider === "TWILIO") {
-                        return Boolean(
-                            waConfig?.twilioAccountSid &&
-                                waConfig?.twilioAuthToken &&
-                                waConfig?.twilioWhatsappNumber,
-                        );
-                    }
-                    return false;
-                })();
+            const settings = emailConfig?.settings || emailConfig || {};
+            const emailConfigured = Boolean(
+                settings?.smtpHost &&
+                    settings?.smtpPort &&
+                    settings?.smtpUser &&
+                    (settings?.hasPassword || settings?.smtpPass),
+            );
 
-                const emailConfigured = Boolean(
-                    emailConfig?.smtpHost &&
-                        emailConfig?.smtpPort &&
-                        emailConfig?.smtpUser &&
-                        (emailConfig?.hasPassword || emailConfig?.smtpPass),
-                );
-
-                setSettingsStatus({
-                    whatsappConfigured,
-                    emailConfigured,
-                });
-            } catch (_error) {
-                setSettingsStatus({
-                    whatsappConfigured: false,
-                    emailConfigured: false,
-                });
-            }
-        };
-
-        loadSettingsStatus();
+            setSettingsStatus({
+                whatsappConfigured,
+                emailConfigured,
+            });
+        } catch (_error) {
+            setSettingsStatus({
+                whatsappConfigured: false,
+                emailConfigured: false,
+            });
+        }
     }, [isStaffUser]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadSettingsStatus();
+            return () => {};
+        }, [loadSettingsStatus])
+    );
 
     const handlePickImage = async () => {
         const confirmed = await confirmPermissionRequest({
@@ -198,12 +187,17 @@ const ProfileScreen = ({ navigation }) => {
             allowsEditing: true,
             aspect: [1, 1],
             quality: 0.5,
-            base64: true,
         });
 
-        if (!result.canceled) {
-            const base64Img = `data:image/jpeg;base64,${result.assets[0].base64}`;
-            handleUpdateBasic({ logo: base64Img });
+        if (!result.canceled && result.assets?.[0]) {
+            const asset = result.assets[0];
+            handleUpdateBasic({
+                logo: {
+                    uri: asset.uri,
+                    type: asset.mimeType || "image/jpeg",
+                    name: asset.fileName || `profile-logo-${Date.now()}.jpg`,
+                },
+            });
         }
     };
 
