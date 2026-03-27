@@ -195,7 +195,7 @@ const ProfileScreen = ({ navigation }) => {
         }
 
         const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ["images"],
             allowsEditing: true,
             aspect: [1, 1],
             quality: 0.5,
@@ -600,6 +600,20 @@ const ProfileScreen = ({ navigation }) => {
                     <View style={styles.settingsCard}>
                         {!isStaffUser ? (
                             <>
+                                <TouchableOpacity
+                                    style={styles.settingsRow}
+                                    onPress={() => navigation.navigate("PublicLeadFormScreen")}
+                                >
+                                    <View style={styles.settingsIconWrap}>
+                                        <Ionicons name="globe-outline" size={18} color={COLORS.primary} />
+                                    </View>
+                                    <View style={styles.settingsContent}>
+                                        <Text style={styles.settingsTitle}>Public Lead Form</Text>
+                                        <Text style={styles.settingsSub}>Share a company form link and collect social media enquiries</Text>
+                                    </View>
+                                    <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                </TouchableOpacity>
+
                                 <TouchableOpacity
                                     style={styles.settingsRow}
                                     onPress={() => openFeatureScreen("WhatsAppSettings", "whatsapp", "WhatsApp Settings")}

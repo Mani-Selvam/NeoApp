@@ -37,6 +37,7 @@ import LeadSourceScreen from "../screens/LeadSourceScreen";
 import OnboardingScreen from "../screens/OnboardingScreen";
 import ProductScreen from "../screens/ProductScreen";
 import PricingScreen from "../screens/PricingScreen";
+import PublicLeadFormScreen from "../screens/PublicLeadFormScreen";
 import CheckoutScreen from "../screens/CheckoutScreen";
 import RazorpayCheckoutScreen from "../screens/RazorpayCheckoutScreen";
 import PaymentSuccessScreen from "../screens/PaymentSuccessScreen";
@@ -1014,6 +1015,10 @@ export default function AppNavigator() {
             component={WhatsAppSettingsAccessScreen}
           />
           <Stack.Screen name="ProfileScreen" component={ProfileScreen as any} />
+          <Stack.Screen
+            name="PublicLeadFormScreen"
+            component={PublicLeadFormScreen as any}
+          />
           <Stack.Screen name="AboutScreen" component={AboutScreen as any} />
           <Stack.Screen
             name="SupportHelp"

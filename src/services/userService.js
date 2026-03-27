@@ -177,3 +177,15 @@ export const disableCompanyAccount = async () => {
     const response = await client.post("/users/company/account/disable");
     return response.data;
 };
+
+export const getCompanyPublicForm = async () => {
+    const client = await getApiClient();
+    const response = await client.get("/users/company/public-form");
+    return response.data;
+};
+
+export const updateCompanyPublicForm = async (payload) => {
+    const client = await getApiClient();
+    const response = await client.put("/users/company/public-form", payload);
+    return response.data;
+};

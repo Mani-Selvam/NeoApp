@@ -198,6 +198,7 @@ app.use(
 // Routes
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/support", require("./routes/supportRoutes"));
+app.use("/public/forms", require("./routes/publicFormRoutes"));
 app.use(
   "/api/enquiries",
   withPlan("enquiries"),

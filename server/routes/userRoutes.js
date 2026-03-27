@@ -187,6 +187,29 @@ const sendPlanReceiptEmail = async ({ user, receipt }) => {
   });
 };
 
+const isAdminRole = (role) => ["admin", "Admin"].includes(String(role || ""));
+
+const buildPublicFormUrl = (req, slug) => {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim();
+  const protocol = forwardedProto || req.protocol || "https";
+  return `${protocol}://${req.get("host")}/public/forms/${encodeURIComponent(String(slug || "").trim())}`;
+};
+
+const ensureCompanyPublicForm = async (companyId) => {
+  if (!companyId) return null;
+  const company = await Company.findById(companyId).select("name status publicForm").exec();
+  if (!company) return null;
+
+  if (!company.publicForm?.slug || !company.publicForm?.token || !company.publicForm?.title) {
+    company.markModified("publicForm");
+    await company.save();
+  }
+
+  return company;
+};
+
 const computeDiscount = (price, coupon) => {
   if (!coupon) return { discountAmount: 0, finalPrice: price };
   const safeValue = Number(coupon.discountValue || 0);
@@ -586,6 +609,97 @@ router.put("/profile", verifyToken, profileUpload.single("logo"), async (req, re
     res.json({ success: true, message: "Profile updated", user });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/company/public-form", verifyToken, async (req, res) => {
+  try {
+    const companyId = req.user?.company_id || null;
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: "Company not set for user" });
+    }
+
+    const company = await ensureCompanyPublicForm(companyId);
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    return res.json({
+      success: true,
+      publicForm: {
+        enabled: company.publicForm?.enabled !== false,
+        slug: company.publicForm?.slug || "",
+        title: company.publicForm?.title || `${company.name} Enquiry Form`,
+        description:
+          company.publicForm?.description ||
+          "Fill out this form and our team will contact you shortly.",
+        defaultSource: company.publicForm?.defaultSource || "Public Form",
+        successMessage:
+          company.publicForm?.successMessage ||
+          "Thanks for your enquiry. Our team will contact you soon.",
+        url: buildPublicFormUrl(req, company.publicForm?.slug || ""),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.put("/company/public-form", verifyToken, async (req, res) => {
+  try {
+    if (!isAdminRole(req.user?.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only admin users can update the public enquiry form",
+      });
+    }
+
+    const companyId = req.user?.company_id || null;
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: "Company not set for user" });
+    }
+
+    const company = await ensureCompanyPublicForm(companyId);
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    company.publicForm = {
+      ...(company.publicForm?.toObject ? company.publicForm.toObject() : company.publicForm || {}),
+      enabled: req.body?.enabled !== false,
+      title: String(req.body?.title || "").trim().slice(0, 100) || `${company.name} Enquiry Form`,
+      description:
+        String(req.body?.description || "")
+          .trim()
+          .slice(0, 240) || "Fill out this form and our team will contact you shortly.",
+      defaultSource:
+        String(req.body?.defaultSource || "").trim().slice(0, 80) || "Public Form",
+      successMessage:
+        String(req.body?.successMessage || "")
+          .trim()
+          .slice(0, 200) || "Thanks for your enquiry. Our team will contact you soon.",
+    };
+
+    company.markModified("publicForm");
+    await company.save();
+
+    return res.json({
+      success: true,
+      message: "Public enquiry form updated",
+      publicForm: {
+        enabled: company.publicForm?.enabled !== false,
+        slug: company.publicForm?.slug || "",
+        title: company.publicForm?.title || `${company.name} Enquiry Form`,
+        description: company.publicForm?.description || "",
+        defaultSource: company.publicForm?.defaultSource || "Public Form",
+        successMessage:
+          company.publicForm?.successMessage ||
+          "Thanks for your enquiry. Our team will contact you soon.",
+        url: buildPublicFormUrl(req, company.publicForm?.slug || ""),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
