@@ -1,4 +1,5 @@
 const { resolveEffectivePlan } = require("../services/planResolver");
+const { canonicalFeatureKey } = require("../services/planFeatures");
 
 const planCache = new Map();
 const PLAN_CACHE_TTL_MS = 60 * 1000;
@@ -74,26 +75,11 @@ const requireActivePlan = async (req, res, next) => {
 const requireFeature = (featureName) => (req, res, next) => {
   const expected = String(featureName || "").trim();
   if (!expected) return next();
-
-  const normalizeFeatureKey = (value) =>
-    String(value || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "");
-
-  const expectedKey = normalizeFeatureKey(expected);
-  // Base app access: once a company has an active plan, "Basic CRM" should not be feature-gated.
-  if (expectedKey === normalizeFeatureKey("Basic CRM")) return next();
-  // NeoApp default access: Call logs are treated as a core feature for active plans.
-  if (expectedKey === normalizeFeatureKey("Call Logs")) return next();
-  // NeoApp default access: Follow-ups are treated as a core feature for active plans.
-  if (expectedKey === normalizeFeatureKey("Follow-ups")) return next();
-  // NeoApp default access: WhatsApp Integration is treated as a core feature for active plans.
-  if (expectedKey === normalizeFeatureKey("WhatsApp Integration")) return next();
+  const expectedKey = canonicalFeatureKey(expected);
 
   const plan = req.effectivePlan;
   const features = Array.isArray(plan?.features) ? plan.features : [];
-  const enabled = features.some((f) => normalizeFeatureKey(f) === expectedKey);
+  const enabled = features.some((f) => canonicalFeatureKey(f) === expectedKey);
 
   if (!enabled) {
     return res.status(403).json({

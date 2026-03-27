@@ -38,12 +38,23 @@ const { resolveEffectivePlan } = require("../services/planResolver");
 const { clearCompanyPlanCache } = require("../middleware/planGuard");
 const { getUsdInrRate, getRazorpayConfig } = require("../services/settingsService");
 const {
+  ensureFixedPlansSynced,
+  normalizePlanForClient,
+} = require("../services/planFeatures");
+const {
+  buildSafeUploadName,
+  createFileFilter,
+} = require("../utils/uploadSecurity");
+const {
   getRazorpayClientAsync,
   verifyCheckoutSignatureAsync,
   verifyWebhookSignatureAsync,
 } = require("../services/razorpayService");
 
 const otpStore = {}; // Memory store for profile changes
+const EXPOSE_TEST_OTP =
+  String(process.env.EXPOSE_TEST_OTP || "").toLowerCase() === "true" ||
+  String(process.env.NODE_ENV || "").toLowerCase() !== "production";
 
 const profileUploadDir = path.join(__dirname, "../uploads/profile");
 if (!fs.existsSync(profileUploadDir)) {
@@ -53,15 +64,18 @@ if (!fs.existsSync(profileUploadDir)) {
 const profileStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, profileUploadDir),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `logo-${uniqueSuffix}${ext}`);
+    cb(null, buildSafeUploadName({ prefix: "logo", originalname: file.originalname, fallbackExt: ".jpg" }));
   },
 });
 
 const profileUpload = multer({
   storage: profileStorage,
   limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: createFileFilter({
+    allowedMimePatterns: [/^image\/(jpeg|png|gif|webp)$/],
+    allowedExtensions: [".jpg", ".jpeg", ".png", ".gif", ".webp"],
+    message: "Only JPG, PNG, GIF, or WEBP images are allowed.",
+  }),
 });
 
 // Simple OTP generator
@@ -777,7 +791,9 @@ router.post("/email-change/initiate", verifyToken, async (req, res) => {
       expiresAt: Date.now() + 10 * 60 * 1000, // 10 mins
     };
 
-    console.log(`[Profile] OTP for current email ${user.email}: ${otp}`);
+    if (EXPOSE_TEST_OTP) {
+      console.log(`[Profile] OTP for current email ${user.email}: ${otp}`);
+    }
     await sendEmailOTP(user.email, otp);
 
     res.json({ success: true, message: "OTP sent to your current email" });
@@ -841,7 +857,9 @@ router.post("/email-change/new-initiate", verifyToken, async (req, res) => {
       expiresAt: Date.now() + 10 * 60 * 1000,
     };
 
-    console.log(`[Profile] OTP for new email ${newEmail}: ${otp}`);
+    if (EXPOSE_TEST_OTP) {
+      console.log(`[Profile] OTP for new email ${newEmail}: ${otp}`);
+    }
     await sendEmailOTP(newEmail, otp);
 
     res.json({ success: true, message: "OTP sent to your new email" });
@@ -898,7 +916,9 @@ router.post("/email-change/verify-new", verifyToken, async (req, res) => {
       expiresAt: Date.now() + 10 * 60 * 1000,
     };
 
-	    console.log(`[Profile] OTP for current mobile ${user.mobile}: ${otp}`);
+	    if (EXPOSE_TEST_OTP) {
+	      console.log(`[Profile] OTP for current mobile ${user.mobile}: ${otp}`);
+	    }
 	    const ok = await sendMobileOTP(user.mobile, otp, {
 	      ownerUserId: req.userId,
 	      method: requestedMethod || "whatsapp",
@@ -972,7 +992,9 @@ router.post("/mobile-change/new-initiate", verifyToken, async (req, res) => {
       expiresAt: Date.now() + 10 * 60 * 1000,
     };
 
-	    console.log(`[Profile] OTP for new mobile ${newMobile}: ${otp}`);
+	    if (EXPOSE_TEST_OTP) {
+	      console.log(`[Profile] OTP for new mobile ${newMobile}: ${otp}`);
+	    }
 	    const ok = await sendMobileOTP(newMobile, otp, {
 	      ownerUserId: req.userId,
 	      method: requestedMethod || "whatsapp",
@@ -1055,7 +1077,12 @@ router.get("/billing/effective-plan", verifyToken, async (req, res) => {
 // 12. GET BILLING PLANS (Active plans for app pricing screen)
 router.get("/billing/plans", verifyToken, async (req, res) => {
   try {
-    const plansRaw = await Plan.find({ isActive: true })
+    const syncResult = await ensureFixedPlansSynced();
+    syncResult.impactedCompanyIds.forEach((companyId) => {
+      clearCompanyPlanCache(companyId);
+    });
+
+    const plansRaw = await Plan.find({ isActive: true, code: { $in: ["FREE", "BASIC", "PRO"] } })
       .select("code name basePrice extraAdminPrice extraStaffPrice trialDays maxAdmins maxStaff features")
       .sort({ sortOrder: 1, createdAt: 1 })
       .lean();
@@ -1075,7 +1102,7 @@ router.get("/billing/plans", verifyToken, async (req, res) => {
       );
       if (overrideActive) {
         const targetPlanId = override.targetPlanId ? String(override.targetPlanId) : null;
-        plans = plansRaw.map((plan) => {
+         plans = plansRaw.map((plan) => {
           const match = !targetPlanId || String(plan._id) === targetPlanId;
           if (!match) return { ...plan, isOverrideApplied: false };
 
@@ -1099,10 +1126,12 @@ router.get("/billing/plans", verifyToken, async (req, res) => {
       }
     }
 
+    plans = plans.map((plan) => normalizePlanForClient(plan));
+
     let effectivePlan = null;
     if (req.user?.company_id) {
       const resolved = await resolveEffectivePlan(req.user.company_id.toString());
-      if (resolved?.hasPlan) effectivePlan = resolved.plan;
+      if (resolved?.hasPlan) effectivePlan = normalizePlanForClient(resolved.plan);
     }
 
     const usdInr = await getUsdInrRate();

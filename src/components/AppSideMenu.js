@@ -17,6 +17,10 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
 import {
+  buildFeatureUpgradeMessage,
+  hasPlanFeature,
+} from "../utils/planFeatures";
+import {
   useResponsiveDimensions,
   useResponsiveMenuWidth,
 } from "./Responsiveutils";
@@ -390,7 +394,7 @@ const SL = StyleSheet.create({
 
 // ─── MenuItem ─────────────────────────────────────────────────────────────────
 const MenuItem = React.memo(
-  ({ icon, label, color, onPress, active, badge }) => {
+  ({ icon, label, color, onPress, active, badge, locked = false }) => {
     const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
     const handlePress = () => {
@@ -409,12 +413,12 @@ const MenuItem = React.memo(
       onPress?.();
     };
 
-    const iconColor = active ? C.primary : color || C.textSub;
+    const iconColor = locked ? C.textMuted : active ? C.primary : color || C.textSub;
 
     return (
       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
         <TouchableOpacity
-          style={[MI.item, active && MI.itemActive]}
+          style={[MI.item, active && MI.itemActive, locked && MI.itemLocked]}
           onPress={handlePress}
           activeOpacity={0.8}
         >
@@ -423,16 +427,16 @@ const MenuItem = React.memo(
 
           {/* Icon */}
           <View style={[MI.iconWrap, active && MI.iconWrapActive]}>
-            <Ionicons name={icon} size={16} color={iconColor} />
+              <Ionicons name={locked ? "lock-closed-outline" : icon} size={16} color={iconColor} />
           </View>
 
           {/* Label */}
           <Text
             style={[
               MI.label,
-              { color: active ? C.primary : color || C.textSub },
-              active && MI.labelActive,
-            ]}
+               { color: locked ? C.textMuted : active ? C.primary : color || C.textSub },
+               active && MI.labelActive,
+             ]}
           >
             {label}
           </Text>
@@ -445,8 +449,8 @@ const MenuItem = React.memo(
           ) : null}
 
           {/* Active chevron dot */}
-          {active ? <View style={MI.activeDot} /> : null}
-        </TouchableOpacity>
+           {locked ? <Text style={MI.lockedText}>Locked</Text> : active ? <View style={MI.activeDot} /> : null}
+         </TouchableOpacity>
       </Animated.View>
     );
   },
@@ -468,6 +472,9 @@ const MI = StyleSheet.create({
   },
   itemActive: {
     backgroundColor: C.primaryLight,
+  },
+  itemLocked: {
+    opacity: 0.8,
   },
   leftBar: {
     position: "absolute",
@@ -515,6 +522,12 @@ const MI = StyleSheet.create({
     height: 5,
     borderRadius: 3,
     backgroundColor: C.primary,
+  },
+  lockedText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: C.textMuted,
+    textTransform: "uppercase",
   },
 });
 
@@ -622,7 +635,7 @@ export default function AppSideMenu({
   const isStaff = String(user?.role || "").toLowerCase() === "staff";
   const canManage = !isStaff;
 
-  const { billingInfo, billingLoading } = useAuth();
+  const { billingInfo, billingLoading, showUpgradePrompt } = useAuth();
 
   const slideAnim = React.useRef(new Animated.Value(-menuWidth)).current;
 
@@ -648,6 +661,15 @@ export default function AppSideMenu({
   const nav = (routeName) => {
     onClose?.();
     if (routeName) navigation?.navigate?.(routeName);
+  };
+
+  const navWithFeature = (routeName, featureKey, label) => {
+    if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
+      onClose?.();
+      showUpgradePrompt(buildFeatureUpgradeMessage(featureKey, label));
+      return;
+    }
+    nav(routeName);
   };
 
   const planName =
@@ -726,32 +748,37 @@ export default function AppSideMenu({
               <MenuItem
                 icon="link-outline"
                 label="Lead Sources"
-                onPress={() => nav("LeadSourceScreen")}
+                onPress={() => navWithFeature("LeadSourceScreen", "lead_sources", "Lead Sources")}
                 active={isActive("LeadSourceScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "lead_sources")}
               />
               <MenuItem
                 icon="pricetags-outline"
                 label="Products"
-                onPress={() => nav("ProductScreen")}
+                onPress={() => navWithFeature("ProductScreen", "products", "Products")}
                 active={isActive("ProductScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "products")}
               />
               <MenuItem
                 icon="people-circle-outline"
                 label="Admin / Staff"
-                onPress={() => nav("StaffScreen")}
+                onPress={() => navWithFeature("StaffScreen", "staff_management", "Admin / Staff")}
                 active={isActive("StaffScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "staff_management")}
               />
               <MenuItem
                 icon="flag-outline"
                 label="Targets"
-                onPress={() => nav("TargetsScreen")}
+                onPress={() => navWithFeature("TargetsScreen", "targets", "Targets")}
                 active={isActive("TargetsScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "targets")}
               />
               <MenuItem
                 icon="chatbubble-ellipses-outline"
                 label="Templates"
-                onPress={() => nav("MessageTemplateScreen")}
+                onPress={() => navWithFeature("MessageTemplateScreen", "whatsapp", "Templates")}
                 active={isActive("MessageTemplateScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "whatsapp")}
               />
             </MenuSection>
           )}
@@ -781,40 +808,45 @@ export default function AppSideMenu({
 
           {/* CRM */}
           <MenuSection title="CRM">
+              <MenuItem
+                icon="people-outline"
+                label="Enquiries"
+                onPress={() => navWithFeature("Enquiry", "enquiries", "Enquiries")}
+                active={isActive("Enquiry")}
+                locked={!hasPlanFeature(billingInfo?.plan, "enquiries")}
+              />
             <MenuItem
-              icon="people-outline"
-              label="Enquiries"
-              onPress={() => nav("Enquiry")}
-              active={isActive("Enquiry")}
-            />
+                icon="call-outline"
+                label="Follow-ups"
+                onPress={() => navWithFeature("FollowUp", "followups", "Follow-ups")}
+                active={isActive("FollowUp")}
+                locked={!hasPlanFeature(billingInfo?.plan, "followups")}
+              />
             <MenuItem
-              icon="call-outline"
-              label="Follow-ups"
-              onPress={() => nav("FollowUp")}
-              active={isActive("FollowUp")}
-            />
+                icon="mail-outline"
+                label="Email"
+                onPress={() => navWithFeature("EmailScreen", "email", "Email")}
+                active={isActive("EmailScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "email")}
+              />
             <MenuItem
-              icon="mail-outline"
-              label="Email"
-              onPress={() => nav("EmailScreen")}
-              active={isActive("EmailScreen")}
-            />
-            <MenuItem
-              icon="list-outline"
-              label="Calls"
-              onPress={() => nav("CallLog")}
-              active={isActive("CallLog")}
-            />
+                icon="list-outline"
+                label="Calls"
+                onPress={() => navWithFeature("CallLog", "call_logs", "Calls")}
+                active={isActive("CallLog")}
+                locked={!hasPlanFeature(billingInfo?.plan, "call_logs")}
+              />
           </MenuSection>
 
           {/* Communication */}
           <MenuSection title="Communication">
             <MenuItem
-              icon="chatbubbles-outline"
-              label="Team Chat"
-              onPress={() => nav("CommunicationScreen")}
-              active={isActive("CommunicationScreen")}
-            />
+                icon="chatbubbles-outline"
+                label="Team Chat"
+                onPress={() => navWithFeature("CommunicationScreen", "team_chat", "Team Chat")}
+                active={isActive("CommunicationScreen")}
+                locked={!hasPlanFeature(billingInfo?.plan, "team_chat")}
+              />
           </MenuSection>
           {/* Footer */}
           <FooterSection version={version} bottomInset={insets.bottom} />

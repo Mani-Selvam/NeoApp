@@ -15,12 +15,11 @@ function resolveApiBaseUrl() {
 const API_BASE_URL = resolveApiBaseUrl();
 
 async function request(path, options = {}) {
-    const token = localStorage.getItem("token");
     const response = await fetch(`${API_BASE_URL}${path}`, {
         ...options,
+        credentials: "include",
         headers: {
             "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...(options.headers || {}),
         },
     });
@@ -42,6 +41,10 @@ export const api = {
         request("/auth/superadmin/login", {
             method: "POST",
             body: JSON.stringify(payload),
+        }),
+    superadminLogout: () =>
+        request("/auth/logout", {
+            method: "POST",
         }),
 
     getSuperadmin2faStatus: () => request("/auth/superadmin/2fa/status"),

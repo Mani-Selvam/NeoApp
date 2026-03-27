@@ -60,43 +60,54 @@ const fmtPrice = (usd, cur, rate) => {
 
 const getTier = (plan) => {
   const raw = `${plan?.code || ""} ${plan?.name || ""}`.toLowerCase();
-  if (raw.includes("enter")) return "enterprise";
   if (raw.includes("pro"))   return "pro";
   if (raw.includes("basic")) return "basic";
   return "free";
 };
 
-const TIER_LABELS = { free:"FREE", basic:"BASIC", pro:"PRO", enterprise:"ENTERPRISE" };
+const TIER_LABELS = { free:"FREE", basic:"BASIC", pro:"PRO" };
 
 const TIER_SUBTITLES = {
-  free:       "Perfect to get started",
-  basic:      "Essential features included",
-  pro:        "Best for growing teams",
-  enterprise: "Custom pricing for large teams",
+  free:       "Core CRM tools for smaller teams",
+  basic:      "Free CRM plus calls and team chat",
+  pro:        "Basic CRM plus WhatsApp and email",
 };
 
 const getFeatures = (plan) => {
   const tier = getTier(plan);
-  const rows = [
-    { icon:"people-outline",             label:`${plan?.maxStaff||0} staff members` },
-    { icon:"shield-checkmark-outline",   label:`${plan?.maxAdmins||0} admin account${(plan?.maxAdmins||0)!==1?"s":""}` },
+  const baseRows = [
+    { icon:"people-outline", label:`${plan?.maxStaff||0} staff members` },
+    { icon:"shield-checkmark-outline", label:`${plan?.maxAdmins||0} admin account${(plan?.maxAdmins||0)!==1?"s":""}` },
     ...(plan?.trialDays > 0 ? [{ icon:"time-outline", label:`${plan.trialDays}-day free trial` }] : []),
-    { icon:"people-circle-outline",      label:"Enquiry management" },
-    { icon:"call-outline",               label:"Follow-up & call tracking" },
-    { icon:"bar-chart-outline",          label:"Analytics & reports" },
-    ...( ["pro","enterprise"].includes(tier) ? [
-      { icon:"chatbubble-ellipses-outline", label:"WhatsApp & email integration" },
-      { icon:"repeat-outline",             label:"Auto-call scheduler" },
-      { icon:"notifications-outline",      label:"Smart follow-up reminders" },
-    ] : []),
-    ...( tier === "enterprise" ? [
-      { icon:"cloud-upload-outline",  label:"Custom data export" },
-      { icon:"headset-outline",       label:"Dedicated account manager" },
-      { icon:"key-outline",           label:"Custom SLA & contract" },
-      { icon:"git-branch-outline",    label:"API & webhook access" },
-    ] : []),
+    { icon:"git-branch-outline", label:"Lead sources" },
+    { icon:"briefcase-outline", label:"Products" },
+    { icon:"people-circle-outline", label:"Admin / staff management" },
+    { icon:"flag-outline", label:"Targets" },
+    { icon:"help-circle-outline", label:"Help & support" },
+    { icon:"person-outline", label:"Enquiries" },
+    { icon:"calendar-outline", label:"Follow-ups" },
+    { icon:"bar-chart-outline", label:"Reports" },
   ];
-  return rows;
+
+  if (tier === "basic") {
+    return [
+      ...baseRows,
+      { icon:"call-outline", label:"Calls" },
+      { icon:"chatbubbles-outline", label:"Team chat" },
+    ];
+  }
+
+  if (tier === "pro") {
+    return [
+      ...baseRows,
+      { icon:"call-outline", label:"Calls" },
+      { icon:"chatbubbles-outline", label:"Team chat" },
+      { icon:"logo-whatsapp", label:"WhatsApp" },
+      { icon:"mail-outline", label:"Email" },
+    ];
+  }
+
+  return baseRows;
 };
 
 // ─── Plan card ─────────────────────────────────────────────────────────────────
@@ -104,7 +115,6 @@ const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
   const [open, setOpen] = useState(false);
   const tier   = getTier(plan);
   const col    = T[tier] || T.basic;
-  const isEntr = tier === "enterprise";
   const feats  = getFeatures(plan);
   const innerR = Math.max(sc.r - 2, 0); // inner radius when border=2
 
@@ -158,11 +168,9 @@ const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
               </View>
               <View style={{ alignItems: "flex-end" }}>
                 <Text style={[PCS.hPrice, { fontSize: sc.f.xl }]}>
-                  {isEntr ? "Custom" : displayPrice}
+                  {displayPrice}
                 </Text>
-                {!isEntr && (
-                  <Text style={[PCS.hPer, { fontSize: sc.f.xs }]}>per month</Text>
-                )}
+                <Text style={[PCS.hPer, { fontSize: sc.f.xs }]}>per month</Text>
               </View>
             </View>
           </LinearGradient>
@@ -272,8 +280,8 @@ const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
             </View>
           ) : (
             <Text style={[PCS.selBtnText, { fontSize: sc.f.sm, color: col.dot }]}>
-              {isEntr ? "Contact Sales" : "Select Plan"}
-            </Text>
+               {"Select Plan"}
+             </Text>
           )}
         </TouchableOpacity>
       </View>
@@ -373,9 +381,7 @@ export default function PricingScreen({ navigation }) {
   const handleContinue = async () => {
     if (!selected) return;
     Haptics.selectionAsync();
-    if (getTier(selected) === "enterprise")
-      navigation.navigate("EnterpriseContactScreen", { plan: selected });
-    else if (Number(selected?.basePriceUsd || 0) <= 0) {
+    if (Number(selected?.basePriceUsd || 0) <= 0) {
       try {
         setActivatingFree(true);
         const result = await createRazorpayOrder({

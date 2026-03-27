@@ -13,13 +13,14 @@ const {
   sendSignupTemplateNotifications,
 } = require("../utils/otpService");
 const firebaseAdmin = require("../config/firebaseAdmin");
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, WEB_AUTH_COOKIE_NAME } = require("../middleware/auth");
 const { requireSuperadmin } = require("../middleware/role.middleware");
 const SystemLog = require("../models/SystemLog");
 const { getSecurityPolicy } = require("../services/settingsService");
 const { getClientIp, isIpAllowed } = require("../utils/ipAllowlist");
 const { generateSecretBase32, verifyTotp, buildTotpOtpAuthUrl } = require("../utils/totp");
 const { ensureEnvLoaded } = require("../config/loadEnv");
+const { ensureFixedPlansSynced } = require("../services/planFeatures");
 
 ensureEnvLoaded();
 
@@ -34,6 +35,60 @@ const EXPOSE_TEST_OTP =
 
 // Temporary In-Memory OTP Store (For production use Redis or DB with TTL)
 const otpStore = {};
+const authRateLimitStore = new Map();
+
+const AUTH_RATE_LIMITS = {
+  sendOtp: { windowMs: 5 * 60 * 1000, max: 5, message: "Too many OTP requests. Please wait a few minutes." },
+  verifyOtp: { windowMs: 10 * 60 * 1000, max: 10, message: "Too many OTP verification attempts. Please try again later." },
+  resetPassword: { windowMs: 15 * 60 * 1000, max: 5, message: "Too many password reset attempts. Please try again later." },
+  login: { windowMs: 10 * 60 * 1000, max: 10, message: "Too many login attempts. Please try again later." },
+};
+
+const cleanupRateLimitStore = () => {
+  const now = Date.now();
+  authRateLimitStore.forEach((entry, key) => {
+    if (!entry?.resetAt || entry.resetAt <= now) {
+      authRateLimitStore.delete(key);
+    }
+  });
+};
+
+const buildRateLimitKey = (req, suffix) => {
+  const ip = getClientIp(req) || req.ip || "unknown";
+  return `${suffix}:${ip}`;
+};
+
+const authRateLimit = (config, keyResolver) => (req, res, next) => {
+  cleanupRateLimitStore();
+
+  const key = keyResolver ? keyResolver(req) : buildRateLimitKey(req, "auth");
+  const now = Date.now();
+  const current = authRateLimitStore.get(key);
+
+  if (!current || current.resetAt <= now) {
+    authRateLimitStore.set(key, { count: 1, resetAt: now + config.windowMs });
+    return next();
+  }
+
+  if (current.count >= config.max) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+    res.set("Retry-After", String(retryAfterSeconds));
+    return res.status(429).json({ success: false, message: config.message });
+  }
+
+  current.count += 1;
+  authRateLimitStore.set(key, current);
+  return next();
+};
+
+const cleanupExpiredOtpStore = () => {
+  const now = Date.now();
+  Object.keys(otpStore).forEach((key) => {
+    if (otpStore[key]?.expiresAt && otpStore[key].expiresAt <= now) {
+      delete otpStore[key];
+    }
+  });
+};
 
 const ensureBlankWhatsappConfig = async ({ companyId, ownerUserId }) => {
   if (!companyId || !ownerUserId) return;
@@ -108,6 +163,7 @@ const generateToken = (userId, { expiresIn = "7d" } = {}) => {
 
 const ensureDefaultTrialSubscription = async (companyId) => {
   try {
+    const { plansByCode } = await ensureFixedPlansSynced();
     const existing = await CompanySubscription.findOne({
       companyId,
       status: { $in: ["Trial", "Active"] },
@@ -117,23 +173,10 @@ const ensureDefaultTrialSubscription = async (companyId) => {
 
     if (existing) return { created: false, reason: "subscription_exists" };
 
-    let trialPlan =
-      (await Plan.findOne({ code: "FREE", isActive: true }).lean()) ||
+    const trialPlan =
+      plansByCode.get("FREE") ||
+      (await Plan.findOne({ code: "FREE" }).lean()) ||
       (await Plan.findOne({ isActive: true }).sort({ sortOrder: 1, createdAt: 1 }).lean());
-
-    if (!trialPlan) {
-      trialPlan = await Plan.create({
-        code: "TRIAL",
-        name: "Trial",
-        basePrice: 0,
-        trialDays: Number(process.env.DEFAULT_TRIAL_DAYS || 7),
-        maxAdmins: 1,
-        maxStaff: 1,
-        features: ["Basic CRM", "Lead Capture", "Follow-ups", "Call Logs", "WhatsApp Integration"],
-        isActive: true,
-        sortOrder: 0,
-      });
-    }
 
     const trialDaysRaw = Number(trialPlan.trialDays || process.env.DEFAULT_TRIAL_DAYS || 7);
     const trialDays = Number.isFinite(trialDaysRaw) && trialDaysRaw > 0 ? trialDaysRaw : 7;
@@ -254,8 +297,12 @@ router.post("/login-phone", async (req, res) => {
 });
 
 // [NEW] Send OTP Endpoint
-router.post("/send-otp", async (req, res) => {
+router.post(
+  "/send-otp",
+  authRateLimit(AUTH_RATE_LIMITS.sendOtp, (req) => buildRateLimitKey(req, "send-otp")),
+  async (req, res) => {
   try {
+    cleanupExpiredOtpStore();
     const { email, mobile, type, method } = req.body; // method: 'email', 'sms', 'whatsapp'
     // Received /send-otp request
 
@@ -401,8 +448,12 @@ router.post("/send-otp", async (req, res) => {
 });
 
 // [NEW] Verify OTP Endpoint
-router.post("/verify-otp", async (req, res) => {
+router.post(
+  "/verify-otp",
+  authRateLimit(AUTH_RATE_LIMITS.verifyOtp, (req) => buildRateLimitKey(req, "verify-otp")),
+  async (req, res) => {
   try {
+    cleanupExpiredOtpStore();
     const { email, mobile, otp } = req.body;
     const { key, record } = getOtpRecordForKeys(email, mobile);
 
@@ -441,8 +492,12 @@ router.post("/verify-otp", async (req, res) => {
 });
 
 // [NEW] Reset Password Endpoint
-router.post("/reset-password", async (req, res) => {
+router.post(
+  "/reset-password",
+  authRateLimit(AUTH_RATE_LIMITS.resetPassword, (req) => buildRateLimitKey(req, "reset-password")),
+  async (req, res) => {
   try {
+    cleanupExpiredOtpStore();
     const { email, mobile, password, otp } = req.body;
     const policy = await getSecurityPolicy();
     const minLen = Number(policy?.passwordMinLength ?? 8);
@@ -850,7 +905,10 @@ router.post("/signup", async (req, res) => {
 
 
 // Superadmin login (email + password only)
-router.post("/superadmin/login", async (req, res) => {
+router.post(
+  "/superadmin/login",
+  authRateLimit(AUTH_RATE_LIMITS.login, (req) => buildRateLimitKey(req, "superadmin-login")),
+  async (req, res) => {
   try {
     const { email, password, otp } = req.body;
     const policy = await getSecurityPolicy();
@@ -948,6 +1006,7 @@ router.post("/superadmin/login", async (req, res) => {
     const timeoutMinutes = Number(policy?.superadminSessionTimeoutMinutes ?? 30);
     const minutes = Number.isFinite(timeoutMinutes) && timeoutMinutes > 0 ? timeoutMinutes : 30;
     const token = generateToken(user._id, { expiresIn: `${minutes}m` });
+    setWebAuthCookie(req, res, token, minutes * 60 * 1000);
 
     await SystemLog.create({ userId: user._id, action: "SUPERADMIN_LOGIN_SUCCESS", ip, category: "auth" });
 
@@ -1057,8 +1116,12 @@ router.post("/superadmin/2fa/disable", verifyToken, requireSuperadmin, async (re
   }
 });
 // Login
-router.post("/login", async (req, res) => {
+router.post(
+  "/login",
+  authRateLimit(AUTH_RATE_LIMITS.login, (req) => buildRateLimitKey(req, "login")),
+  async (req, res) => {
   try {
+    cleanupExpiredOtpStore();
     const { email, password } = req.body;
     const normalizedEmail = normalizeEmail(email);
 
@@ -1261,6 +1324,7 @@ router.get("/profile", verifyToken, async (req, res) => {
 // Logout
 router.post("/logout", verifyToken, async (req, res) => {
   try {
+    clearWebAuthCookie(req, res);
     res.json({
       success: true,
       message: "Logout successful",
@@ -1277,3 +1341,36 @@ router.post("/logout", verifyToken, async (req, res) => {
 module.exports = router;
 
 
+const setWebAuthCookie = (req, res, token, maxAgeMs) => {
+  const isSecure =
+    String(process.env.WEB_AUTH_COOKIE_SECURE || "").toLowerCase() === "true" ||
+    req.secure ||
+    req.headers["x-forwarded-proto"] === "https";
+  const sameSite = isSecure ? "None" : "Lax";
+  const parts = [
+    `${WEB_AUTH_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    `SameSite=${sameSite}`,
+    `Max-Age=${Math.max(0, Math.floor(Number(maxAgeMs || 0) / 1000))}`,
+  ];
+  if (isSecure) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+};
+
+const clearWebAuthCookie = (req, res) => {
+  const isSecure =
+    String(process.env.WEB_AUTH_COOKIE_SECURE || "").toLowerCase() === "true" ||
+    req.secure ||
+    req.headers["x-forwarded-proto"] === "https";
+  const sameSite = isSecure ? "None" : "Lax";
+  const parts = [
+    `${WEB_AUTH_COOKIE_NAME}=`,
+    "Path=/",
+    "HttpOnly",
+    `SameSite=${sameSite}`,
+    "Max-Age=0",
+  ];
+  if (isSecure) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+};

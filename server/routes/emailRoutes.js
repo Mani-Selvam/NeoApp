@@ -5,6 +5,10 @@ const path = require("path");
 const multer = require("multer");
 
 const { verifyToken } = require("../middleware/auth");
+const {
+    buildSafeUploadName,
+    createFileFilter,
+} = require("../utils/uploadSecurity");
 const Company = require("../models/Company");
 const Enquiry = require("../models/Enquiry");
 const EmailLog = require("../models/EmailLog");
@@ -172,14 +176,34 @@ const storage = multer.diskStorage({
         cb(null, dir);
     },
     filename: (req, file, cb) => {
-        const safeName = String(file.originalname || "attachment").replace(/[^\w.\-() ]+/g, "_");
-        cb(null, `${Date.now()}-${safeName}`);
+        cb(null, buildSafeUploadName({ prefix: "email", originalname: file.originalname, fallbackExt: ".bin" }));
     },
 });
 
 const upload = multer({
     storage,
     limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+    fileFilter: createFileFilter({
+        allowedMimePatterns: [
+            /^image\/(jpeg|png|gif|webp)$/,
+            /^audio\/(mpeg|mp3|wav|ogg|aac|webm)$/,
+            "application/pdf",
+            "text/plain",
+            "text/csv",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/zip",
+            "application/x-zip-compressed",
+        ],
+        allowedExtensions: [
+            ".jpg", ".jpeg", ".png", ".gif", ".webp",
+            ".mp3", ".wav", ".ogg", ".aac", ".webm",
+            ".pdf", ".txt", ".csv", ".xls", ".xlsx", ".doc", ".docx", ".zip",
+        ],
+        message: "Unsupported email attachment type.",
+    }),
 });
 
 const getCompanyIdFromReq = (req) => {

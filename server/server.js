@@ -4,6 +4,7 @@ const express = require("express");
 const compression = require("compression");
 const cors = require("cors");
 const http = require("http");
+const jwt = require("jsonwebtoken");
 const { Server } = require("socket.io");
 
 const connectDB = require("./config/db");
@@ -86,6 +87,17 @@ const io = new Server(server, {
 
 app.set("io", io);
 
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (String(process.env.ENABLE_HSTS || "").toLowerCase() === "true") {
+    res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+  }
+  next();
+});
+
 app.use(
   cors({
     origin: corsOriginHandler,
@@ -96,9 +108,30 @@ app.use(
 );
 
 // Sockets Connection
+io.use((socket, next) => {
+  try {
+    const rawToken =
+      socket.handshake?.auth?.token ||
+      socket.handshake?.headers?.authorization ||
+      "";
+    const token = String(rawToken).replace(/^Bearer\s+/i, "").trim();
+    if (!token) {
+      return next(new Error("Socket authentication required"));
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
+    socket.data.userId = String(decoded.userId || "");
+    if (!socket.data.userId) {
+      return next(new Error("Invalid socket token"));
+    }
+    return next();
+  } catch (_error) {
+    return next(new Error("Invalid socket token"));
+  }
+});
+
 io.on("connection", (socket) => {
-  const rawUserId = socket.handshake?.query?.userId;
-  const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
+  const userId = String(socket.data?.userId || "");
 
   if (userId) {
     const room = `user:${userId}`;
@@ -109,8 +142,8 @@ io.on("connection", (socket) => {
   }
 
   socket.on("join_user_room", (nextUserId) => {
-    if (!nextUserId) return;
-    const room = `user:${nextUserId}`;
+    if (!nextUserId || String(nextUserId) !== userId) return;
+    const room = `user:${userId}`;
     socket.join(room);
     console.log(`Socket ${socket.id} joined room ${room}`);
   });
@@ -147,68 +180,80 @@ const withPlan = (featureName, bypassPrefixes = []) => {
   };
 };
 
-// Serve static files from uploads directory
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// Serve static files from uploads directory with tighter defaults.
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    dotfiles: "deny",
+    index: false,
+    fallthrough: false,
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Disposition", "inline");
+    },
+  }),
+);
 
 // Routes
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/support", require("./routes/supportRoutes"));
 app.use(
   "/api/enquiries",
-  withPlan("Lead Capture"),
+  withPlan("enquiries"),
   require("./routes/enquiryRoutes"),
 );
 app.use(
   "/api/followups",
-  withPlan("Follow-ups"),
+  withPlan("followups"),
   require("./routes/followupRoutes"),
 );
 app.use(
   "/api/dashboard",
-  withPlan("Basic CRM"),
+  withPlan("enquiries"),
   require("./routes/dashboardRoutes"),
 );
-app.use("/api/reports", withPlan("Reports"), require("./routes/reportRoutes"));
+app.use("/api/reports", withPlan("reports"), require("./routes/reportRoutes"));
 app.use(
   "/api/leadsources",
-  withPlan("Basic CRM"),
+  withPlan("lead_sources"),
   require("./routes/leadSourceRoutes"),
 );
 app.use(
   "/api/products",
-  withPlan("Basic CRM"),
+  withPlan("products"),
   require("./routes/productRoutes"),
 );
 app.use(
   "/api/targets",
-  withPlan("Basic CRM"),
+  withPlan("targets"),
   require("./routes/targetRoutes"),
 );
 app.use(
   "/api/communication",
-  withPlan("Basic CRM"),
+  withPlan("team_chat"),
   require("./routes/communicationRoutes"),
 );
 app.use("/api/sms", require("./routes/smsQueueRoutes"));
-app.use("/api/staff", withPlan("Basic CRM"), require("./routes/staffRoutes"));
+app.use("/api/staff", withPlan("staff_management"), require("./routes/staffRoutes"));
 app.use(
   "/api/calllogs",
-  withPlan("Call Logs", ["/debug", "/webhook"]),
+  withPlan("call_logs", ["/debug", "/webhook"]),
   require("./routes/callLogRoutes"),
 );
 app.use(
   "/api/whatsapp",
-  withPlan("WhatsApp Integration", ["/webhook", "/media"]),
+  withPlan("whatsapp", ["/webhook", "/media"]),
   require("./routes/whatsappRoutes"),
 );
 app.use(
   "/api/messagetemplates",
-  withPlan("WhatsApp Integration"),
+  withPlan("whatsapp"),
   require("./routes/messageTemplateRoutes"),
 );
 app.use(
   "/api/email",
-  withPlan("Basic CRM", ["/track"]),
+  withPlan("email", ["/track"]),
   require("./routes/emailRoutes"),
 );
 app.use("/api/users", require("./routes/userRoutes"));

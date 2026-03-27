@@ -9,6 +9,11 @@ const User = require("../models/User");
 const Enquiry = require("../models/Enquiry");
 const { verifyToken } = require("../middleware/auth");
 const { requireCompany, requireRole } = require("../middleware/tenant");
+const {
+  buildSafeUploadName,
+  createFileFilter,
+  sanitizeFilename,
+} = require("../utils/uploadSecurity");
 
 const router = express.Router();
 
@@ -20,14 +25,38 @@ if (!fs.existsSync(uploadDir)) {
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
+    cb(
+      null,
+      buildSafeUploadName({
+        prefix: file.fieldname || "attachment",
+        originalname: file.originalname,
+        fallbackExt: ".bin",
+      }),
+    );
   },
 });
 
 const upload = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: createFileFilter({
+    allowedMimePatterns: [
+      /^image\/(jpeg|png|gif|webp)$/,
+      /^audio\/(mpeg|mp3|wav|ogg|aac|webm)$/,
+      "application/pdf",
+      "text/plain",
+      "application/zip",
+      "application/x-zip-compressed",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ],
+    allowedExtensions: [
+      ".jpg", ".jpeg", ".png", ".gif", ".webp",
+      ".mp3", ".wav", ".ogg", ".aac", ".webm",
+      ".pdf", ".txt", ".zip", ".doc", ".docx",
+    ],
+    message: "Unsupported attachment type.",
+  }),
 });
 
 const toObjectId = (value) => {
@@ -53,7 +82,7 @@ const buildAttachmentPayload = (file) => {
   const isPdf = mimeType === "application/pdf";
   return {
     attachmentUrl: relativePath,
-    attachmentName: file.originalname || file.filename,
+    attachmentName: sanitizeFilename(file.originalname || file.filename, "attachment"),
     attachmentMimeType: mimeType,
     messageType: isImage ? "image" : isAudio ? "audio" : isPdf ? "pdf" : "document",
   };

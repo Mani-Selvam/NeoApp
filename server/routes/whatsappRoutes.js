@@ -23,6 +23,10 @@ const {
   saveWhatsappConfig,
   sendWhatsAppMessage,
 } = require("../utils/whatsappConfigService");
+const {
+  buildSafeUploadName,
+  createFileFilter,
+} = require("../utils/uploadSecurity");
 
 // Configure Multer for Media Uploads
 const storage = multer.diskStorage({
@@ -32,13 +36,30 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    cb(null, buildSafeUploadName({ prefix: "whatsapp", originalname: file.originalname, fallbackExt: ".bin" }));
   },
 });
 
 const upload = multer({
   storage,
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
+  fileFilter: createFileFilter({
+    allowedMimePatterns: [
+      /^image\/(jpeg|png|gif|webp)$/,
+      /^audio\/(mpeg|mp3|wav|ogg|aac|webm)$/,
+      /^video\/(mp4|quicktime|webm)$/,
+      "application/pdf",
+      "text/plain",
+      "application/zip",
+      "application/x-zip-compressed",
+    ],
+    allowedExtensions: [
+      ".jpg", ".jpeg", ".png", ".gif", ".webp",
+      ".mp3", ".wav", ".ogg", ".aac", ".webm",
+      ".mp4", ".mov", ".pdf", ".txt", ".zip",
+    ],
+    message: "Unsupported WhatsApp media type.",
+  }),
 });
 
 const getPublicBaseUrl = (req) => {

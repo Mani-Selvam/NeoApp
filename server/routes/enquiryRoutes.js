@@ -17,6 +17,10 @@ const {
   normalizePhoneNumber,
   sendWhatsAppMessage,
 } = require("../utils/whatsappConfigService");
+const {
+  buildSafeUploadName,
+  createFileFilter,
+} = require("../utils/uploadSecurity");
 
 const ENQUIRY_STATUS_MAP = {
   "new": "New",
@@ -133,10 +137,13 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     cb(
       null,
-      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname),
+      buildSafeUploadName({
+        prefix: file.fieldname || "image",
+        originalname: file.originalname,
+        fallbackExt: ".jpg",
+      }),
     );
   },
 });
@@ -144,18 +151,11 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-  fileFilter: function (req, file, cb) {
-    const filetypes = /jpeg|jpg|png|gif|webp/;
-    const mimetype = filetypes.test(file.mimetype);
-    const extname = filetypes.test(
-      path.extname(file.originalname).toLowerCase(),
-    );
-
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
-    cb(new Error("Only image files are allowed!"));
-  },
+  fileFilter: createFileFilter({
+    allowedMimePatterns: [/^image\/(jpeg|png|gif|webp)$/],
+    allowedExtensions: [".jpg", ".jpeg", ".png", ".gif", ".webp"],
+    message: "Only image files are allowed!",
+  }),
 });
 
 // Helper: Generate next enquiry number by querying the database

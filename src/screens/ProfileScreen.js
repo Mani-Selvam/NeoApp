@@ -27,6 +27,10 @@ import { getEmailSettings } from "../services/emailService";
 import * as userService from "../services/userService";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
+import {
+    buildFeatureUpgradeMessage,
+    hasPlanFeature,
+} from "../utils/planFeatures";
 
 const COLORS = {
     primary: "#4F46E5",
@@ -74,7 +78,7 @@ const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "").trim();
 
 const ProfileScreen = ({ navigation }) => {
     const insets = useSafeAreaInsets();
-    const { user, updateUser, logout, localLogout } = useAuth();
+    const { user, updateUser, logout, localLogout, billingInfo, showUpgradePrompt } = useAuth();
     const [profile, setProfile] = useState({
         name: "",
         email: "",
@@ -101,6 +105,14 @@ const ProfileScreen = ({ navigation }) => {
     });
     const [isDisablingAccount, setIsDisablingAccount] = useState(false);
     const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+
+    const openFeatureScreen = useCallback((routeName, featureKey, label) => {
+        if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
+            showUpgradePrompt(buildFeatureUpgradeMessage(featureKey, label));
+            return;
+        }
+        navigation.navigate(routeName);
+    }, [billingInfo?.plan, navigation, showUpgradePrompt]);
 
     useEffect(() => {
         if (user) {
@@ -590,7 +602,7 @@ const ProfileScreen = ({ navigation }) => {
                             <>
                                 <TouchableOpacity
                                     style={styles.settingsRow}
-                                    onPress={() => navigation.navigate("WhatsAppSettings")}
+                                    onPress={() => openFeatureScreen("WhatsAppSettings", "whatsapp", "WhatsApp Settings")}
                                 >
                                     <View style={styles.settingsIconWrap}>
                                         <Ionicons name="logo-whatsapp" size={18} color={COLORS.primary} />
@@ -605,7 +617,7 @@ const ProfileScreen = ({ navigation }) => {
 
                                 <TouchableOpacity
                                     style={styles.settingsRow}
-                                    onPress={() => navigation.navigate("EmailSettingsScreen")}
+                                    onPress={() => openFeatureScreen("EmailSettingsScreen", "email", "Email Settings")}
                                 >
                                     <View style={styles.settingsIconWrap}>
                                         <Ionicons name="mail-open-outline" size={18} color={COLORS.primary} />

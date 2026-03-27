@@ -57,6 +57,11 @@ import {
 import { getCommunicationThreads } from "../services/communicationService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
+import {
+  buildFeatureUpgradeMessage,
+  getFeatureLabel,
+  hasPlanFeature,
+} from "../utils/planFeatures";
 import { getSocket } from "../services/socketService";
 import { navigationRef } from "./navigationRef";
 
@@ -107,7 +112,7 @@ function EnquiryStackNavigator() {
 function MainTabNavigator() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, billingInfo, showUpgradePrompt } = useAuth();
   const selfId = String(user?.id || user?._id || "");
   const currentTabRef = useRef("Home");
   const [chatBadgeCount, setChatBadgeCount] = useState(0);
@@ -233,6 +238,24 @@ function MainTabNavigator() {
     ),
   });
 
+  const buildLockedTabListeners = (
+    routeName: string,
+    featureKey: string,
+    label: string,
+    onFocus?: () => void,
+  ) => ({
+    tabPress: (e: any) => {
+      if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
+        e.preventDefault();
+        showUpgradePrompt(buildFeatureUpgradeMessage(featureKey, label));
+      }
+    },
+    focus: () => {
+      currentTabRef.current = routeName;
+      onFocus?.();
+    },
+  });
+
   return (
     <Tab.Navigator
       backBehavior="history"
@@ -283,22 +306,18 @@ function MainTabNavigator() {
         name="Communication"
         component={CommunicationScreen}
         options={getTabOptions("Task", "chatbubbles-outline", chatBadgeCount)}
-        listeners={{
-          focus: () => {
-            currentTabRef.current = "Communication";
-            setChatBadgeCount(0);
-          },
-        }}
+        listeners={buildLockedTabListeners(
+          "Communication",
+          "team_chat",
+          "Team Chat",
+          () => setChatBadgeCount(0),
+        )}
       />
       <Tab.Screen
         name="Report"
         component={ReportScreen}
         options={getTabOptions("Report", "bar-chart-outline")}
-        listeners={{
-          focus: () => {
-            currentTabRef.current = "Report";
-          },
-        }}
+        listeners={buildLockedTabListeners("Report", "reports", "Reports")}
       />
     </Tab.Navigator>
   );
@@ -326,11 +345,150 @@ function StaffRestrictedScreen({ navigation, title }: { navigation: any; title: 
   );
 }
 
+function PlanRestrictedScreen({
+  navigation,
+  title,
+  message,
+}: {
+  navigation: any;
+  title: string;
+  message: string;
+}) {
+  return (
+    <View style={guardStyles.root}>
+      <View style={guardStyles.card}>
+        <View style={[guardStyles.iconWrap, { backgroundColor: "#EFF6FF" }]}>
+          <Ionicons name="lock-closed-outline" size={24} color="#2563EB" />
+        </View>
+        <Text style={guardStyles.title}>{title} is locked</Text>
+        <Text style={guardStyles.text}>{message}</Text>
+        <TouchableOpacity
+          style={guardStyles.button}
+          onPress={() => navigation.navigate("PricingScreen")}
+        >
+          <Text style={guardStyles.buttonText}>View Plans</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 function makeStaffRestricted(title: string) {
   return function RestrictedScreen(props: any) {
     return <StaffRestrictedScreen {...props} title={title} />;
   };
 }
+
+function createPlanRestrictedScreen(
+  Component: any,
+  featureKey: string,
+  title?: string,
+) {
+  return function RestrictedScreen(props: any) {
+    const { billingInfo } = useAuth();
+    if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
+      return (
+        <PlanRestrictedScreen
+          {...props}
+          title={title || getFeatureLabel(featureKey)}
+          message={buildFeatureUpgradeMessage(featureKey, title)}
+        />
+      );
+    }
+    return <Component {...props} />;
+  };
+}
+
+function createAdminPlanRestrictedScreen(
+  Component: any,
+  featureKey: string,
+  title?: string,
+) {
+  return function RestrictedScreen(props: any) {
+    const { billingInfo, user } = useAuth();
+    const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
+    if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
+      return (
+        <PlanRestrictedScreen
+          {...props}
+          title={title || getFeatureLabel(featureKey)}
+          message={buildFeatureUpgradeMessage(featureKey, title)}
+        />
+      );
+    }
+    if (isStaffUser) {
+      return <StaffRestrictedScreen {...props} title={title || "This screen"} />;
+    }
+    return <Component {...props} />;
+  };
+}
+
+const LeadSourceAccessScreen = createPlanRestrictedScreen(
+  LeadSourceScreen as any,
+  "lead_sources",
+  "Lead Sources",
+);
+const ProductAccessScreen = createPlanRestrictedScreen(
+  ProductScreen as any,
+  "products",
+  "Products",
+);
+const StaffAccessScreen = createAdminPlanRestrictedScreen(
+  StaffScreen as any,
+  "staff_management",
+  "Admin / Staff",
+);
+const CommunicationAccessScreen = createPlanRestrictedScreen(
+  CommunicationScreen as any,
+  "team_chat",
+  "Team Chat",
+);
+const TargetsAccessScreen = createPlanRestrictedScreen(
+  TargetsScreen as any,
+  "targets",
+  "Targets",
+);
+const EmailAccessScreen = createPlanRestrictedScreen(
+  EmailScreen as any,
+  "email",
+  "Email",
+);
+const CallLogAccessScreen = createPlanRestrictedScreen(
+  CallLogScreen as any,
+  "call_logs",
+  "Calls",
+);
+const ReportAccessScreen = createPlanRestrictedScreen(
+  ReportScreen as any,
+  "reports",
+  "Reports",
+);
+const WhatsAppChatAccessScreen = createPlanRestrictedScreen(
+  ChatScreen as any,
+  "whatsapp",
+  "WhatsApp",
+);
+const PricingStaffRestrictedScreen = makeStaffRestricted("Pricing");
+const EmailSettingsStaffRestrictedScreen = makeStaffRestricted("Email Settings");
+const MessageTemplateStaffRestrictedScreen = makeStaffRestricted("Templates");
+const WhatsAppSettingsStaffRestrictedScreen = makeStaffRestricted(
+  "WhatsApp Settings",
+);
+const EmailSettingsPlanAccessScreen = createPlanRestrictedScreen(
+  EmailSettingsScreen as any,
+  "email",
+  "Email Settings",
+);
+const MessageTemplatePlanAccessScreen = createPlanRestrictedScreen(
+  MessageTemplateScreen as any,
+  "whatsapp",
+  "Templates",
+);
+const WhatsAppSettingsPlanAccessScreen = createPlanRestrictedScreen(
+  WhatsAppSettingsScreen as any,
+  "whatsapp",
+  "WhatsApp Settings",
+);
 
 export default function AppNavigator() {
   const {
@@ -346,10 +504,18 @@ export default function AppNavigator() {
     dismissBillingPrompt,
   } = useAuth();
   const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
-  const PricingAccessScreen = isStaffUser ? makeStaffRestricted("Pricing") : (PricingScreen as any);
-  const EmailSettingsAccessScreen = isStaffUser ? makeStaffRestricted("Email Settings") : (EmailSettingsScreen as any);
-  const MessageTemplateAccessScreen = isStaffUser ? makeStaffRestricted("Templates") : (MessageTemplateScreen as any);
-  const WhatsAppSettingsAccessScreen = isStaffUser ? makeStaffRestricted("WhatsApp Settings") : (WhatsAppSettingsScreen as any);
+  const PricingAccessScreen = isStaffUser
+    ? PricingStaffRestrictedScreen
+    : (PricingScreen as any);
+  const EmailSettingsAccessScreen = isStaffUser
+    ? EmailSettingsStaffRestrictedScreen
+    : EmailSettingsPlanAccessScreen;
+  const MessageTemplateAccessScreen = isStaffUser
+    ? MessageTemplateStaffRestrictedScreen
+    : MessageTemplatePlanAccessScreen;
+  const WhatsAppSettingsAccessScreen = isStaffUser
+    ? WhatsAppSettingsStaffRestrictedScreen
+    : WhatsAppSettingsPlanAccessScreen;
   const tabHistoryRef = useRef<string[]>(["Home"]);
   const lastTabRef = useRef<string>("Home");
   const [incomingMatch, setIncomingMatch] = useState<any>(null);
@@ -360,7 +526,7 @@ export default function AppNavigator() {
   useEffect(() => {
     if (isLoggedIn && user) {
       import("../services/socketService").then(({ initSocket }) => {
-        initSocket(user.id || user._id);
+        initSocket();
       });
       // Start Call Monitoring with user's mobile context
       startCallMonitoring(user).catch((err) =>
@@ -805,15 +971,15 @@ export default function AppNavigator() {
           initialRouteName="Main"
         >
           <Stack.Screen name="Main" component={MainTabNavigator} />
-          <Stack.Screen name="LeadSourceScreen" component={LeadSourceScreen} />
-          <Stack.Screen name="ProductScreen" component={ProductScreen} />
-          <Stack.Screen name="StaffScreen" component={StaffScreen} />
+          <Stack.Screen name="LeadSourceScreen" component={LeadSourceAccessScreen} />
+          <Stack.Screen name="ProductScreen" component={ProductAccessScreen} />
+          <Stack.Screen name="StaffScreen" component={StaffAccessScreen} />
           <Stack.Screen
             name="CommunicationScreen"
-            component={CommunicationScreen as any}
+            component={CommunicationAccessScreen}
           />
-          <Stack.Screen name="TargetsScreen" component={TargetsScreen as any} />
-          <Stack.Screen name="EmailScreen" component={EmailScreen as any} />
+          <Stack.Screen name="TargetsScreen" component={TargetsAccessScreen} />
+          <Stack.Screen name="EmailScreen" component={EmailAccessScreen} />
           <Stack.Screen
             name="EmailSettingsScreen"
             component={EmailSettingsAccessScreen}
@@ -822,7 +988,7 @@ export default function AppNavigator() {
             name="MessageTemplateScreen"
             component={MessageTemplateAccessScreen}
           />
-          <Stack.Screen name="WhatsAppChat" component={ChatScreen as any} />
+          <Stack.Screen name="WhatsAppChat" component={WhatsAppChatAccessScreen} />
           <Stack.Screen
             name="WhatsAppSettings"
             component={WhatsAppSettingsAccessScreen}
@@ -833,7 +999,7 @@ export default function AppNavigator() {
             name="SupportHelp"
             component={SupportHelpScreen as any}
           />
-          <Stack.Screen name="CallLog" component={CallLogScreen as any} />
+          <Stack.Screen name="CallLog" component={CallLogAccessScreen} />
           <Stack.Screen name="PricingScreen" component={PricingAccessScreen} />
           <Stack.Screen
             name="CheckoutScreen"
@@ -851,6 +1017,7 @@ export default function AppNavigator() {
             name="EnterpriseContactScreen"
             component={EnterpriseContactScreen as any}
           />
+          <Stack.Screen name="ReportScreen" component={ReportAccessScreen} />
         </Stack.Navigator>
       )}
     </NavigationContainer>

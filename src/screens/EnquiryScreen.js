@@ -43,6 +43,10 @@ import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
 import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
 import { getImageUrl } from "../utils/imageHelper";
+import {
+  buildFeatureUpgradeMessage,
+  hasPlanFeature,
+} from "../utils/planFeatures";
 
 const API_URL = `${GLOBAL_API_URL}/enquiries`;
 const { width: SW, height: SH } = Dimensions.get("window");
@@ -300,7 +304,15 @@ const EnquiryCard = React.memo(function EnquiryCard({
 // ─── Detail page (slides in from right) ──────────────────────────────────────
 const DETAIL_TABS = ["Details","Calls"];
 
-const EnquiryDetailPage = ({ enquiry, callLogs, logsLoading, onClose, onEdit }) => {
+const EnquiryDetailPage = ({
+  enquiry,
+  callLogs,
+  logsLoading,
+  onClose,
+  onEdit,
+  billingInfo,
+  showUpgradePrompt,
+}) => {
   const insets = useSafeAreaInsets();
   const slideX = useRef(new Animated.Value(SW)).current;
   const [tab, setTab] = useState(0);
@@ -308,6 +320,13 @@ const EnquiryDetailPage = ({ enquiry, callLogs, logsLoading, onClose, onEdit }) 
   const lastTabRef = useRef(0);
   const pCfg   = priorityCfg(enquiry?.enqType);
   const colors = avatarColors(enquiry?.name);
+  const changeTab = (nextTab) => {
+    if (nextTab === 1 && !hasPlanFeature(billingInfo?.plan, "call_logs")) {
+      showUpgradePrompt(buildFeatureUpgradeMessage("call_logs", "Calls"));
+      return;
+    }
+    setTab(nextTab);
+  };
 
   useEffect(() => {
     Animated.timing(slideX, { toValue: 0, duration: 300, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
@@ -420,7 +439,7 @@ const EnquiryDetailPage = ({ enquiry, callLogs, logsLoading, onClose, onEdit }) 
       {/* ── Tabs ── */}
       <View style={SD.tabBar}>
         {DETAIL_TABS.map((t, i) => (
-          <TouchableOpacity key={t} onPress={() => setTab(i)} style={[SD.tab, tab === i && SD.tabActive]}>
+          <TouchableOpacity key={t} onPress={() => changeTab(i)} style={[SD.tab, tab === i && SD.tabActive]}>
             <Text style={[SD.tabText, tab === i && SD.tabTextActive]}>{t}</Text>
             {tab === i && <View style={SD.tabLine} />}
           </TouchableOpacity>
@@ -434,7 +453,7 @@ const EnquiryDetailPage = ({ enquiry, callLogs, logsLoading, onClose, onEdit }) 
           onMoveShouldSetPanResponder: (_, g) =>
             Math.abs(g.dx) > 12 && Math.abs(g.dy) < 20,
           onPanResponderRelease: (_, g) => {
-            if (g.dx < -40 && tab < DETAIL_TABS.length - 1) setTab(t => t + 1);
+            if (g.dx < -40 && tab < DETAIL_TABS.length - 1) changeTab(tab + 1);
             if (g.dx > 40 && tab > 0) setTab(t => t - 1);
             if (g.dx > 60 && tab === 0) handleClose();
           },
@@ -521,7 +540,7 @@ const EnquiryDetailPage = ({ enquiry, callLogs, logsLoading, onClose, onEdit }) 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function EnquiryListScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { user, logout } = useAuth();
+  const { user, logout, billingInfo, showUpgradePrompt } = useAuth();
 
   const [enquiries,    setEnquiries]    = useState([]);
   const [searchQuery,  setSearchQuery]  = useState("");
@@ -921,6 +940,8 @@ export default function EnquiryListScreen({ navigation, route }) {
             logsLoading={logsLoading}
             onClose={()=>setDetailEnquiry(null)}
             onEdit={handleEdit}
+            billingInfo={billingInfo}
+            showUpgradePrompt={showUpgradePrompt}
           />
         </View>
       )}

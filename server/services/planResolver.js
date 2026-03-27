@@ -3,6 +3,7 @@ const Coupon = require("../models/Coupon");
 const CompanySubscription = require("../models/CompanySubscription");
 const CompanyPlanOverride = require("../models/CompanyPlanOverride");
 const User = require("../models/User");
+const { ensureFixedPlansSynced, normalizePlanForClient } = require("./planFeatures");
 
 const calcDiscount = (price, coupon) => {
   if (!coupon) return { discountAmount: 0, finalPrice: price };
@@ -20,6 +21,7 @@ const calcDiscount = (price, coupon) => {
 };
 
 const resolveEffectivePlan = async (companyId) => {
+  await ensureFixedPlansSynced();
   const subscription = await CompanySubscription.findOne({ companyId, status: { $in: ["Trial", "Active"] } })
     .sort({ createdAt: -1 })
     .populate("planId")
@@ -30,7 +32,7 @@ const resolveEffectivePlan = async (companyId) => {
     return { hasPlan: false, reason: "No active subscription" };
   }
 
-  const plan = subscription.planId;
+  const plan = normalizePlanForClient(subscription.planId);
   const override = await CompanyPlanOverride.findOne({ companyId }).lean();
   const now = new Date();
   const overrideExpiry = override?.customExpiry ? new Date(override.customExpiry) : null;

@@ -30,6 +30,9 @@
   grid-template-columns: 1.3fr 1fr;
   gap: 18px;
   padding: 22px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(242, 249, 255, 0.95)),
+    radial-gradient(circle at top right, rgba(20, 184, 166, 0.12), transparent 30%);
 }
 
 .pm-hero-copy {
@@ -88,6 +91,37 @@
 .pm-form-card,
 .pm-table-card {
   padding: 20px;
+}
+
+.pm-edit-banner {
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid #cfe1f7;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fffc 100%);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pm-edit-banner strong {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(15, 108, 189, 0.1);
+  color: var(--pm-primary-dark);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.pm-edit-banner span {
+  display: block;
+  margin-top: 10px;
+  color: var(--pm-text-soft);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .pm-card-head h3 {
@@ -205,6 +239,12 @@
   font-size: 14px;
   background: #fff;
   color: var(--pm-text);
+}
+
+.pm-field input:disabled {
+  background: #f8fafc;
+  color: #64748b;
+  cursor: not-allowed;
 }
 
 .pm-field input:focus,
@@ -361,6 +401,10 @@
 
   .pm-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .pm-edit-banner {
+    flex-direction: column;
   }
 
   .pm-form-actions {

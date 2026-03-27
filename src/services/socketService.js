@@ -1,17 +1,20 @@
 import { DeviceEventEmitter, Platform, ToastAndroid } from "react-native";
 import { io } from "socket.io-client";
 import { SOCKET_URL } from "./apiConfig";
+import { getAuthToken } from "./secureTokenStorage";
 
 let socket = null;
 
-export const initSocket = (userId) => {
+export const initSocket = async () => {
     if (socket) return socket;
+    const token = await getAuthToken();
+    if (!token) return null;
 
     console.log("Initializing socket connection to:", SOCKET_URL);
 
     socket = io(SOCKET_URL, {
         transports: ["websocket"],
-        query: { userId },
+        auth: { token },
     });
 
     socket.on("connect", () => {

@@ -50,6 +50,10 @@ import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
+import {
+  buildFeatureUpgradeMessage,
+  hasPlanFeature,
+} from "../utils/planFeatures";
 import { getImageUrl } from "../utils/imageHelper";
 import ChatScreen from "./ChatScreen";
 
@@ -151,6 +155,12 @@ const DETAIL_TABS = [
   { key: "whatsapp", label: "WhatsApp", icon: "logo-whatsapp" },
   { key: "email", label: "Email", icon: "mail-outline" },
 ];
+
+const DETAIL_TAB_FEATURES = {
+  call: "call_logs",
+  whatsapp: "whatsapp",
+  email: "email",
+};
 
 const normalizePhone = (value) =>
   String(value || "")
@@ -1626,6 +1636,8 @@ const DetailView = ({
   onStartCall,
   sc,
   currentStatus,
+  billingInfo,
+  showUpgradePrompt,
 }) => {
   const insets = useSafeAreaInsets();
   const { width: SW, height: SH } = useWindowDimensions();
@@ -1676,6 +1688,14 @@ const DetailView = ({
 
   const goToTab = (idx) => {
     if (idx === tabRef.current || tabGestureLockedRef.current) return;
+    const nextTab = DETAIL_TABS[idx];
+    const requiredFeature = DETAIL_TAB_FEATURES[nextTab?.key];
+    if (requiredFeature && !hasPlanFeature(billingInfo?.plan, requiredFeature)) {
+      showUpgradePrompt(
+        buildFeatureUpgradeMessage(requiredFeature, nextTab?.label),
+      );
+      return;
+    }
     tabGestureLockedRef.current = true;
     tabRef.current = idx;
     setTabIdx(idx);
@@ -3243,7 +3263,7 @@ const FU = StyleSheet.create({
 export default function FollowUpScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const sc = useScale();
-  const { user, logout } = useAuth();
+  const { user, logout, billingInfo, showUpgradePrompt } = useAuth();
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -4891,6 +4911,8 @@ export default function FollowUpScreen({ navigation, route }) {
             onStartCall={() => handleStartContactCall(detailEnquiry)}
             sc={sc}
             currentStatus={selectedEnquiry?.status || detailEnquiry?.status}
+            billingInfo={billingInfo}
+            showUpgradePrompt={showUpgradePrompt}
           />
         </View>
       )}

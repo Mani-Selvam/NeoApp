@@ -10,6 +10,13 @@ const CompanySubscription = require("../models/CompanySubscription");
 const CompanyPlanOverride = require("../models/CompanyPlanOverride");
 const { resolveEffectivePlan } = require("../services/planResolver");
 const { clearCompanyPlanCache } = require("../middleware/planGuard");
+const {
+  FIXED_PLAN_CODES,
+  ensureFixedPlansSynced,
+  getPlanDefinition,
+  invalidatePlanSyncCache,
+  normalizePlanForClient,
+} = require("../services/planFeatures");
 	const {
 	  getUsdInrRate,
 	  setUsdInrRate,
@@ -500,7 +507,9 @@ exports.resetUserPassword = async (req, res) => {
 
 exports.getPlans = async (_req, res) => {
   try {
-    const plans = await Plan.find().sort({ sortOrder: 1, createdAt: -1 }).lean();
+    const syncResult = await ensureFixedPlansSynced();
+    syncResult.impactedCompanyIds.forEach((companyId) => clearCompanyPlanCache(companyId));
+    const plans = syncResult.plans.map((plan) => normalizePlanForClient(plan));
     res.json(plans);
   } catch (_error) {
     res.status(500).json({ success: false, message: "Failed to fetch plans" });
@@ -509,12 +518,10 @@ exports.getPlans = async (_req, res) => {
 
 exports.createPlan = async (req, res) => {
   try {
-    const payload = { ...req.body };
-    // Plans are stored in base currency (USD). Frontend conversion only.
-    delete payload.currency;
-    const plan = await Plan.create(payload);
-    await logAction(req, "PLAN_CREATED", { planId: plan._id, code: plan.code });
-    res.status(201).json(plan);
+    return res.status(400).json({
+      success: false,
+      message: "Custom plans are disabled. Edit Free CRM, Basic CRM, or Pro CRM instead.",
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -522,11 +529,38 @@ exports.createPlan = async (req, res) => {
 
 exports.updatePlan = async (req, res) => {
   try {
+    invalidatePlanSyncCache();
+    const syncResult = await ensureFixedPlansSynced();
     const updates = { ...req.body };
     delete updates.currency;
+    delete updates.features;
+    delete updates.name;
+    delete updates.code;
+    delete updates.sortOrder;
+
+    const existing = await Plan.findById(req.params.planId).lean();
+    if (!existing) return res.status(404).json({ success: false, message: "Plan not found" });
+
+    const code = String(existing.code || "").toUpperCase();
+    if (!FIXED_PLAN_CODES.includes(code)) {
+      return res.status(400).json({
+        success: false,
+        message: "Only Free CRM, Basic CRM, and Pro CRM can be managed here.",
+      });
+    }
+
+    const definition = getPlanDefinition(code);
     const plan = await Plan.findByIdAndUpdate(
       req.params.planId,
-      { $set: updates },
+      {
+        $set: {
+          ...updates,
+          code,
+          name: definition.name,
+          sortOrder: definition.sortOrder,
+          features: [...definition.features],
+        },
+      },
       { returnDocument: "after", runValidators: true },
     );
     if (!plan) return res.status(404).json({ success: false, message: "Plan not found" });
@@ -537,9 +571,10 @@ exports.updatePlan = async (req, res) => {
     impactedSubscriptions.forEach((subscription) => {
       clearCompanyPlanCache(subscription.companyId);
     });
+    syncResult.impactedCompanyIds.forEach((companyId) => clearCompanyPlanCache(companyId));
 
     await logAction(req, "PLAN_UPDATED", { planId: plan._id, changes: updates });
-    res.json(plan);
+    res.json(normalizePlanForClient(plan.toObject ? plan.toObject() : plan));
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -685,23 +720,10 @@ exports.updateRazorpaySettings = async (req, res) => {
 
 exports.deletePlan = async (req, res) => {
   try {
-    const inUseCount = await CompanySubscription.countDocuments({
-      planId: req.params.planId,
-      status: { $in: ["Active", "Trial"] },
+    return res.status(400).json({
+      success: false,
+      message: "Fixed pricing tiers cannot be deleted.",
     });
-
-    if (inUseCount > 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot delete plan while active/trial subscriptions use it",
-      });
-    }
-
-    const deleted = await Plan.findByIdAndDelete(req.params.planId);
-    if (!deleted) return res.status(404).json({ success: false, message: "Plan not found" });
-
-    await logAction(req, "PLAN_DELETED", { planId: req.params.planId, code: deleted.code });
-    return res.json({ success: true, message: "Plan deleted successfully" });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

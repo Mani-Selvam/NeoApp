@@ -20,7 +20,7 @@ const optionalAuth = async (req, _res, next) => {
     const token = authHeader.split(" ")[1];
     if (!token) return next();
 
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
     if (!decoded?.userId) return next();
 
     const user = await User.findById(decoded.userId).select("company_id email mobile name role status").lean();

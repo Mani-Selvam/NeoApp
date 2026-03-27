@@ -19,7 +19,6 @@ import {
   Platform,
   RefreshControl,
   ScrollView,
-  Share,
   StatusBar,
   StyleSheet,
   Text,
@@ -1069,10 +1068,10 @@ export default function HomeScreen({ navigation }) {
         Alert.alert("Copied!", `${code} copied`);
         return;
       }
-      await Share.share({ message: `Use coupon: ${code}` });
     } catch {
-      Alert.alert("Coupon Code", code);
+      // Fall through to the manual copy dialog below.
     }
+    Alert.alert("Coupon Code", code);
   };
 
   const todayActivityCount = todayTasks.length;
@@ -1247,6 +1246,142 @@ export default function HomeScreen({ navigation }) {
             paddingTop: isTablet || isDesktop ? 22 : 18,
           }}
         >
+          {/* COUPONS */}
+          {coupons.length > 0 && (
+            <MotiView
+              from={skipAnim ? { opacity: 1 } : { opacity: 0, translateY: 12 }}
+              animate={{ opacity: 1, translateY: 0 }}
+              transition={{ delay: 140 }}
+              style={S.section}
+            >
+              <SH
+                title="Active Coupons"
+                sub={`${coupons.length} offers available`}
+                titleSize={sectionTitleSize}
+                right={
+                  <View style={S.chip}>
+                    <Text style={S.chipText}>Offers</Text>
+                  </View>
+                }
+              />
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{
+                  gap: 12,
+                  paddingRight: 4,
+                }}
+              >
+                {coupons.slice(0, 10).map((coupon, i) => (
+                  <MotiView
+                    key={coupon.id}
+                    from={{ opacity: 0, translateX: 14 }}
+                    animate={{ opacity: 1, translateX: 0 }}
+                    transition={{ delay: 160 + i * 60 }}
+                  >
+                    <View style={[S.couponCard, { width: couponCardWidth }]}>
+                      <View
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: 4,
+                          backgroundColor: C.blue,
+                          borderTopLeftRadius: 18,
+                          borderBottomLeftRadius: 18,
+                        }}
+                      />
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "flex-start",
+                          marginBottom: 10,
+                        }}
+                      >
+                        <View>
+                          <Text
+                            style={[
+                              S.couponCode,
+                              isTablet || isDesktop
+                                ? {
+                                    fontSize: 22,
+                                  }
+                                : {},
+                            ]}
+                          >
+                            {coupon.code}
+                          </Text>
+                          <Text style={S.couponScope}>
+                            {coupon.planScopeLabel}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={S.couponCopyBtn}
+                          onPress={() => handleCouponCopy(coupon)}
+                        >
+                          <Ionicons
+                            name="copy-outline"
+                            size={12}
+                            color="#fff"
+                          />
+                          <Text
+                            style={{
+                              color: "#fff",
+                              fontSize: 11,
+                              fontWeight: "800",
+                            }}
+                          >
+                            Copy
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      <View
+                        style={{
+                          height: 1,
+                          backgroundColor: C.divider,
+                          marginBottom: 10,
+                        }}
+                      />
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <View style={S.couponValueChip}>
+                          <Text
+                            style={{
+                              fontSize: 13,
+                              color: C.blue,
+                              fontWeight: "900",
+                            }}
+                          >
+                            {getCouponValueLabel(coupon)}
+                          </Text>
+                        </View>
+                        <Text
+                          style={{
+                            fontSize: 11,
+                            color: C.textMuted,
+                            fontWeight: "600",
+                          }}
+                        >
+                          Exp:{" "}
+                          {coupon.expiryDate
+                            ? new Date(coupon.expiryDate).toLocaleDateString()
+                            : "-"}
+                        </Text>
+                      </View>
+                    </View>
+                  </MotiView>
+                ))}
+              </ScrollView>
+            </MotiView>
+          )}
+          
           <MotiView
             from={skipAnim ? { opacity: 1 } : { opacity: 0, translateX: 14 }}
             animate={{ opacity: 1, translateX: 0 }}
@@ -1496,142 +1631,6 @@ export default function HomeScreen({ navigation }) {
 
         {/* BODY */}
         <View style={[S.body, { paddingHorizontal: hPad }]}>
-          {/* COUPONS */}
-          {coupons.length > 0 && (
-            <MotiView
-              from={skipAnim ? { opacity: 1 } : { opacity: 0, translateY: 12 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ delay: 140 }}
-              style={S.section}
-            >
-              <SH
-                title="Active Coupons"
-                sub={`${coupons.length} offers available`}
-                titleSize={sectionTitleSize}
-                right={
-                  <View style={S.chip}>
-                    <Text style={S.chipText}>Offers</Text>
-                  </View>
-                }
-              />
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{
-                  gap: 12,
-                  paddingRight: 4,
-                }}
-              >
-                {coupons.slice(0, 10).map((coupon, i) => (
-                  <MotiView
-                    key={coupon.id}
-                    from={{ opacity: 0, translateX: 14 }}
-                    animate={{ opacity: 1, translateX: 0 }}
-                    transition={{ delay: 160 + i * 60 }}
-                  >
-                    <View style={[S.couponCard, { width: couponCardWidth }]}>
-                      <View
-                        style={{
-                          position: "absolute",
-                          left: 0,
-                          top: 0,
-                          bottom: 0,
-                          width: 4,
-                          backgroundColor: C.blue,
-                          borderTopLeftRadius: 18,
-                          borderBottomLeftRadius: 18,
-                        }}
-                      />
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          justifyContent: "space-between",
-                          alignItems: "flex-start",
-                          marginBottom: 10,
-                        }}
-                      >
-                        <View>
-                          <Text
-                            style={[
-                              S.couponCode,
-                              isTablet || isDesktop
-                                ? {
-                                    fontSize: 22,
-                                  }
-                                : {},
-                            ]}
-                          >
-                            {coupon.code}
-                          </Text>
-                          <Text style={S.couponScope}>
-                            {coupon.planScopeLabel}
-                          </Text>
-                        </View>
-                        <TouchableOpacity
-                          style={S.couponCopyBtn}
-                          onPress={() => handleCouponCopy(coupon)}
-                        >
-                          <Ionicons
-                            name="copy-outline"
-                            size={12}
-                            color="#fff"
-                          />
-                          <Text
-                            style={{
-                              color: "#fff",
-                              fontSize: 11,
-                              fontWeight: "800",
-                            }}
-                          >
-                            Copy
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                      <View
-                        style={{
-                          height: 1,
-                          backgroundColor: C.divider,
-                          marginBottom: 10,
-                        }}
-                      />
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                        }}
-                      >
-                        <View style={S.couponValueChip}>
-                          <Text
-                            style={{
-                              fontSize: 13,
-                              color: C.blue,
-                              fontWeight: "900",
-                            }}
-                          >
-                            {getCouponValueLabel(coupon)}
-                          </Text>
-                        </View>
-                        <Text
-                          style={{
-                            fontSize: 11,
-                            color: C.textMuted,
-                            fontWeight: "600",
-                          }}
-                        >
-                          Exp:{" "}
-                          {coupon.expiryDate
-                            ? new Date(coupon.expiryDate).toLocaleDateString()
-                            : "-"}
-                        </Text>
-                      </View>
-                    </View>
-                  </MotiView>
-                ))}
-              </ScrollView>
-            </MotiView>
-          )}
-
           {/* KEY METRICS - responsive grid */}
           <View style={S.section}>
             <SH

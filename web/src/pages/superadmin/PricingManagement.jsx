@@ -1,140 +1,104 @@
 import { useEffect, useMemo, useState } from "react";
+import DataTable from "../../components/DataTable";
 import Header from "../../components/Header";
 import Sidebar from "../../components/Sidebar";
-import DataTable from "../../components/DataTable";
 import { api } from "../../services/api";
 import "../../styles/superadmin/PricingManagement.css";
 
-const PLAN_PRESETS = {
-  free: {
+const FIXED_PLANS = [
+  {
     code: "FREE",
-    name: "Free",
-    basePrice: "0",
-    trialDays: "14",
-    maxAdmins: "1",
-    maxStaff: "1",
-    extraAdminPrice: "0",
-    extraStaffPrice: "0",
-    features: ["Basic CRM", "Lead Capture"],
+    name: "Free CRM",
+    description: "Core CRM access for smaller teams.",
+    features: [
+      "Lead Sources",
+      "Products",
+      "Admin / Staff",
+      "Targets",
+      "Help & Support",
+      "Enquiries",
+      "Follow-ups",
+      "Reports",
+    ],
   },
-  basic: {
+  {
     code: "BASIC",
-    name: "Basic",
-    basePrice: "84",
-    trialDays: "7",
-    maxAdmins: "1",
-    maxStaff: "2",
-    extraAdminPrice: "12",
-    extraStaffPrice: "8",
-    features: ["Basic CRM", "Lead Capture", "Follow-ups"],
+    name: "Basic CRM",
+    description: "Free CRM plus calling and team collaboration.",
+    features: [
+      "Lead Sources",
+      "Products",
+      "Admin / Staff",
+      "Targets",
+      "Help & Support",
+      "Enquiries",
+      "Follow-ups",
+      "Reports",
+      "Calls",
+      "Team Chat",
+    ],
   },
-  pro: {
+  {
     code: "PRO",
-    name: "Pro",
-    basePrice: "199",
-    trialDays: "7",
-    maxAdmins: "2",
-    maxStaff: "10",
-    extraAdminPrice: "15",
-    extraStaffPrice: "10",
-    features: ["Basic CRM", "Lead Capture", "Follow-ups", "Call Logs", "Reports"],
+    name: "Pro CRM",
+    description: "Basic CRM plus WhatsApp and email.",
+    features: [
+      "Lead Sources",
+      "Products",
+      "Admin / Staff",
+      "Targets",
+      "Help & Support",
+      "Enquiries",
+      "Follow-ups",
+      "Reports",
+      "Calls",
+      "Team Chat",
+      "WhatsApp",
+      "Email",
+    ],
   },
-  enterprise: {
-    code: "ENTERPRISE",
-    name: "Enterprise",
-    basePrice: "499",
-    trialDays: "14",
-    maxAdmins: "5",
-    maxStaff: "100",
-    extraAdminPrice: "20",
-    extraStaffPrice: "12",
-    features: ["Basic CRM", "Lead Capture", "Follow-ups", "Call Logs", "Reports", "Priority Support"],
-  },
-};
-
-const FEATURE_OPTIONS = [
-  "Basic CRM",
-  "Lead Capture",
-  "Follow-ups",
-  "Call Logs",
-  "Reports",
-  "Priority Support",
-  "WhatsApp Integration",
-  "API Access",
 ];
 
-const PRESET_CARD_META = {
-  free: {
-    label: "Free",
-    description: "Starter setup for trials and small teams.",
-  },
-  basic: {
-    label: "Basic",
-    description: "Balanced setup for everyday company usage.",
-  },
-  pro: {
-    label: "Pro",
-    description: "Built for growing teams with higher limits.",
-  },
-  enterprise: {
-    label: "Enterprise",
-    description: "Large-scale plan with premium capacity.",
-  },
-};
-
-const emptyForm = {
-  code: "",
-  name: "",
-  basePrice: "",
-  trialDays: "",
-  maxAdmins: "",
-  maxStaff: "",
-  extraAdminPrice: "",
-  extraStaffPrice: "",
-  features: "",
-  isActive: true,
+const formatCurrency = (value) => {
+  const amount = Number(value || 0);
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch (_error) {
+    return `$${amount.toFixed(2)}`;
+  }
 };
 
 const toPayload = (form) => ({
-  ...form,
   basePrice: Number(form.basePrice || 0),
   trialDays: Number(form.trialDays || 0),
   maxAdmins: Number(form.maxAdmins || 0),
   maxStaff: Number(form.maxStaff || 0),
   extraAdminPrice: Number(form.extraAdminPrice || 0),
   extraStaffPrice: Number(form.extraStaffPrice || 0),
-  features: (form.features || "")
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean),
+  isActive: Boolean(form.isActive),
 });
 
-const formatCurrency = (value, currency) => {
-  const amount = Number(value || 0);
-  const safeCurrency = currency === "USD" ? "USD" : "INR";
-  const locale = safeCurrency === "INR" ? "en-IN" : "en-US";
-
-  try {
-    return new Intl.NumberFormat(locale, {
-      style: "currency",
-      currency: safeCurrency,
-      maximumFractionDigits: safeCurrency === "USD" ? 2 : 0,
-    }).format(amount);
-  } catch (_e) {
-    const symbol = safeCurrency === "INR" ? "₹" : "$";
-    return `${symbol}${amount.toLocaleString()}`;
-  }
-};
+const buildInitialForm = (plan) => ({
+  code: plan.code || "",
+  name: plan.name || "",
+  basePrice: String(plan.basePrice ?? ""),
+  trialDays: String(plan.trialDays ?? ""),
+  maxAdmins: String(plan.maxAdmins ?? ""),
+  maxStaff: String(plan.maxStaff ?? ""),
+  extraAdminPrice: String(plan.extraAdminPrice ?? ""),
+  extraStaffPrice: String(plan.extraStaffPrice ?? ""),
+  isActive: Boolean(plan.isActive),
+});
 
 export default function PricingManagement() {
   const [plans, setPlans] = useState([]);
   const [error, setError] = useState("");
-  const [preset, setPreset] = useState("");
-  const [form, setForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
-
-  const formatPrice = (value) => formatCurrency(value, "USD");
+  const [editingCode, setEditingCode] = useState("");
+  const [form, setForm] = useState(null);
 
   const load = async () => {
     try {
@@ -150,120 +114,69 @@ export default function PricingManagement() {
     load();
   }, []);
 
-  const applyPreset = (value) => {
-    setPreset(value);
-    if (!value || !PLAN_PRESETS[value]) return;
+  const planMap = useMemo(
+    () => new Map(plans.map((plan) => [String(plan.code || "").toUpperCase(), plan])),
+    [plans],
+  );
 
-    const next = PLAN_PRESETS[value];
-    setForm((prev) => ({
-      ...prev,
-      code: next.code,
-      name: next.name,
-      basePrice: next.basePrice,
-      trialDays: next.trialDays,
-      maxAdmins: next.maxAdmins,
-      maxStaff: next.maxStaff,
-      extraAdminPrice: next.extraAdminPrice,
-      extraStaffPrice: next.extraStaffPrice,
-      features: next.features.join(", "),
-    }));
+  const viewPlans = useMemo(
+    () =>
+      FIXED_PLANS.map((preset) => {
+        const current = planMap.get(preset.code) || {};
+        return {
+          ...preset,
+          ...current,
+          code: preset.code,
+          name: preset.name,
+          features: preset.features,
+        };
+      }),
+    [planMap],
+  );
+
+  const metrics = useMemo(() => {
+    const total = viewPlans.length;
+    const active = viewPlans.filter((plan) => plan.isActive).length;
+    const averagePrice = total
+      ? viewPlans.reduce((sum, plan) => sum + Number(plan.basePrice || 0), 0) / total
+      : 0;
+    return { total, active, averagePrice };
+  }, [viewPlans]);
+
+  const startEdit = (plan) => {
+    setEditingCode(plan.code);
+    setForm(buildInitialForm(plan));
   };
 
-  const toggleFeature = (feature) => {
-    const current = (form.features || "")
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean);
-    const exists = current.includes(feature);
-    const next = exists ? current.filter((f) => f !== feature) : [...current, feature];
-    setForm({ ...form, features: next.join(", ") });
+  const cancelEdit = () => {
+    setEditingCode("");
+    setForm(null);
   };
 
   const submit = async (e) => {
     e.preventDefault();
-    try {
-      if (editingId) {
-        await api.updatePlan(editingId, toPayload(form));
-      } else {
-        await api.createPlan(toPayload(form));
-      }
+    const current = planMap.get(editingCode);
+    if (!current?._id || !form) return;
 
-      setForm(emptyForm);
-      setPreset("");
-      setEditingId(null);
-      setShowForm(false);
+    try {
+      await api.updatePlan(current._id, toPayload(form));
+      cancelEdit();
       await load();
     } catch (e) {
       setError(e.message || "Failed to save plan");
     }
   };
 
-  const startEdit = (plan) => {
-    setEditingId(plan._id);
-    setPreset("");
-    setShowForm(true);
-    setForm({
-      code: plan.code || "",
-      name: plan.name || "",
-      basePrice: String(plan.basePrice ?? ""),
-      trialDays: String(plan.trialDays ?? ""),
-      maxAdmins: String(plan.maxAdmins ?? ""),
-      maxStaff: String(plan.maxStaff ?? ""),
-      extraAdminPrice: String(plan.extraAdminPrice ?? ""),
-      extraStaffPrice: String(plan.extraStaffPrice ?? ""),
-      features: (plan.features || []).join(", "),
-      isActive: Boolean(plan.isActive),
-    });
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setPreset("");
-    setForm(emptyForm);
-    setShowForm(false);
-  };
-
   const toggleActive = async (plan) => {
+    const current = planMap.get(plan.code);
+    if (!current?._id) return;
     try {
-      await api.updatePlan(plan._id, { isActive: !plan.isActive });
+      await api.updatePlan(current._id, { isActive: !plan.isActive });
       await load();
     } catch (e) {
       setError(e.message || "Failed to update plan status");
     }
   };
-
-  const deletePlan = async (plan) => {
-    if (!globalThis.confirm?.(`Delete plan ${plan.name}?`)) return;
-    try {
-      await api.deletePlan(plan._id);
-      if (editingId === plan._id) cancelEdit();
-      await load();
-    } catch (e) {
-      setError(e.message || "Failed to delete plan");
-    }
-  };
-
-  const metrics = useMemo(() => {
-    const total = plans.length;
-    const active = plans.filter((p) => p.isActive).length;
-    const totalPrice = plans.reduce((sum, p) => sum + Number(p.basePrice || 0), 0);
-    const averagePrice = total ? totalPrice / total : 0;
-    return {
-      total,
-      active,
-      inactive: total - active,
-      averagePrice,
-    };
-  }, [plans]);
-
-  const featureChips = useMemo(
-    () =>
-      (form.features || "")
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean),
-    [form.features],
-  );
 
   const columns = [
     { key: "code", label: "Code" },
@@ -272,7 +185,7 @@ export default function PricingManagement() {
     { key: "addonPriceLabel", label: "Add-on Pricing" },
     { key: "limitsLabel", label: "Limits" },
     { key: "trialDaysLabel", label: "Trial" },
-    { key: "featuresLabel", label: "Features" },
+    { key: "featuresLabel", label: "Included Features" },
     {
       key: "isActiveLabel",
       label: "Status",
@@ -285,7 +198,7 @@ export default function PricingManagement() {
     {
       key: "actions",
       label: "Actions",
-      render: (_v, row) => (
+      render: (_value, row) => (
         <div className="pm-actions">
           <button type="button" className="pm-action-btn" onClick={() => startEdit(row)}>
             Edit
@@ -293,135 +206,88 @@ export default function PricingManagement() {
           <button type="button" className="pm-action-btn" onClick={() => toggleActive(row)}>
             {row.isActive ? "Disable" : "Enable"}
           </button>
-          <button type="button" className="pm-action-btn danger" onClick={() => deletePlan(row)}>
-            Delete
-          </button>
         </div>
       ),
     },
   ];
 
-	  const rows = plans.map((p) => ({
-	    ...p,
-	    basePriceLabel: formatPrice(p.basePrice),
-	    addonPriceLabel: `Admin ${formatPrice(p.extraAdminPrice)} / Staff ${formatPrice(p.extraStaffPrice)}`,
-	    limitsLabel: `${Number(p.maxAdmins || 0)} admins / ${Number(p.maxStaff || 0)} staff`,
-	    trialDaysLabel: `${Number(p.trialDays || 0)} days`,
-	    featuresLabel: (p.features || []).slice(0, 3).join(", ") || "-",
-	    isActiveLabel: p.isActive ? "Active" : "Inactive",
-	  }));
+  const rows = viewPlans.map((plan) => ({
+    ...plan,
+    basePriceLabel: formatCurrency(plan.basePrice),
+    addonPriceLabel: `Admin ${formatCurrency(plan.extraAdminPrice)} / Staff ${formatCurrency(plan.extraStaffPrice)}`,
+    limitsLabel: `${Number(plan.maxAdmins || 0)} admins / ${Number(plan.maxStaff || 0)} staff`,
+    trialDaysLabel: `${Number(plan.trialDays || 0)} days`,
+    featuresLabel: plan.features.join(", "),
+    isActiveLabel: plan.isActive ? "Active" : "Inactive",
+  }));
 
-	  return (
-	    <div className="admin-shell">
-	      <Sidebar />
-	      <div className="admin-main">
-	        <Header title="Pricing Management" />
-	        <main className="page-content pricing-management-page">
-	          {error ? <div className="error-box">{error}</div> : null}
+  const editingPlan = viewPlans.find((plan) => plan.code === editingCode);
 
-	          <section className="pm-hero-card">
-	            <div className="pm-hero-copy">
-	              <div>
-	                <h2>Plan Configuration</h2>
-	                <p>Design pricing tiers with clear limits, feature bundles, and activation controls.</p>
-	              </div>
-	              <div className="pm-hero-actions">
-	                <button
-	                  type="button"
-	                  className="pm-btn pm-btn-primary"
-	                  onClick={() => {
-	                    setEditingId(null);
-	                    setPreset("");
-	                    setForm(emptyForm);
-	                    setShowForm((prev) => !prev);
-	                  }}
-	                >
-	                  {showForm && !editingId ? "Close Form" : "Add New Plan"}
-	                </button>
-	              </div>
-	            </div>
-	            <div className="pm-metrics">
-	              <article className="pm-metric">
-	                <span>Total Plans</span>
-	                <strong>{metrics.total}</strong>
+  return (
+    <div className="admin-shell">
+      <Sidebar />
+      <div className="admin-main">
+        <Header title="Pricing Management" />
+        <main className="page-content pricing-management-page">
+          {error ? <div className="error-box">{error}</div> : null}
+
+          <section className="pm-hero-card">
+            <div className="pm-hero-copy">
+              <div>
+                <h2>Fixed Tier Pricing</h2>
+                <p>Manage the three live CRM tiers from one place. Pricing, seats, trial days, and active status stay editable while features remain locked to the plan.</p>
+              </div>
+            </div>
+            <div className="pm-metrics">
+              <article className="pm-metric">
+                <span>Total Plans</span>
+                <strong>{metrics.total}</strong>
               </article>
               <article className="pm-metric">
                 <span>Active</span>
                 <strong>{metrics.active}</strong>
               </article>
-	              <article className="pm-metric">
-	                <span>Avg Price</span>
-	                <strong>{formatPrice(metrics.averagePrice)}</strong>
-	              </article>
-	            </div>
-	          </section>
+              <article className="pm-metric">
+                <span>Avg Price</span>
+                <strong>{formatCurrency(metrics.averagePrice)}</strong>
+              </article>
+            </div>
+          </section>
 
-          {showForm ? (
+          {editingPlan && form ? (
             <section className="pm-form-card">
               <div className="pm-card-head">
-                <h3>{editingId ? "Edit Plan" : "Create Plan"}</h3>
-                <p>{editingId ? "Update an existing tier." : "Add a new pricing tier for companies."}</p>
+                <h3>Edit {editingPlan.name}</h3>
+                <p>The included features below are enforced automatically and cannot be changed here.</p>
+              </div>
+
+              <div className="pm-edit-banner">
+                <div>
+                  <strong>{editingPlan.code}</strong>
+                  <span>{editingPlan.description}</span>
+                </div>
+                <div className="pm-preset-stats">
+                  <span>{Number(editingPlan.maxStaff || 0)} Staff</span>
+                  <span>{Number(editingPlan.maxAdmins || 0)} Admin</span>
+                  <span>{Number(editingPlan.trialDays || 0)} Trial Days</span>
+                </div>
               </div>
 
               <form className="pm-form-grid" onSubmit={submit}>
-                {!editingId ? (
-                  <div className="pm-field pm-field-full">
-                    <span>Preset Template</span>
-                    <div className="pm-preset-grid" role="list" aria-label="Plan preset">
-                      {Object.entries(PRESET_CARD_META).map(([key, meta]) => {
-                        const presetPlan = PLAN_PRESETS[key];
-                        const selectedPreset = preset === key;
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            role="listitem"
-                            className={`pm-preset-card ${selectedPreset ? "is-selected" : ""}`}
-                            onClick={() => applyPreset(key)}
-                          >
-                            <div className="pm-preset-top">
-                              <strong>{meta.label}</strong>
-                              <span>{presetPlan?.code}</span>
-                            </div>
-                            <p>{meta.description}</p>
-                            <div className="pm-preset-stats">
-                              <span>{presetPlan?.maxStaff || 0} Staff</span>
-                              <span>{presetPlan?.maxAdmins || 0} Admin</span>
-                              <span>{presetPlan?.trialDays || 0} Trial Days</span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null}
-
                 <label className="pm-field">
                   <span>Plan Code</span>
-                  <input
-                    placeholder="BASIC"
-                    value={form.code}
-                    onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-                    required
-                  />
+                  <input value={form.code} disabled />
                 </label>
 
-	                <label className="pm-field">
-	                  <span>Plan Name</span>
-	                  <input
-	                    placeholder="Basic"
-	                    value={form.name}
-	                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-	                    required
-	                  />
-	                </label>
+                <label className="pm-field">
+                  <span>Plan Name</span>
+                  <input value={form.name} disabled />
+                </label>
 
-
-		                <label className="pm-field">
-		                  <span>Base Price (USD)</span>
-		                  <input
+                <label className="pm-field">
+                  <span>Base Price (USD)</span>
+                  <input
                     type="number"
-                    placeholder="199"
                     value={form.basePrice}
                     onChange={(e) => setForm({ ...form, basePrice: e.target.value })}
                     required
@@ -435,27 +301,22 @@ export default function PricingManagement() {
                       <span>Max Staff</span>
                       <input
                         type="number"
-                        placeholder="10"
                         value={form.maxStaff}
                         onChange={(e) => setForm({ ...form, maxStaff: e.target.value })}
                       />
                     </label>
-
                     <label className="pm-field pm-limit-card">
                       <span>Max Admins</span>
                       <input
                         type="number"
-                        placeholder="2"
                         value={form.maxAdmins}
                         onChange={(e) => setForm({ ...form, maxAdmins: e.target.value })}
                       />
                     </label>
-
                     <label className="pm-field pm-limit-card">
                       <span>Trial Days</span>
                       <input
                         type="number"
-                        placeholder="7"
                         value={form.trialDays}
                         onChange={(e) => setForm({ ...form, trialDays: e.target.value })}
                       />
@@ -467,7 +328,6 @@ export default function PricingManagement() {
                   <span>Extra Admin Price (USD)</span>
                   <input
                     type="number"
-                    placeholder="15"
                     value={form.extraAdminPrice}
                     onChange={(e) => setForm({ ...form, extraAdminPrice: e.target.value })}
                   />
@@ -477,55 +337,39 @@ export default function PricingManagement() {
                   <span>Extra Staff Price (USD)</span>
                   <input
                     type="number"
-                    placeholder="10"
                     value={form.extraStaffPrice}
                     onChange={(e) => setForm({ ...form, extraStaffPrice: e.target.value })}
                   />
                 </label>
 
                 <label className="pm-field pm-field-full">
-                  <span>Features (comma separated)</span>
-                  <input
-                    placeholder="Basic CRM, Follow-ups"
-                    value={form.features}
-                    onChange={(e) => setForm({ ...form, features: e.target.value })}
-                  />
-                </label>
-
-                <label className="pm-field pm-field-full">
-                  <span>Quick Add Feature</span>
-                  <select
-                    aria-label="Quick add feature"
-                    onChange={(e) => {
-                      if (e.target.value) toggleFeature(e.target.value);
-                      e.target.value = "";
-                    }}
-                  >
-                    <option value="">Select a feature</option>
-                    {FEATURE_OPTIONS.map((feature) => (
-                      <option key={feature} value={feature}>
-                        {feature}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {featureChips.length ? (
-                  <div className="pm-feature-chips pm-field-full">
-                    {featureChips.map((feature) => (
-                      <span key={feature} className="pm-chip">
+                  <span>Included Features</span>
+                  <div className="pm-feature-chips">
+                    {editingPlan.features.map((feature) => (
+                      <span key={`edit-${feature}`} className="pm-chip">
                         {feature}
                       </span>
                     ))}
                   </div>
-                ) : null}
+                </label>
+
+                <label className="pm-field pm-field-full">
+                  <span>Status</span>
+                  <select
+                    value={form.isActive ? "active" : "inactive"}
+                    onChange={(e) => setForm({ ...form, isActive: e.target.value === "active" })}
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </label>
 
                 <div className="pm-form-actions pm-field-full">
                   <button type="button" className="pm-btn pm-btn-muted" onClick={cancelEdit}>
                     Cancel
                   </button>
                   <button type="submit" className="pm-btn pm-btn-primary">
-                    {editingId ? "Update Plan" : "Save Plan"}
+                    Update Plan
                   </button>
                 </div>
               </form>
@@ -535,7 +379,7 @@ export default function PricingManagement() {
           <section className="pm-table-card">
             <div className="pm-card-head">
               <h3>Plan List</h3>
-              <p>{rows.length} plans configured</p>
+              <p>Select any row to edit pricing and limits without changing the enforced feature bundle.</p>
             </div>
             <DataTable columns={columns} rows={rows} />
           </section>

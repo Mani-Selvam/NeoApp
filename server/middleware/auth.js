@@ -10,6 +10,7 @@ if (!process.env.JWT_SECRET) {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const WEB_AUTH_COOKIE_NAME = process.env.WEB_AUTH_COOKIE_NAME || "neoapp_web_token";
 
 // ⚡ In-memory user cache — avoids MongoDB query on EVERY request
 const userCache = new Map();
@@ -73,14 +74,25 @@ const verifyToken = async (req, res, next) => {
     if (req.user && req.userId) return next();
 
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    const cookieHeader = String(req.headers.cookie || "");
+    const cookieToken = cookieHeader
+      .split(";")
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith(`${WEB_AUTH_COOKIE_NAME}=`))
+      ?.split("=")
+      .slice(1)
+      .join("=");
+    const bearerToken = authHeader?.startsWith("Bearer ")
+      ? authHeader.split(" ")[1]
+      : "";
+    const token = bearerToken || decodeURIComponent(cookieToken || "");
+
+    if (!token) {
       return res
         .status(401)
         .json({ success: false, message: "No token provided" });
     }
-
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
 
     // Try cache first — saves ~200-400ms per request on cloud MongoDB
     let user = getCachedUser(decoded.userId);
@@ -141,4 +153,9 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-module.exports = { verifyToken, clearUserCache, clearCompanyCache };
+module.exports = {
+  verifyToken,
+  clearUserCache,
+  clearCompanyCache,
+  WEB_AUTH_COOKIE_NAME,
+};
