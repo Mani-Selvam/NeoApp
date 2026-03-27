@@ -257,62 +257,61 @@ function FollowUpCallPanel({ enquiry, onCallPress }) {
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState("All");
 
-  useEffect(() => {
-    let active = true;
+  const loadLogs = useCallback(async () => {
+    if (!phoneKey && !enquiry?._id) {
+      setLogs([]);
+      setLoading(false);
+      return;
+    }
 
-    const loadLogs = async () => {
-      if (!phoneKey && !enquiry?._id) {
-        if (active) {
-          setLogs([]);
-          setLoading(false);
-        }
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const result = await callLogService.getCallLogs(
-          enquiry?._id
-            ? {
-                enquiryId: enquiry._id,
-                filter: "All",
-                limit: 100,
-              }
-            : {
-                search: phoneKey,
-                filter: "All",
-                limit: 100,
-              },
-        );
-        if (!active) return;
-        const items = Array.isArray(result?.data) ? result.data : [];
-        const filtered = items.filter((item) => {
-          const sameEnquiry =
-            enquiry?._id && item?.enquiryId
-              ? String(item?.enquiryId?._id || item.enquiryId) ===
-                String(enquiry._id)
-              : false;
-          const samePhone = phoneKey
-            ? normalizePhone(item?.phoneNumber) === phoneKey
+    setLoading(true);
+    try {
+      const result = await callLogService.getCallLogs(
+        enquiry?._id
+          ? {
+              enquiryId: enquiry._id,
+              filter: "All",
+              limit: 100,
+            }
+          : {
+              search: phoneKey,
+              filter: "All",
+              limit: 100,
+            },
+      );
+      const items = Array.isArray(result?.data) ? result.data : [];
+      const filtered = items.filter((item) => {
+        const sameEnquiry =
+          enquiry?._id && item?.enquiryId
+            ? String(item?.enquiryId?._id || item.enquiryId) ===
+              String(enquiry._id)
             : false;
-          return enquiry?._id ? sameEnquiry : samePhone;
-        });
-        filtered.sort(
-          (a, b) => new Date(b?.callTime || 0) - new Date(a?.callTime || 0),
-        );
-        setLogs(filtered);
-      } catch (_error) {
-        if (active) setLogs([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-
-    loadLogs();
-    return () => {
-      active = false;
-    };
+        const samePhone = phoneKey
+          ? normalizePhone(item?.phoneNumber) === phoneKey
+          : false;
+        return enquiry?._id ? sameEnquiry : samePhone;
+      });
+      filtered.sort(
+        (a, b) => new Date(b?.callTime || 0) - new Date(a?.callTime || 0),
+      );
+      setLogs(filtered);
+    } catch (_error) {
+      setLogs([]);
+    } finally {
+      setLoading(false);
+    }
   }, [phoneKey, enquiry?._id]);
+
+  useEffect(() => {
+    loadLogs().catch(() => null);
+  }, [loadLogs]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
+      loadLogs().catch(() => null);
+    });
+    return () => sub.remove();
+  }, [loadLogs]);
 
   const counts = useMemo(() => {
     return logs.reduce(

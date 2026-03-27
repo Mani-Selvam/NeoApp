@@ -489,6 +489,7 @@ export default function ChatScreen({
   const socket = useRef(null);
   const flatListRef = useRef(null);
   const initialScrollDone = useRef(false);
+  const isNearBottomRef = useRef(true);
   const recordingRef = useRef(null);
   const soundRef = useRef(null);
   const composerLiftAnim = useRef(new Animated.Value(0)).current;
@@ -547,21 +548,31 @@ export default function ChatScreen({
     };
   }, []);
 
-  const scrollToLatest = useCallback((animated = true) => {
+  const scrollToLatest = useCallback((animated = true, force = false) => {
+    if (!force && !isNearBottomRef.current) return;
+    isNearBottomRef.current = true;
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated });
     }, animated ? 120 : 40);
   }, []);
 
+  const updateScrollPosition = useCallback((nativeEvent) => {
+    const layoutHeight = nativeEvent?.layoutMeasurement?.height || 0;
+    const contentHeight = nativeEvent?.contentSize?.height || 0;
+    const offsetY = nativeEvent?.contentOffset?.y || 0;
+    const distanceFromBottom = contentHeight - (offsetY + layoutHeight);
+    isNearBottomRef.current = distanceFromBottom <= 120;
+  }, []);
+
   useEffect(() => {
-    if (!loading) {
-      scrollToLatest(false);
+    if (!loading && isNearBottomRef.current) {
+      scrollToLatest(false, true);
     }
   }, [composerHeight, messages.length, loading, scrollToLatest]);
 
   useEffect(() => {
-    if (!loading && !loadingOlder) {
-      scrollToLatest(false);
+    if (!loading && !loadingOlder && isNearBottomRef.current) {
+      scrollToLatest(false, true);
     }
   }, [inputText, showTemplates, isRecordingAudio, loading, loadingOlder, scrollToLatest]);
 
@@ -622,7 +633,7 @@ export default function ChatScreen({
         }
         return [...prev, newMsg];
       });
-      scrollToLatest(true);
+      scrollToLatest(true, isNearBottomRef.current);
     };
     const raw = (enquiry.mobile || "").replace(/\D/g, "");
     const s10 = raw.length > 10 ? raw.slice(-10) : raw;
@@ -652,7 +663,7 @@ export default function ChatScreen({
     } finally {
       setLoading(false);
       setTimeout(() => {
-        scrollToLatest(false);
+        scrollToLatest(false, true);
         initialScrollDone.current = true;
       }, 300);
     }
@@ -704,7 +715,7 @@ export default function ChatScreen({
     };
     setMessages((prev) => [...prev, optimisticMsg]);
     setSending(true);
-    scrollToLatest(true);
+    scrollToLatest(true, true);
     try {
       const response = await whatsappService.sendMessage({
         phoneNumber: sanitizePhoneNumber(enquiry.mobile),
@@ -1103,7 +1114,7 @@ export default function ChatScreen({
               loadingOlder ? (
                 <View style={S.loadingOlder}>
                   <ActivityIndicator color={C.forest} size="small" />
-                  <Text style={S.loadingOlderText}>Loading olderâ€¦</Text>
+                  <Text style={S.loadingOlderText}>Loading older...</Text>
                 </View>
               ) : hasMore ? (
                 <TouchableOpacity
@@ -1119,6 +1130,7 @@ export default function ChatScreen({
               )
             }
             onScroll={({ nativeEvent }) => {
+              updateScrollPosition(nativeEvent);
               if (
                 nativeEvent.contentOffset.y < 50 &&
                 hasMore &&
@@ -1129,10 +1141,10 @@ export default function ChatScreen({
             }}
             scrollEventThrottle={400}
             onContentSizeChange={() => {
-              if (!loadingOlder) scrollToLatest(false);
+              if (!loadingOlder && isNearBottomRef.current) scrollToLatest(false, true);
             }}
             onLayout={() => {
-              if (!loadingOlder) scrollToLatest(false);
+              if (!loadingOlder && isNearBottomRef.current) scrollToLatest(false, true);
             }}
           />
         )}
@@ -1270,7 +1282,7 @@ export default function ChatScreen({
                 onChangeText={handleTextChange}
                 onFocus={() => {
                   setIsComposerFocused(true);
-                  scrollToLatest(false);
+                  scrollToLatest(false, true);
                 }}
                 onBlur={() => setIsComposerFocused(false)}
                 maxLength={2000}
@@ -1288,7 +1300,7 @@ export default function ChatScreen({
               {false && <View style={S.inputBox}>
               <TextInput
                 style={S.inputField}
-                placeholder="Messageâ€¦"
+                placeholder="Message..."
                 placeholderTextColor={C.sand}
                 multiline
                 maxLength={2000}

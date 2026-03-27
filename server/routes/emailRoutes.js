@@ -10,8 +10,6 @@ const Enquiry = require("../models/Enquiry");
 const EmailLog = require("../models/EmailLog");
 const EmailSettings = require("../models/EmailSettings");
 const EmailTemplate = require("../models/EmailTemplate");
-const FollowUp = require("../models/FollowUp");
-const cache = require("../utils/responseCache");
 const { decrypt, encrypt } = require("../utils/crypto");
 const {
     ensureCompatibleFromEmail,
@@ -199,46 +197,6 @@ const toLocalIsoDate = (value = new Date()) => {
 
 const recordEmailActivity = async ({ req, ownerId, enquiry, subject, message }) => {
     if (!enquiry?._id || !ownerId) return;
-
-    const activityAt = new Date();
-    const date = toLocalIsoDate(activityAt);
-    const summaryParts = [];
-    if (subject) summaryParts.push(`Subject: ${String(subject).trim()}`);
-    if (message) summaryParts.push(String(message).trim().slice(0, 220));
-    const remarks = summaryParts.join(" | ").trim() || "Email sent to enquiry";
-
-    await FollowUp.create({
-        enqId: enquiry._id,
-        enqNo: String(enquiry.enqNo || "").trim(),
-        userId: ownerId,
-        assignedTo: req.userId,
-        name: enquiry.name || "Enquiry",
-        mobile: enquiry.mobile || "",
-        image: enquiry.image || "",
-        product: enquiry.product || "",
-        date,
-        followUpDate: date,
-        nextFollowUpDate: date,
-        activityType: "Email",
-        type: "Email",
-        note: remarks,
-        remarks,
-        staffName: req.user?.name || "Staff",
-        nextAction: "Followup",
-        status: "Completed",
-        activityTime: activityAt,
-    });
-
-    await Enquiry.findByIdAndUpdate(enquiry._id, {
-        $set: {
-            lastContactedAt: activityAt,
-            status: "Contacted",
-        },
-    }).catch(() => null);
-
-    cache.invalidate("followups");
-    cache.invalidate("dashboard");
-    cache.invalidate("enquiries");
 };
 
 const escapeHtml = (raw) => {

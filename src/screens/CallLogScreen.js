@@ -1015,7 +1015,10 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
   );
 
   const initiateCall = async (item) => {
-    const digits = (item?.phoneNumber || "").replace(/\D/g, "");
+    const digits = String(item?.phoneNumber || item?.mobile || "").replace(
+      /\D/g,
+      "",
+    );
     if (!digits) return;
     setPendingCall({ phoneNumber: digits, enquiry: item });
     try {
@@ -1023,6 +1026,7 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
         return RNImmediatePhoneCall.immediatePhoneCall(digits);
       await Linking.openURL(`tel:${digits}`);
     } catch {
+      setPendingCall(null);
       toast("Could not initiate call", true);
     }
   };

@@ -21,7 +21,6 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Circle, G, Path } from "react-native-svg";
-import * as XLSX from "xlsx";
 import AppSideMenu from "../components/AppSideMenu";
 import { useAuth } from "../contexts/AuthContext";
 import { SkeletonBox, SkeletonCard, SkeletonLine, SkeletonPulse, SkeletonSpacer } from "../components/skeleton/Skeleton";
@@ -68,12 +67,12 @@ const REPORT_STATUS_OPTIONS = [
     "Converted",
     "Closed",
 ];
-const saveExportToDevice = async ({ fileName, mimeType, base64Content }) => {
+const saveCsvToDevice = async ({ fileName, content }) => {
     const localDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
     if (!localDir) throw new Error("Export directory not available");
     const localUri = `${localDir}${fileName}`;
-    await FileSystem.writeAsStringAsync(localUri, base64Content, {
-        encoding: FileSystem.EncodingType.Base64,
+    await FileSystem.writeAsStringAsync(localUri, content, {
+        encoding: FileSystem.EncodingType.UTF8,
     });
 
     if (Platform.OS === "android" && FileSystem.StorageAccessFramework) {
@@ -83,15 +82,15 @@ const saveExportToDevice = async ({ fileName, mimeType, base64Content }) => {
                 const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
                     permission.directoryUri,
                     fileName,
-                    mimeType
+                    "text/csv"
                 );
-                await FileSystem.writeAsStringAsync(targetUri, base64Content, {
-                    encoding: FileSystem.EncodingType.Base64,
+                await FileSystem.writeAsStringAsync(targetUri, content, {
+                    encoding: FileSystem.EncodingType.UTF8,
                 });
                 return { uri: targetUri, downloaded: true };
             }
         } catch (error) {
-            console.error("Direct download failed", error);
+            console.error("Direct CSV download failed", error);
         }
     }
 
@@ -375,7 +374,6 @@ export default function ReportScreen({ navigation }) {
     const [calendarVisible, setCalendarVisible] = useState(false);
     const [calendarTarget, setCalendarTarget] = useState("from");
     const [menuVisible, setMenuVisible] = useState(false);
-    const [exportMenuVisible, setExportMenuVisible] = useState(false);
     const [openFilterMenu, setOpenFilterMenu] = useState(null);
     const [draftFromDate, setDraftFromDate] = useState(todayIso);
     const [draftToDate, setDraftToDate] = useState(todayIso);
@@ -579,27 +577,10 @@ export default function ReportScreen({ navigation }) {
         return { total, month, today };
     }, [filteredEnq, reportData.enquiries, fromDate, toDate, staffFilter, statusFilter]);
 
-    const exportReport = async (format = "excel") => {
+    const exportReport = async () => {
         try {
             const available = await Sharing.isAvailableAsync();
-            const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
             const exportDate = toIsoDate(new Date());
-            if (!baseDir) throw new Error("Export directory not available");
-
-            const summaryRows = [
-                ["Report", "Leads Report"],
-                ["Generated On", formatDayLabel(new Date())],
-                ["Date Range", rangeLabel],
-                ["Range Value", rangeLabel],
-                ["Staff Filter", staffFilter],
-                ["Status Filter", statusFilter === ALL_STATUS ? ALL_STATUS : displayStatusLabel(statusFilter)],
-                ["Leads", String(leadM.total)],
-                ["Sales", String(leadM.converted)],
-                ["Interested", String(leadM.qualified)],
-                ["Revenue", String(revenueM.total || 0)],
-                ["Follow Ups", String(filteredFups.length)],
-                ["Calls", String(filteredCalls.length)],
-            ];
             const leadRows = filteredEnq.map((item) => ({
                 EnquiryNo: item?.enqNo || "-",
                 Name: item?.name || "-",
@@ -611,91 +592,39 @@ export default function ReportScreen({ navigation }) {
                 Date: formatShortDate(getEnqDate(item)),
                 Cost: Number(item?.cost || 0),
             }));
-            const followupRows = filteredFups.map((item) => ({
-                EnquiryNo: item?.enqNo || item?.enqId?.enqNo || "-",
-                Name: item?.name || item?.enqId?.name || "-",
-                Mobile: item?.mobile || item?.enqId?.mobile || "-",
-                Status: displayStatusLabel(getItemStatus(item) || "-"),
-                Staff: getStaffName(item),
-                ScheduledDate: formatShortDate(getFupDate(item)),
-                Remarks: item?.remarks || item?.note || "-",
-                NextAction: item?.nextAction || item?.activityType || "-",
-            }));
-            const teamRows = staffPerf.map((item) => ({
-                "Staff Name": item?.name || "Unassigned",
-                "Enquiries Created": item?.enquiriesCreated || 0,
-                "Followups Done": item?.followupsDone || 0,
-                "Sales Leads": item?.salesLeads || 0,
-            }));
-            const callRows = filteredCalls.map((item) => ({
-                Name: item?.name || item?.customerName || "-",
-                Mobile: item?.mobile || item?.phoneNumber || item?.number || "-",
-                Staff: getStaffName(item),
-                Status: displayStatusLabel(getItemStatus(item) || "-"),
-                Date: formatShortDate(getCallDate(item)),
-                Duration: item?.duration || item?.callDuration || "-",
-                Direction: item?.direction || item?.callType || "-",
-            }));
-
-            if (format === "csv") {
-                const csvEscape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-                const csvText = [
-                    summaryRows.map((row) => row.map(csvEscape).join(",")).join("\n"),
-                    "",
-                    ["Enquiry No", "Name", "Mobile", "Status", "Staff", "Product", "Source", "Date", "Cost"].map(csvEscape).join(","),
-                    ...leadRows.map((row) => [
-                        row.EnquiryNo,
-                        row.Name,
-                        row.Mobile,
-                        row.Status,
-                        row.Staff,
-                        row.Product,
-                        row.Source,
-                        row.Date,
-                        row.Cost,
-                    ].map(csvEscape).join(",")),
-                ].join("\n");
-                const csvUri = `${baseDir}report-leads-${exportDate}.csv`;
-                await FileSystem.writeAsStringAsync(csvUri, csvText, {
-                    encoding: FileSystem.EncodingType.UTF8,
-                });
-                if (available) {
-                    await Sharing.shareAsync(csvUri, {
-                        mimeType: "text/csv",
-                        dialogTitle: "Export report CSV",
-                        UTI: "public.comma-separated-values-text",
-                    });
-                } else {
-                    Alert.alert("Export Ready", `CSV saved at:\n${csvUri}`);
-                }
-                return;
-            }
-
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summaryRows), "Summary");
-            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(leadRows), "Leads");
-            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(followupRows), "FollowUps");
-            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teamRows), "Staff Performance");
-            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(callRows), "Calls");
-
-            const workbookBase64 = XLSX.write(workbook, { bookType: "xlsx", type: "base64" });
-            const fileName = `report-leads-${exportDate}.xlsx`;
-            const savedFile = await saveExportToDevice({
+            const csvEscape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+            const csvText = [
+                ["Enquiry No", "Name", "Mobile", "Status", "Staff", "Product", "Source", "Date", "Cost"]
+                    .map(csvEscape)
+                    .join(","),
+                ...leadRows.map((row) => [
+                    row.EnquiryNo,
+                    row.Name,
+                    row.Mobile,
+                    row.Status,
+                    row.Staff,
+                    row.Product,
+                    row.Source,
+                    row.Date,
+                    row.Cost,
+                ].map(csvEscape).join(",")),
+            ].join("\n");
+            const fileName = `report-leads-${exportDate}.csv`;
+            const savedFile = await saveCsvToDevice({
                 fileName,
-                mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                base64Content: workbookBase64,
+                content: csvText,
             });
 
             if (savedFile.downloaded) {
                 Alert.alert("Download Complete", `${fileName} saved successfully.`);
             } else if (available) {
                 await Sharing.shareAsync(savedFile.uri, {
-                    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    dialogTitle: "Download report Excel",
-                    UTI: "org.openxmlformats.spreadsheetml.sheet",
+                    mimeType: "text/csv",
+                    dialogTitle: "Download report CSV",
+                    UTI: "public.comma-separated-values-text",
                 });
             } else {
-                Alert.alert("Export Ready", `Excel saved at:\n${savedFile.uri}`);
+                Alert.alert("Export Ready", `CSV saved at:\n${savedFile.uri}`);
             }
         } catch(e){
             console.error(e);
@@ -727,35 +656,11 @@ export default function ReportScreen({ navigation }) {
                 <View style={st.topHeaderRight}>
                     <TouchableOpacity
                         style={st.exportHeaderBtn}
-                        onPress={() => setExportMenuVisible((prev) => !prev)}
+                        onPress={exportReport}
                         activeOpacity={0.85}>
                         <Ionicons name="download-outline" size={15} color={C.gold} />
-                        <Text style={st.exportHeaderText}>Export</Text>
+                        <Text style={st.exportHeaderText}>Download CSV</Text>
                     </TouchableOpacity>
-                    {exportMenuVisible ? (
-                        <View style={st.exportMenu}>
-                            <TouchableOpacity
-                                style={st.exportMenuItem}
-                                onPress={() => {
-                                    setExportMenuVisible(false);
-                                    exportReport("excel");
-                                }}
-                                activeOpacity={0.8}>
-                                <Ionicons name="grid-outline" size={14} color={C.text} />
-                                <Text style={st.exportMenuText}>Download Excel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[st.exportMenuItem, st.exportMenuItemLast]}
-                                onPress={() => {
-                                    setExportMenuVisible(false);
-                                    exportReport("csv");
-                                }}
-                                activeOpacity={0.8}>
-                                <Ionicons name="document-text-outline" size={14} color={C.text} />
-                                <Text style={st.exportMenuText}>Export CSV</Text>
-                            </TouchableOpacity>
-                        </View>
-                    ) : null}
                 </View>
             </View>
 
