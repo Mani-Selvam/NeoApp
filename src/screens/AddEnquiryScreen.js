@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  DeviceEventEmitter,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -1015,7 +1016,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
   const pickImage = async () => {
     try {
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.5,
@@ -1090,7 +1091,10 @@ export default function AddEnquiryScreen({ route, navigation }) {
               image: null,
               assignedTo: "",
             });
-          route.params?.onEnquirySaved?.(data);
+          DeviceEventEmitter.emit(
+            isEditMode ? "ENQUIRY_UPDATED" : "ENQUIRY_CREATED",
+            data,
+          );
           setTimeout(() => navigation.goBack(), 800);
         }, 300);
       } else {

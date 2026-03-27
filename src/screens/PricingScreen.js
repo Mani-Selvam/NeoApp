@@ -111,7 +111,7 @@ const getFeatures = (plan) => {
 };
 
 // ─── Plan card ─────────────────────────────────────────────────────────────────
-const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
+const PlanCard = ({ plan, selected, isCurrent, onSelect, displayPrice, sc }) => {
   const [open, setOpen] = useState(false);
   const tier   = getTier(plan);
   const col    = T[tier] || T.basic;
@@ -153,6 +153,14 @@ const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
                   {TIER_LABELS[tier]}
                 </Text>
               </View>
+              {isCurrent ? (
+                <View style={PCS.currentPill}>
+                  <Ionicons name="checkmark-circle" size={12} color="#fff" />
+                  <Text style={[PCS.currentPillText, { fontSize: sc.f.xs - 1 }]}>
+                    Current Plan
+                  </Text>
+                </View>
+              ) : null}
               <Text style={[PCS.hName, { fontSize: sc.f.xl, marginTop: 6 }]}>
                 {plan?.name || "Plan"}
               </Text>
@@ -275,12 +283,12 @@ const PlanCard = ({ plan, selected, onSelect, displayPrice, sc }) => {
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Ionicons name="checkmark-circle" size={sc.f.md} color="#fff" />
               <Text style={[PCS.selBtnText, { fontSize: sc.f.sm, color: "#fff" }]}>
-                Selected
+                {isCurrent ? "Current Plan" : "Selected"}
               </Text>
             </View>
           ) : (
             <Text style={[PCS.selBtnText, { fontSize: sc.f.sm, color: col.dot }]}>
-               {"Select Plan"}
+               {isCurrent ? "Using Now" : "Select Plan"}
              </Text>
           )}
         </TouchableOpacity>
@@ -301,6 +309,20 @@ const PCS = StyleSheet.create({
                paddingHorizontal:9, paddingVertical:4, borderRadius:99,
                borderWidth:1, borderColor:"rgba(255,255,255,0.32)" },
   tierPillText: { color:"#fff", fontWeight:"900", letterSpacing:1.2 },
+  currentPill: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 99,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.28)",
+  },
+  currentPillText: { color: "#fff", fontWeight: "800", letterSpacing: 0.2 },
   hName:     { color:"#fff", fontWeight:"900", letterSpacing:-0.4 },
   hSub:      { color:"rgba(255,255,255,0.76)", fontWeight:"500", marginTop:3, maxWidth:160 },
   radio:     { width:24, height:24, borderRadius:12, borderWidth:2,
@@ -335,9 +357,10 @@ const PCS = StyleSheet.create({
 export default function PricingScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const sc     = useScale();
-  const { refreshBillingPlan } = useAuth();
+  const { refreshBillingPlan, billingPlan, billingInfo } = useAuth();
 
   const [selectedId, setSelectedId] = useState(null);
+  const [currentPlanId, setCurrentPlanId] = useState(null);
   const [plans,      setPlans]      = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [currency,   setCurrency]   = useState("INR");
@@ -360,11 +383,22 @@ export default function PricingScreen({ navigation }) {
         isOverrideApplied: Boolean(p.isOverrideApplied),
       }));
       setPlans(mapped);
-      const eid = res?.effectivePlan?.id || null;
-      setSelectedId(eid || mapped[0]?.id || null);
+      const effectivePlanId =
+        res?.effectivePlan?.id ||
+        billingInfo?.plan?.id ||
+        billingPlan?.id ||
+        null;
+      setCurrentPlanId(effectivePlanId);
+      setSelectedId((prev) => {
+        if (effectivePlanId) return effectivePlanId;
+        if (prev && mapped.some((plan) => String(plan.id) === String(prev))) {
+          return prev;
+        }
+        return mapped[0]?.id || null;
+      });
     } catch { setPlans([]); }
     finally { setLoading(false); }
-  }, []);
+  }, [billingInfo?.plan?.id, billingPlan?.id]);
 
   useFocusEffect(useCallback(() => { loadPlans(); }, [loadPlans]));
 
@@ -372,6 +406,9 @@ export default function PricingScreen({ navigation }) {
     plans.find(p => String(p.id) === String(selectedId)) || null,
     [plans, selectedId]
   );
+  const isCurrentSelection =
+    Boolean(selected && currentPlanId) &&
+    String(selected?.id) === String(currentPlanId);
   const selTier   = selected ? (T[getTier(selected)] || T.pro) : T.pro;
   const getPrice  = useCallback(
     (plan) => fmtPrice(plan?.basePriceUsd || 0, currency, rate),
@@ -380,6 +417,13 @@ export default function PricingScreen({ navigation }) {
 
   const handleContinue = async () => {
     if (!selected) return;
+    if (isCurrentSelection) {
+      Alert.alert(
+        "Current Plan",
+        `${selected.name} is already active for your company.`,
+      );
+      return;
+    }
     Haptics.selectionAsync();
     if (Number(selected?.basePriceUsd || 0) <= 0) {
       try {
@@ -501,6 +545,7 @@ export default function PricingScreen({ navigation }) {
                 key={plan.id}
                 plan={plan}
                 selected={String(selectedId) === String(plan.id)}
+                isCurrent={String(currentPlanId) === String(plan.id)}
                 onSelect={(id) => { Haptics.selectionAsync(); setSelectedId(id); }}
                 displayPrice={getPrice(plan)}
                 sc={sc}
@@ -537,6 +582,9 @@ export default function PricingScreen({ navigation }) {
               <Text style={[S.sumName,  { fontSize: sc.f.md }]} numberOfLines={1}>
                 {selected.name}
               </Text>
+              {isCurrentSelection ? (
+                <Text style={[S.currentSummaryText, { color: selTier.dot }]}>Currently active</Text>
+              ) : null}
             </View>
             <Text style={[S.sumPrice, { fontSize: sc.f.lg, color: selTier.dot }]}>
               {getTier(selected) === "enterprise" ? "Custom" : getPrice(selected)}
@@ -558,6 +606,8 @@ export default function PricingScreen({ navigation }) {
             <Text style={[S.ctaText, { fontSize: sc.f.md }]}>
               {activatingFree
                 ? "Activating..."
+                : isCurrentSelection
+                  ? "Current Plan Active"
                 : selected && getTier(selected) === "enterprise"
                   ? "Contact Sales"
                   : selected && Number(selected?.basePriceUsd || 0) <= 0
@@ -641,6 +691,7 @@ const S = StyleSheet.create({
   sumDotInner: { width:12, height:12, borderRadius:6 },
   sumLabel:  { color: T.muted, fontWeight:"700", textTransform:"uppercase", letterSpacing:0.6 },
   sumName:   { fontWeight:"900", color: T.text, marginTop:1 },
+  currentSummaryText: { marginTop: 2, fontWeight: "700" },
   sumPrice:  { fontWeight:"900" },
   cta:       { overflow:"hidden" },
   ctaGrad:   { height:52, paddingHorizontal:18, flexDirection:"row",

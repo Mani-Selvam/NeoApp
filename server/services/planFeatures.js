@@ -212,7 +212,12 @@ const ensureFixedPlansSynced = async () => {
     await Plan.findOneAndUpdate(
       { code },
       { $set: payload },
-      { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true },
+      {
+        upsert: true,
+        returnDocument: "after",
+        setDefaultsOnInsert: true,
+        runValidators: true,
+      },
     );
   }
 

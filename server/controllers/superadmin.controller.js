@@ -78,6 +78,141 @@ const getCompanyCouponUsedCount = (coupon, companyId) => {
   return Number(map[String(companyId)] || 0);
 };
 
+const getCouponPlanIds = (coupon) =>
+  (Array.isArray(coupon?.applicablePlans) ? coupon.applicablePlans : [])
+    .map((plan) => (typeof plan === "string" ? plan : plan?._id))
+    .filter(Boolean)
+    .map((id) => String(id));
+
+const getCouponCompanyIds = (coupon) =>
+  (Array.isArray(coupon?.applicableCompanies) ? coupon.applicableCompanies : [])
+    .map((company) => (typeof company === "string" ? company : company?._id))
+    .filter(Boolean)
+    .map((id) => String(id));
+
+const isCouponAnnouncementEligible = (coupon) => {
+  if (!coupon?.isActive) return false;
+  const expiryDate = coupon?.expiryDate ? new Date(coupon.expiryDate) : null;
+  if (expiryDate) {
+    expiryDate.setHours(23, 59, 59, 999);
+    if (expiryDate <= new Date()) return false;
+  }
+  const { globalLimit } = getCouponLimits(coupon);
+  return Number(coupon?.usedCount || 0) < globalLimit;
+};
+
+const buildCouponAnnouncementPayload = (coupon) => {
+  const discountLabel =
+    coupon?.discountType === "percentage"
+      ? `${Number(coupon?.discountValue || 0)}% OFF`
+      : `$${Number(coupon?.discountValue || 0)} OFF`;
+
+  return {
+    type: "coupon-offer",
+    couponId: String(coupon?._id || ""),
+    code: String(coupon?.code || "").toUpperCase(),
+    discountType: coupon?.discountType || "",
+    discountValue: Number(coupon?.discountValue || 0),
+    discountLabel,
+    title: "Special offer available",
+    body: `You have a special offer today. Use coupon ${String(coupon?.code || "").toUpperCase()} and save ${discountLabel}.`,
+    expiryDate: coupon?.expiryDate || null,
+    timestamp: new Date().toISOString(),
+  };
+};
+
+const getCouponTargetUsers = async (coupon) => {
+  const planIds = getCouponPlanIds(coupon);
+  const scopedCompanyIds = coupon?.appliesToAllCompanies
+    ? []
+    : getCouponCompanyIds(coupon);
+
+  let companyIds = scopedCompanyIds;
+
+  if (planIds.length > 0) {
+    const planCompanyIds = await CompanySubscription.distinct("companyId", {
+      status: { $in: ["Trial", "Active"] },
+      planId: { $in: planIds },
+    });
+    const normalizedPlanCompanyIds = planCompanyIds.map((id) => String(id));
+    companyIds = companyIds.length
+      ? companyIds.filter((companyId) => normalizedPlanCompanyIds.includes(companyId))
+      : normalizedPlanCompanyIds;
+  }
+
+  if (!coupon?.appliesToAllCompanies && companyIds.length === 0) {
+    return [];
+  }
+
+  const userQuery = {
+    status: "Active",
+    role: { $in: ["Admin", "admin", "Staff", "staff"] },
+  };
+
+  if (companyIds.length > 0) {
+    userQuery.company_id = { $in: companyIds };
+  }
+
+  const users = await User.find(userQuery).select("_id company_id").lean();
+  const companyKeys = [...new Set(users.map((user) => String(user?.company_id || "")).filter(Boolean))];
+  const allowedCompanySet = new Set();
+
+  await Promise.all(
+    companyKeys.map(async (companyId) => {
+      const resolved = await resolveEffectivePlan(companyId);
+      if (String(resolved?.plan?.code || "").toUpperCase() !== "PRO") {
+        allowedCompanySet.add(String(companyId));
+      }
+    }),
+  );
+
+  return users.filter((user) => allowedCompanySet.has(String(user?.company_id || "")));
+};
+
+const emitCouponSync = async (req, users, payload) => {
+  const io = req.app?.get?.("io");
+  if (!io) {
+    return { sent: false, targetedUsers: 0 };
+  }
+
+  const userIds = [...new Set((Array.isArray(users) ? users : []).map((user) => String(user?._id || user)).filter(Boolean))];
+  userIds.forEach((userId) => {
+    io.to(`user:${userId}`).emit("COUPON_SYNC", payload);
+  });
+
+  return { sent: userIds.length > 0, targetedUsers: userIds.length };
+};
+
+const buildCouponSyncPayload = (coupon, action = "updated") => ({
+  type: "coupon-sync",
+  action,
+  couponId: String(coupon?._id || ""),
+  code: String(coupon?.code || "").toUpperCase(),
+  isActive: Boolean(coupon?.isActive),
+  expiresAt: coupon?.expiryDate || null,
+  timestamp: new Date().toISOString(),
+});
+
+const emitCouponAnnouncement = async (req, coupon, users = null) => {
+  try {
+    if (!isCouponAnnouncementEligible(coupon)) {
+      return { sent: false, targetedUsers: 0 };
+    }
+
+    const targetUsers = Array.isArray(users) ? users : await getCouponTargetUsers(coupon);
+    const payload = buildCouponAnnouncementPayload(coupon);
+    const result = await emitCouponSync(req, targetUsers, {
+      ...payload,
+      type: "coupon-offer",
+    });
+
+    return result;
+  } catch (error) {
+    console.error("Coupon announcement emit failed:", error);
+    return { sent: false, targetedUsers: 0, error: error.message };
+  }
+};
+
 exports.getDashboard = async (req, res) => {
   try {
     const [
@@ -755,8 +890,17 @@ exports.createCoupon = async (req, res) => {
       payload.applicableCompanies = [];
     }
     const coupon = await Coupon.create(payload);
+    const targetUsers = await getCouponTargetUsers(coupon);
+    const syncResult = await emitCouponSync(req, targetUsers, buildCouponSyncPayload(coupon, "created"));
+    const announcement = await emitCouponAnnouncement(req, coupon, targetUsers);
     await logAction(req, "COUPON_CREATED", { couponId: coupon._id, code: coupon.code });
-    res.status(201).json(coupon);
+    res.status(201).json({
+      ...coupon.toObject(),
+      syncSent: Boolean(syncResult?.sent),
+      syncUsers: Number(syncResult?.targetedUsers || 0),
+      announcementSent: Boolean(announcement?.sent),
+      announcementUsers: Number(announcement?.targetedUsers || 0),
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -764,6 +908,8 @@ exports.createCoupon = async (req, res) => {
 
 exports.updateCoupon = async (req, res) => {
   try {
+    const previousCoupon = await Coupon.findById(req.params.couponId).lean();
+    if (!previousCoupon) return res.status(404).json({ success: false, message: "Coupon not found" });
     const payload = { ...req.body };
     if (payload.code) payload.code = String(payload.code).toUpperCase();
     if (payload.usageLimit && !payload.globalUsageLimit) payload.globalUsageLimit = payload.usageLimit;
@@ -773,14 +919,28 @@ exports.updateCoupon = async (req, res) => {
     if (payload.appliesToAllCompanies) {
       payload.applicableCompanies = [];
     }
+    const previousUsers = await getCouponTargetUsers(previousCoupon);
     const coupon = await Coupon.findByIdAndUpdate(
       req.params.couponId,
       { $set: payload },
       { returnDocument: "after", runValidators: true },
     );
     if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found" });
+    const currentUsers = await getCouponTargetUsers(coupon);
+    const combinedUsers = [...previousUsers, ...currentUsers];
+    const syncResult = await emitCouponSync(req, combinedUsers, buildCouponSyncPayload(coupon, "updated"));
+    const announcement =
+      !previousCoupon.isActive && coupon.isActive
+        ? await emitCouponAnnouncement(req, coupon, currentUsers)
+        : { sent: false, targetedUsers: 0 };
     await logAction(req, "COUPON_UPDATED", { couponId: coupon._id, changes: payload });
-    res.json(coupon);
+    res.json({
+      ...coupon.toObject(),
+      syncSent: Boolean(syncResult?.sent),
+      syncUsers: Number(syncResult?.targetedUsers || 0),
+      announcementSent: Boolean(announcement?.sent),
+      announcementUsers: Number(announcement?.targetedUsers || 0),
+    });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -790,6 +950,7 @@ exports.deleteCoupon = async (req, res) => {
   try {
     const coupon = await Coupon.findById(req.params.couponId).lean();
     if (!coupon) return res.status(404).json({ success: false, message: "Coupon not found" });
+    const targetUsers = await getCouponTargetUsers(coupon);
 
     if ((coupon.usedCount || 0) > 0) {
       return res.status(400).json({
@@ -807,6 +968,7 @@ exports.deleteCoupon = async (req, res) => {
     }
 
     await Coupon.findByIdAndDelete(req.params.couponId);
+    await emitCouponSync(req, targetUsers, buildCouponSyncPayload(coupon, "deleted"));
     await logAction(req, "COUPON_DELETED", { couponId: req.params.couponId, code: coupon.code });
     return res.json({ success: true, message: "Coupon deleted successfully" });
   } catch (error) {

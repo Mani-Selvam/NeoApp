@@ -719,7 +719,7 @@ export default function EnquiryListScreen({ navigation, route }) {
 
   const handleEdit = useCallback((enquiry) => {
     setDetailEnquiry(null);
-    navigation.navigate("AddEnquiry",{enquiry, onEnquirySaved:()=>fetchRef.current?.(true)});
+    navigation.navigate("AddEnquiry", { enquiry });
   }, [navigation]);
 
   const handleDelete = useCallback(async (id) => {
@@ -862,11 +862,15 @@ export default function EnquiryListScreen({ navigation, route }) {
       {/* ── FAB ── */}
       <Animated.View style={[S.fab, {transform:[{scale:fabScale}]}]}>
         <TouchableOpacity onPress={()=>{
+          if (!billingInfo?.hasActivePlan || !billingInfo?.plan) {
+            showUpgradePrompt("Your free CRM trial has expired. Please upgrade to add a new enquiry.");
+            return;
+          }
           Animated.sequence([
             Animated.timing(fabScale,{toValue:0.85,duration:100,useNativeDriver:true}),
             Animated.spring(fabScale,{toValue:1,useNativeDriver:true}),
           ]).start();
-          navigation.navigate("AddEnquiry",{onEnquirySaved:()=>fetchEnquiries(true)});
+          navigation.navigate("AddEnquiry");
         }} activeOpacity={0.85}>
           <LinearGradient colors={GRAD.primary} style={S.fabInner}>
             <Ionicons name="add" size={24} color="#fff" />

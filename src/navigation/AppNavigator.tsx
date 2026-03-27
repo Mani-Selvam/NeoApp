@@ -502,6 +502,7 @@ export default function AppNavigator() {
     billingAlert,
     billingPrompt,
     dismissBillingPrompt,
+    dismissBillingAlert,
   } = useAuth();
   const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
   const PricingAccessScreen = isStaffUser
@@ -902,7 +903,7 @@ export default function AppNavigator() {
         </TouchableOpacity>
       </Modal>
 
-      {isLoggedIn && billingAlert ? (
+      {isLoggedIn && billingAlert && !billingPrompt?.visible ? (
         <View
           pointerEvents="box-none"
           style={{
@@ -935,6 +936,25 @@ export default function AppNavigator() {
               elevation: 4,
             }}
           >
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation();
+                dismissBillingAlert?.();
+              }}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: "rgba(255,255,255,0.18)",
+              }}
+            >
+              <Ionicons name="close" size={16} color="#fff" />
+            </TouchableOpacity>
             <Text style={{ color: "#fff", fontWeight: "900", fontSize: 13 }}>
               {billingAlert.title}
             </Text>

@@ -1,6 +1,7 @@
 import { DeviceEventEmitter, Platform, ToastAndroid } from "react-native";
 import { io } from "socket.io-client";
 import { SOCKET_URL } from "./apiConfig";
+import { showCouponOfferNotification } from "./notificationService";
 import { getAuthToken } from "./secureTokenStorage";
 
 let socket = null;
@@ -76,6 +77,26 @@ export const initSocket = async () => {
     socket.on("FOLLOWUP_CHANGED", (payload) => {
         console.log("Follow-up changed via socket:", payload);
         DeviceEventEmitter.emit("FOLLOWUP_CHANGED", payload);
+    });
+
+    socket.on("COUPON_ANNOUNCEMENT", (payload) => {
+        console.log("Coupon announcement via socket:", payload);
+        DeviceEventEmitter.emit("COUPON_ANNOUNCEMENT", payload);
+
+        Promise.resolve(showCouponOfferNotification(payload)).catch(() => {});
+
+        if (Platform.OS === "android") {
+            const code = String(payload?.code || "").trim();
+            const message = code
+                ? `New coupon available: ${code}`
+                : "A new coupon offer is available";
+            ToastAndroid.show(message, ToastAndroid.LONG);
+        }
+    });
+
+    socket.on("COUPON_SYNC", (payload) => {
+        console.log("Coupon sync via socket:", payload);
+        DeviceEventEmitter.emit("COUPON_SYNC", payload);
     });
 
     socket.on("disconnect", () => {

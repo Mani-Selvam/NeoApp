@@ -1,6 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
+import * as Clipboard from "expo-clipboard";
 import { LinearGradient } from "expo-linear-gradient";
 import { MotiView } from "moti";
 import {
@@ -11,8 +12,8 @@ import {
   useState,
 } from "react";
 import {
-  Alert,
   Animated,
+  DeviceEventEmitter,
   Easing,
   Image,
   Modal,
@@ -914,11 +915,13 @@ export default function HomeScreen({ navigation }) {
     conv: 0,
   });
   const [coupons, setCoupons] = useState([]);
+  const [copiedCouponCode, setCopiedCouponCode] = useState("");
   const [todayTasks, setTodayTasks] = useState([]);
   const [missedTasks, setMissedTasks] = useState([]);
   const [showMenu, setShowMenu] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
   const [skipAnim, setSkipAnim] = useState(false);
+  const couponCopyResetRef = useRef(null);
 
   useEffect(() => {
     AsyncStorage.getItem("homeIntroPlayed")
@@ -930,6 +933,14 @@ export default function HomeScreen({ navigation }) {
         }
       })
       .catch(() => setSkipAnim(false));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (couponCopyResetRef.current) {
+        clearTimeout(couponCopyResetRef.current);
+      }
+    };
   }, []);
 
   const handleLogout = () => {
@@ -1005,6 +1016,21 @@ export default function HomeScreen({ navigation }) {
     }, []),
   );
 
+  useEffect(() => {
+    const refreshCoupons = () => {
+      fetchData();
+    };
+    const announcementSub = DeviceEventEmitter.addListener(
+      "COUPON_ANNOUNCEMENT",
+      refreshCoupons,
+    );
+    const syncSub = DeviceEventEmitter.addListener("COUPON_SYNC", refreshCoupons);
+    return () => {
+      announcementSub.remove();
+      syncSub.remove();
+    };
+  }, []);
+
   if (loading && !refreshing) {
     return <HomeSkeleton />;
   }
@@ -1065,13 +1091,17 @@ export default function HomeScreen({ navigation }) {
         globalThis?.navigator?.clipboard?.writeText
       ) {
         await globalThis.navigator.clipboard.writeText(code);
-        Alert.alert("Copied!", `${code} copied`);
-        return;
+      } else {
+        await Clipboard.setStringAsync(code);
       }
-    } catch {
-      // Fall through to the manual copy dialog below.
-    }
-    Alert.alert("Coupon Code", code);
+      setCopiedCouponCode(code);
+      if (couponCopyResetRef.current) {
+        clearTimeout(couponCopyResetRef.current);
+      }
+      couponCopyResetRef.current = setTimeout(() => {
+        setCopiedCouponCode((current) => (current === code ? "" : current));
+      }, 1600);
+    } catch {}
   };
 
   const todayActivityCount = todayTasks.length;
@@ -1318,11 +1348,20 @@ export default function HomeScreen({ navigation }) {
                           </Text>
                         </View>
                         <TouchableOpacity
-                          style={S.couponCopyBtn}
+                          style={[
+                            S.couponCopyBtn,
+                            copiedCouponCode === coupon.code && {
+                              backgroundColor: C.emerald,
+                            },
+                          ]}
                           onPress={() => handleCouponCopy(coupon)}
                         >
                           <Ionicons
-                            name="copy-outline"
+                            name={
+                              copiedCouponCode === coupon.code
+                                ? "checkmark-outline"
+                                : "copy-outline"
+                            }
                             size={12}
                             color="#fff"
                           />
@@ -1333,7 +1372,7 @@ export default function HomeScreen({ navigation }) {
                               fontWeight: "800",
                             }}
                           >
-                            Copy
+                            {copiedCouponCode === coupon.code ? "Copied" : "Copy"}
                           </Text>
                         </TouchableOpacity>
                       </View>

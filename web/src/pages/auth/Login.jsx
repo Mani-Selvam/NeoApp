@@ -22,7 +22,7 @@ export default function Login() {
       const payload = { email, password };
       if (otp.trim()) payload.otp = otp.trim();
       const res = await api.superadminLogin(payload);
-      login(res.user, res.sessionTimeoutMinutes);
+      login(res.user, res.sessionTimeoutMinutes, res.token || "");
       const redirectPath = location.state?.from?.pathname || "/superadmin/dashboard";
       navigate(redirectPath, { replace: true });
     } catch (err) {

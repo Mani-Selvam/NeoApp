@@ -4,7 +4,9 @@ import { AppState, DeviceEventEmitter } from "react-native";
 import {
     stopCallMonitoring,
 } from "../services/CallMonitorService";
-import notificationService from "../services/notificationService";
+import notificationService, {
+    showBillingPlanNotification,
+} from "../services/notificationService";
 import { API_URL } from "../services/apiConfig";
 import { clearApiClient } from "../services/apiClient";
 import { clearAuthErrorHandler, setAuthErrorHandler } from "../services/authErrorBus";
@@ -14,6 +16,7 @@ import { getEffectivePlan } from "../services/userService";
 const AuthContext = createContext();
 const BILLING_INFO_KEY = "billingInfo";
 const BILLING_ALERT_KEY_PREFIX = "billingAlert";
+const BILLING_ALERT_SNOOZE_MINUTES = 10;
 
 const normalizeBillingInfo = (payload, fallbackReason = "") => {
     const plan = payload?.plan || null;
@@ -114,6 +117,8 @@ export const AuthProvider = ({ children }) => {
         visible: false,
         title: "",
         message: "",
+        kind: "upgrade",
+        alertKey: "",
     });
     const [suspensionInfo, setSuspensionInfo] = useState({
         visible: false,
@@ -158,24 +163,58 @@ export const AuthProvider = ({ children }) => {
         await AsyncStorage.setItem(BILLING_INFO_KEY, JSON.stringify(nextInfo));
 
         const nextAlert = getBillingAlertState(nextInfo);
-        setBillingAlert(nextAlert);
-
-        if (!nextAlert) return;
+        if (!nextAlert) {
+            setBillingAlert(null);
+            return;
+        }
 
         const entityKey = nextInfo?.subscription?.id || nextInfo?.plan?.id || "billing";
         const expiryKey = nextInfo?.expiry ? new Date(nextInfo.expiry).toISOString() : "none";
         const alertStorageKey = `${BILLING_ALERT_KEY_PREFIX}:${entityKey}:${nextAlert.code}:${expiryKey}`;
-        const alreadyShown = await AsyncStorage.getItem(alertStorageKey);
+        const snoozeUntilRaw = await AsyncStorage.getItem(`${alertStorageKey}:snoozeUntil`);
+        const snoozeUntil = Number(snoozeUntilRaw || 0);
 
-        if (forcePrompt || !alreadyShown) {
+        if (!forcePrompt && Number.isFinite(snoozeUntil) && snoozeUntil > Date.now()) {
+            setBillingAlert(null);
+            return;
+        }
+
+        setBillingAlert(nextAlert);
+
+        const lastNotifiedRaw = await AsyncStorage.getItem(
+            `${alertStorageKey}:lastNotifiedAt`,
+        );
+        const lastNotifiedAt = Number(lastNotifiedRaw || 0);
+        const notificationCooldownMs = BILLING_ALERT_SNOOZE_MINUTES * 60 * 1000;
+
+        if (
+            forcePrompt ||
+            !Number.isFinite(lastNotifiedAt) ||
+            Date.now() - lastNotifiedAt >= notificationCooldownMs
+        ) {
+            await showBillingPlanNotification({
+                title: nextAlert.title,
+                body: nextAlert.message,
+                code: nextAlert.code,
+                expiry: nextInfo?.expiry || null,
+                reason: nextInfo?.reason || "",
+            });
+            await AsyncStorage.setItem(
+                `${alertStorageKey}:lastNotifiedAt`,
+                String(Date.now()),
+            );
+        }
+
+        if (forcePrompt || !billingPrompt?.visible || billingPrompt?.alertKey !== alertStorageKey) {
             setBillingPrompt({
                 visible: true,
                 title: nextAlert.title,
                 message: nextAlert.message,
+                kind: "alert",
+                alertKey: alertStorageKey,
             });
-            await AsyncStorage.setItem(alertStorageKey, "1");
         }
-    }, []);
+    }, [billingPrompt?.alertKey, billingPrompt?.visible]);
 
     const refreshBillingPlan = useCallback(async () => {
         try {
@@ -619,7 +658,36 @@ export const AuthProvider = ({ children }) => {
         setOnboardingCompleted(true);
     };
 
-    const dismissBillingPrompt = () => {
+    const dismissBillingPrompt = async () => {
+        const currentPrompt = billingPrompt;
+        setBillingPrompt((prev) => ({ ...prev, visible: false }));
+        if (currentPrompt?.kind === "alert" && currentPrompt?.alertKey) {
+            const snoozeUntil =
+                Date.now() + BILLING_ALERT_SNOOZE_MINUTES * 60 * 1000;
+            await AsyncStorage.setItem(
+                `${currentPrompt.alertKey}:snoozeUntil`,
+                String(snoozeUntil),
+            );
+            setBillingAlert(null);
+        }
+    };
+
+    const dismissBillingAlert = async () => {
+        const nextAlert = getBillingAlertState(billingInfo);
+        const entityKey =
+            billingInfo?.subscription?.id || billingInfo?.plan?.id || "billing";
+        const expiryKey = billingInfo?.expiry
+            ? new Date(billingInfo.expiry).toISOString()
+            : "none";
+        const alertCode = nextAlert?.code || "billing";
+        const alertStorageKey = `${BILLING_ALERT_KEY_PREFIX}:${entityKey}:${alertCode}:${expiryKey}`;
+        const snoozeUntil =
+            Date.now() + BILLING_ALERT_SNOOZE_MINUTES * 60 * 1000;
+        await AsyncStorage.setItem(
+            `${alertStorageKey}:snoozeUntil`,
+            String(snoozeUntil),
+        );
+        setBillingAlert(null);
         setBillingPrompt((prev) => ({ ...prev, visible: false }));
     };
 
@@ -628,6 +696,8 @@ export const AuthProvider = ({ children }) => {
             visible: true,
             title: "Upgrade required",
             message,
+            kind: "upgrade",
+            alertKey: "",
         });
     };
 
@@ -651,6 +721,7 @@ export const AuthProvider = ({ children }) => {
                 updateUser,
                 refreshBillingPlan,
                 dismissBillingPrompt,
+                dismissBillingAlert,
                 showUpgradePrompt,
                 completeOnboarding,
                 clearSuspension,

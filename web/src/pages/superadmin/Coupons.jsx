@@ -36,6 +36,8 @@ export default function Coupons() {
   const [searchQuery, setSearchQuery] = useState("");
   const [form, setForm] = useState(INITIAL_FORM);
   const [editingId, setEditingId] = useState("");
+  const [couponToDelete, setCouponToDelete] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const load = async () => {
     try {
@@ -137,14 +139,16 @@ export default function Coupons() {
   };
 
   const removeCoupon = async (coupon) => {
-    if (!window.confirm(`Delete coupon ${coupon.code}?`)) return;
-
+    setDeleteLoading(true);
     try {
       await api.deleteCoupon(coupon._id);
       if (editingId === coupon._id) resetForm();
+      setCouponToDelete(null);
       await load();
     } catch (e) {
       setError(e.message || "Failed to delete coupon");
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -236,7 +240,14 @@ export default function Coupons() {
           <button type="button" className="cp-action-btn" onClick={() => toggleActive(row.raw)}>
             {row.raw.isActive ? "Disable" : "Enable"}
           </button>
-          <button type="button" className="cp-action-btn danger" onClick={() => removeCoupon(row.raw)}>
+          <button
+            type="button"
+            className="cp-action-btn danger"
+            onClick={() => {
+              setError("");
+              setCouponToDelete(row.raw);
+            }}
+          >
             Delete
           </button>
         </div>
@@ -511,6 +522,42 @@ export default function Coupons() {
             </div>
             <DataTable columns={columns} rows={filteredRows} />
           </section>
+
+          {couponToDelete ? (
+            <div className="cp-modal-backdrop" role="presentation">
+              <div className="cp-modal-card" role="dialog" aria-modal="true" aria-labelledby="coupon-delete-title">
+                <div className="cp-modal-badge">Delete Coupon</div>
+                <h3 id="coupon-delete-title">Remove {couponToDelete.code}?</h3>
+                <p>
+                  This will permanently delete the coupon rule if it has not been used or linked to a subscription.
+                </p>
+                <div className="cp-modal-meta">
+                  <span>Discount</span>
+                  <strong>{formatCouponValue(couponToDelete)}</strong>
+                </div>
+                <div className="cp-modal-actions">
+                  <button
+                    type="button"
+                    className="cp-btn cp-btn-muted"
+                    onClick={() => {
+                      if (deleteLoading) return;
+                      setCouponToDelete(null);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="cp-btn cp-btn-danger"
+                    onClick={() => removeCoupon(couponToDelete)}
+                    disabled={deleteLoading}
+                  >
+                    {deleteLoading ? "Deleting..." : "Delete Coupon"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </main>
       </div>
     </div>

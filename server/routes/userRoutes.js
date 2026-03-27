@@ -215,6 +215,12 @@ const getCompanyCouponUsedCount = (coupon, companyId) => {
   return Number(map[String(companyId)] || 0);
 };
 
+const isCompanyOnProPlan = async (companyId) => {
+  if (!companyId) return false;
+  const resolved = await resolveEffectivePlan(companyId);
+  return String(resolved?.plan?.code || "").toUpperCase() === "PRO";
+};
+
 const toWholeNumber = (value, fallback = 0) => {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return Math.max(0, Number(fallback || 0));
@@ -275,6 +281,10 @@ const getActiveOverrideForPlan = async (companyId, planId) => {
 
 const validateCouponForPlan = async ({ couponCode, companyId, planId }) => {
   if (!couponCode) return null;
+
+  if (await isCompanyOnProPlan(companyId)) {
+    throw new Error("Coupons are not available for Pro plan companies");
+  }
 
   const normalizedCode = String(couponCode).trim().toUpperCase();
   console.log("[CouponValidation] request", {
@@ -1774,6 +1784,10 @@ router.get("/billing/coupons", verifyToken, async (req, res) => {
 
     const now = new Date();
     const companyId = req.user.company_id;
+
+    if (await isCompanyOnProPlan(companyId)) {
+      return res.json({ success: true, coupons: [] });
+    }
 
     const coupons = await Coupon.find({
       isActive: true,

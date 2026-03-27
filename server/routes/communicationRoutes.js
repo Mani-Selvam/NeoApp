@@ -545,7 +545,11 @@ router.patch(
       }
 
       const task = await populateTaskQuery(
-        CommunicationTask.findOneAndUpdate(query, { $set: update }, { new: true }),
+        CommunicationTask.findOneAndUpdate(
+          query,
+          { $set: update },
+          { returnDocument: "after" },
+        ),
       ).lean();
 
       emitToUsers(
@@ -592,7 +596,11 @@ router.patch(
       };
 
       const task = await populateTaskQuery(
-        CommunicationTask.findOneAndUpdate(query, { $set: update }, { new: true }),
+        CommunicationTask.findOneAndUpdate(
+          query,
+          { $set: update },
+          { returnDocument: "after" },
+        ),
       ).lean();
 
       if (!task) return res.status(404).json({ error: "Task not found" });

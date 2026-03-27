@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api } from "../services/api";
+import { api, setWebSessionToken } from "../services/api";
 
 const AuthContext = createContext(null);
 const SESSION_EXPIRY_KEY = "sessionExpiresAt";
@@ -20,6 +20,7 @@ export function AuthProvider({ children }) {
   const clearSessionState = useCallback(() => {
     localStorage.removeItem("user");
     localStorage.removeItem(SESSION_EXPIRY_KEY);
+    setWebSessionToken("");
     setUser(null);
     setSessionExpiresAt(0);
   }, []);
@@ -34,13 +35,14 @@ export function AuthProvider({ children }) {
     }
   }, [clearSessionState]);
 
-  const login = useCallback((nextUser, sessionTimeoutMinutes = 30) => {
+  const login = useCallback((nextUser, sessionTimeoutMinutes = 30, sessionToken = "") => {
     const timeout = Number(sessionTimeoutMinutes || 30);
     const safeTimeout = Number.isFinite(timeout) && timeout > 0 ? timeout : 30;
     const expiry = Date.now() + safeTimeout * 60 * 1000;
 
     localStorage.setItem("user", JSON.stringify(nextUser));
     localStorage.setItem(SESSION_EXPIRY_KEY, String(expiry));
+    setWebSessionToken(sessionToken);
     setUser(nextUser);
     setSessionExpiresAt(expiry);
   }, []);

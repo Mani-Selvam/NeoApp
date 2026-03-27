@@ -11,6 +11,35 @@ const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
 const TRIGGER_TYPES = Notifications.SchedulableTriggerInputTypes || {};
 const DATE_TRIGGER_TYPE = TRIGGER_TYPES.DATE || "date";
 const DAILY_TRIGGER_TYPE = TRIGGER_TYPES.DAILY || "daily";
+const CHANNEL_IDS = {
+    default: "default_v2",
+    followups: "followups_v2",
+    enquiries: "enquiries_v2",
+    coupons: "coupons_v2",
+    billing: "billing_v2",
+};
+const NOTIFICATION_CHANNELS = {
+    followups: {
+        name: "Follow-ups",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+    },
+    enquiries: {
+        name: "Enquiries",
+        lightColor: "#16A34A",
+        vibrationPattern: [0, 180, 140, 180],
+    },
+    coupons: {
+        name: "Coupons",
+        lightColor: "#2563EB",
+        vibrationPattern: [0, 180, 120, 180],
+    },
+    billing: {
+        name: "Plan Alerts",
+        lightColor: "#F59E0B",
+        vibrationPattern: [0, 220, 160, 220],
+    },
+};
 
 // Helper to check if notifications are supported
 const isNotificationSupported = () => {
@@ -20,10 +49,13 @@ const isNotificationSupported = () => {
     return true;
 };
 
+const resolveChannelId = (channelId = "default") =>
+    CHANNEL_IDS[channelId] || channelId;
+
 const buildDateTrigger = (date, channelId = "followups") => {
     const trigger = { type: DATE_TRIGGER_TYPE, date };
     if (Platform.OS === "android" && channelId) {
-        trigger.channelId = channelId;
+        trigger.channelId = resolveChannelId(channelId);
     }
     return trigger;
 };
@@ -36,9 +68,62 @@ const buildDailyTrigger = (hour, minute, channelId = "followups") => {
         repeats: true,
     };
     if (Platform.OS === "android" && channelId) {
-        trigger.channelId = channelId;
+        trigger.channelId = resolveChannelId(channelId);
     }
     return trigger;
+};
+
+const getChannelMeta = (channelId = "default") =>
+    NOTIFICATION_CHANNELS[channelId] || {
+        name: "default",
+        lightColor: "#2563EB",
+        vibrationPattern: [0, 220, 160, 220],
+    };
+
+const scheduleImmediateNotification = async ({
+    title,
+    body,
+    subtitle = "",
+    data = {},
+    channelId = "default",
+    color = "#2563EB",
+    badge = 1,
+    sticky = false,
+    priority = "high",
+    vibrate,
+}) => {
+    if (!isNotificationSupported()) {
+        return null;
+    }
+
+    const channelMeta = getChannelMeta(channelId);
+    const vibrationPattern = vibrate || channelMeta.vibrationPattern;
+    const resolvedChannelId = resolveChannelId(channelId);
+
+    return Notifications.scheduleNotificationAsync({
+        content: {
+            title,
+            body,
+            subtitle,
+            data,
+            sound: "default",
+            vibrate: vibrationPattern,
+            badge,
+            ios: {
+                sound: true,
+                badge,
+            },
+            android: {
+                channelId: resolvedChannelId,
+                smallIcon: "icon",
+                color,
+                vibrate: vibrationPattern,
+                priority,
+                sticky,
+            },
+        },
+        trigger: null,
+    });
 };
 
 // Configure notification behavior (only on supported platforms)
@@ -91,30 +176,53 @@ export const initializeNotifications = async () => {
 
         // For Android: Set notification channel
         if (Platform.OS === "android") {
-            await Notifications.setNotificationChannelAsync("default", {
+            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.default, {
                 name: "default",
                 importance: Notifications.AndroidImportance.HIGH,
                 vibrationPattern: [0, 250, 250, 250],
                 lightColor: "#FF231F7C",
+                sound: "default",
+                enableVibrate: true,
+                enableLights: true,
             });
 
             // Channel for follow-ups
-            await Notifications.setNotificationChannelAsync("followups", {
-                name: "Follow-ups",
+            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.followups, {
+                name: NOTIFICATION_CHANNELS.followups.name,
                 importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: [0, 250, 250, 250],
-                lightColor: "#0EA5E9",
+                vibrationPattern: NOTIFICATION_CHANNELS.followups.vibrationPattern,
+                lightColor: NOTIFICATION_CHANNELS.followups.lightColor,
                 sound: "default",
                 enableVibrate: true,
                 enableLights: true,
             });
 
             // Channel for enquiries
-            await Notifications.setNotificationChannelAsync("enquiries", {
-                name: "Enquiries",
+            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.enquiries, {
+                name: NOTIFICATION_CHANNELS.enquiries.name,
                 importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: [0, 150, 150, 150],
-                lightColor: "#16A34A",
+                vibrationPattern: NOTIFICATION_CHANNELS.enquiries.vibrationPattern,
+                lightColor: NOTIFICATION_CHANNELS.enquiries.lightColor,
+                sound: "default",
+                enableVibrate: true,
+                enableLights: true,
+            });
+
+            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.coupons, {
+                name: NOTIFICATION_CHANNELS.coupons.name,
+                importance: Notifications.AndroidImportance.HIGH,
+                vibrationPattern: NOTIFICATION_CHANNELS.coupons.vibrationPattern,
+                lightColor: NOTIFICATION_CHANNELS.coupons.lightColor,
+                sound: "default",
+                enableVibrate: true,
+                enableLights: true,
+            });
+
+            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.billing, {
+                name: NOTIFICATION_CHANNELS.billing.name,
+                importance: Notifications.AndroidImportance.HIGH,
+                vibrationPattern: NOTIFICATION_CHANNELS.billing.vibrationPattern,
+                lightColor: NOTIFICATION_CHANNELS.billing.lightColor,
                 sound: "default",
                 enableVibrate: true,
                 enableLights: true,
@@ -135,59 +243,28 @@ export const showFollowUpNotification = async (
     followUpData = [],
 ) => {
     try {
-        // Skip notifications on web platform
-        if (Platform.OS === "web") {
-            return;
-        }
+        if (followUpCount === 0) return null;
 
-        if (followUpCount === 0) return;
-
-        const title = "📋 Today's Follow-ups";
-        const body =
-            followUpCount === 1
-                ? `You have ${followUpCount} follow-up to complete today`
-                : `You have ${followUpCount} follow-ups to complete today`;
-
-        console.log("Sending follow-up notification...", {
-            title,
-            body,
-            count: followUpCount,
-        });
-
-        const notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: title,
-                body: body,
-                subtitle: followUpCount > 0 ? "Tap to view details" : "",
-                data: {
-                    followUpCount,
-                    followUpList: JSON.stringify(followUpData),
-                    timestamp: new Date().toISOString(),
-                },
-                sound: "default",
-                vibrate: [0, 250, 250, 250],
-                badge: followUpCount,
-                ios: {
-                    sound: true,
-                    Badge: followUpCount,
-                },
-                android: {
-                    channelId: "followups",
-                    smallIcon: "icon",
-                    color: "#0EA5E9",
-                    vibrate: [0, 250, 250, 250],
-                    priority: "high",
-                    sticky: false,
-                },
+        return await scheduleImmediateNotification({
+            title: "Today's follow-ups",
+            body:
+                followUpCount === 1
+                    ? `You have ${followUpCount} follow-up to complete today`
+                    : `You have ${followUpCount} follow-ups to complete today`,
+            subtitle: "Tap to open follow-ups",
+            channelId: "followups",
+            color: "#0EA5E9",
+            badge: followUpCount,
+            data: {
+                followUpCount,
+                followUpList: JSON.stringify(followUpData),
+                type: "followup-summary",
+                timestamp: new Date().toISOString(),
             },
-            trigger: null, // Send immediately
         });
-
-        console.log(
-            `📋 Follow-up notification sent: ${followUpCount} today (ID: ${notificationId})`,
-        );
     } catch (error) {
         console.error("Failed to show notification:", error);
+        return null;
     }
 };
 
@@ -197,169 +274,152 @@ export const showUrgentNotification = async (
     overdueData = [],
 ) => {
     try {
-        // Skip notifications on web platform
-        if (!isNotificationSupported()) {
-            return;
-        }
+        if (overdueCount === 0) return null;
 
-        if (overdueCount === 0) return;
-
-        const title = "🚨 Overdue Follow-ups";
-        const body =
-            overdueCount === 1
-                ? `You have ${overdueCount} overdue follow-up!`
-                : `You have ${overdueCount} overdue follow-ups!`;
-
-        console.log("Sending urgent notification...", {
-            title,
-            body,
-            count: overdueCount,
-        });
-
-        const notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: title,
-                body: body,
-                data: {
-                    overdueCount,
-                    overdueList: JSON.stringify(overdueData),
-                    type: "urgent",
-                    timestamp: new Date().toISOString(),
-                },
-                sound: "default",
-                vibrate: [0, 500, 250, 500],
-                badge: overdueCount,
-                ios: {
-                    sound: true,
-                    Badge: overdueCount,
-                },
-                android: {
-                    channelId: "followups",
-                    smallIcon: "icon",
-                    color: "#DC2626",
-                    vibrate: [0, 500, 250, 500],
-                    priority: "high",
-                    sticky: true,
-                },
+        return await scheduleImmediateNotification({
+            title: "Overdue follow-ups",
+            body:
+                overdueCount === 1
+                    ? `You have ${overdueCount} overdue follow-up!`
+                    : `You have ${overdueCount} overdue follow-ups!`,
+            subtitle: "Tap to review pending work",
+            channelId: "followups",
+            color: "#DC2626",
+            badge: overdueCount,
+            sticky: true,
+            vibrate: [0, 500, 250, 500],
+            data: {
+                overdueCount,
+                overdueList: JSON.stringify(overdueData),
+                type: "urgent",
+                timestamp: new Date().toISOString(),
             },
-            trigger: null, // Send immediately
         });
-
-        console.log(
-            `🚨 Urgent notification sent: ${overdueCount} overdue (ID: ${notificationId})`,
-        );
     } catch (error) {
         console.error("Failed to show urgent notification:", error);
+        return null;
     }
 };
 
 // Show success notification for new enquiry
 export const showEnquirySuccessNotification = async (enquiryData) => {
     try {
-        // Skip notifications on web platform
         if (!isNotificationSupported()) {
             return;
         }
 
-        const title = "✅ New Enquiry Added";
-        const body = `${enquiryData.name} - ${enquiryData.product}`;
-
-        console.log("Sending enquiry success notification...", { title, body });
-
-        const notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: title,
-                body: body,
-                subtitle: "Successfully recorded",
-                data: {
-                    type: "enquiry-success",
-                    enquiryId: enquiryData.id || enquiryData._id,
-                    enquiryName: enquiryData.name,
-                    product: enquiryData.product,
-                    timestamp: new Date().toISOString(),
-                },
-                sound: "default",
-                vibrate: [0, 200, 150, 200],
-                badge: 1,
-                ios: {
-                    sound: true,
-                    badge: 1,
-                },
-                android: {
-                    channelId: "enquiries",
-                    smallIcon: "icon",
-                    color: "#16A34A",
-                    vibrate: [0, 200, 150, 200],
-                    priority: "high",
-                    sticky: false,
-                },
+        return await scheduleImmediateNotification({
+            title: "New enquiry added",
+            body: `${enquiryData.name} - ${enquiryData.product}`,
+            subtitle: "Successfully recorded",
+            channelId: "enquiries",
+            color: "#16A34A",
+            data: {
+                type: "enquiry-success",
+                enquiryId: enquiryData.id || enquiryData._id,
+                enquiryName: enquiryData.name,
+                product: enquiryData.product,
+                timestamp: new Date().toISOString(),
             },
-            trigger: null, // Send immediately
         });
-
-        console.log(
-            `✅ Enquiry success notification sent: ${enquiryData.name} (ID: ${notificationId})`,
-        );
-        return notificationId;
     } catch (error) {
         console.error("Failed to show enquiry success notification:", error);
+        return null;
     }
 };
 
 // Show notification for new enquiry alert (admin/lead staff)
 export const showNewEnquiryAlertNotification = async (enquiryData) => {
     try {
-        // Skip notifications on web platform
         if (!isNotificationSupported()) {
             return;
         }
 
-        const title = "📌 New Enquiry Alert";
-        const body = `New enquiry from ${enquiryData.name}`;
-
-        console.log("Sending new enquiry alert notification...", {
-            title,
-            body,
-        });
-
-        const notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: title,
-                body: body,
-                subtitle: enquiryData.product,
-                data: {
-                    type: "new-enquiry-alert",
-                    enquiryId: enquiryData.id || enquiryData._id,
-                    enquiryName: enquiryData.name,
-                    product: enquiryData.product,
-                    source: enquiryData.source,
-                    timestamp: new Date().toISOString(),
-                },
-                sound: "default",
-                vibrate: [0, 250, 250, 250],
-                badge: 1,
-                ios: {
-                    sound: true,
-                    badge: 1,
-                },
-                android: {
-                    channelId: "enquiries",
-                    smallIcon: "icon",
-                    color: "#0EA5E9",
-                    vibrate: [0, 250, 250, 250],
-                    priority: "high",
-                    sticky: false,
-                },
+        return await scheduleImmediateNotification({
+            title: "New enquiry alert",
+            body: `New enquiry from ${enquiryData.name}`,
+            subtitle: enquiryData.product,
+            channelId: "enquiries",
+            color: "#0EA5E9",
+            data: {
+                type: "new-enquiry-alert",
+                enquiryId: enquiryData.id || enquiryData._id,
+                enquiryName: enquiryData.name,
+                product: enquiryData.product,
+                source: enquiryData.source,
+                timestamp: new Date().toISOString(),
             },
-            trigger: null, // Send immediately
         });
-
-        console.log(
-            `📌 New enquiry alert notification sent: ${enquiryData.name} (ID: ${notificationId})`,
-        );
-        return notificationId;
     } catch (error) {
         console.error("Failed to show new enquiry alert notification:", error);
+        return null;
+    }
+};
+
+export const showCouponOfferNotification = async (couponData) => {
+    try {
+        if (!isNotificationSupported()) {
+            return;
+        }
+
+        const code = String(couponData?.code || "").toUpperCase();
+        const title = couponData?.title || "Special offer available";
+        const body =
+            couponData?.body ||
+            (code
+                ? `You have a special offer today. Use coupon ${code}.`
+                : "You have a special offer today. Please check now.");
+
+        return await scheduleImmediateNotification({
+            title,
+            body,
+            subtitle: code ? `Coupon ${code}` : "Coupon offer",
+            channelId: "coupons",
+            color: "#2563EB",
+            data: {
+                type: "coupon-offer",
+                couponId: couponData?.couponId || "",
+                code,
+                discountType: couponData?.discountType || "",
+                discountValue: Number(couponData?.discountValue || 0),
+                expiryDate: couponData?.expiryDate || null,
+                timestamp: couponData?.timestamp || new Date().toISOString(),
+            },
+        });
+    } catch (error) {
+        console.error("Failed to show coupon notification:", error);
+    }
+};
+
+export const showBillingPlanNotification = async ({
+    title,
+    body,
+    code = "billing-alert",
+    expiry = null,
+    reason = "",
+} = {}) => {
+    try {
+        if (!isNotificationSupported() || !title || !body) {
+            return null;
+        }
+
+        return await scheduleImmediateNotification({
+            title,
+            body,
+            subtitle: "Tap to review your plan",
+            channelId: "billing",
+            color: "#F59E0B",
+            data: {
+                type: "billing-alert",
+                code,
+                expiry,
+                reason,
+                timestamp: new Date().toISOString(),
+            },
+        });
+    } catch (error) {
+        console.error("Failed to show billing notification:", error);
+        return null;
     }
 };
 
@@ -1139,6 +1199,12 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                     screen: 'Enquiry',
                     params: { screen: 'EnquiryList' }
                 });
+            } else if (data.type === "coupon-offer") {
+                navigationRef.navigate("Main", {
+                    screen: "Home",
+                });
+            } else if (data.type === "billing-alert") {
+                navigationRef.navigate("PricingScreen");
             }
         }
     });
@@ -1172,6 +1238,8 @@ export default {
     showUrgentNotification,
     showEnquirySuccessNotification,
     showNewEnquiryAlertNotification,
+    showCouponOfferNotification,
+    showBillingPlanNotification,
     showEnquiryErrorNotification,
     showEnquiryStatusNotification,
     scheduleDailyNotification,

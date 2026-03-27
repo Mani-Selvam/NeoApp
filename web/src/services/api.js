@@ -1,4 +1,5 @@
 const rawApiBaseUrl = import.meta.env.VITE_API_URL;
+const WEB_SESSION_TOKEN_KEY = "superadminSessionToken";
 
 function resolveApiBaseUrl() {
     if (typeof rawApiBaseUrl === "string" && rawApiBaseUrl.trim()) {
@@ -15,11 +16,17 @@ function resolveApiBaseUrl() {
 const API_BASE_URL = resolveApiBaseUrl();
 
 async function request(path, options = {}) {
+    const sessionToken =
+        typeof window !== "undefined"
+            ? window.sessionStorage.getItem(WEB_SESSION_TOKEN_KEY)
+            : "";
+
     const response = await fetch(`${API_BASE_URL}${path}`, {
         ...options,
         credentials: "include",
         headers: {
             "Content-Type": "application/json",
+            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
             ...(options.headers || {}),
         },
     });
@@ -34,6 +41,15 @@ async function request(path, options = {}) {
     }
 
     return data;
+}
+
+export function setWebSessionToken(token) {
+    if (typeof window === "undefined") return;
+    if (token) {
+        window.sessionStorage.setItem(WEB_SESSION_TOKEN_KEY, token);
+    } else {
+        window.sessionStorage.removeItem(WEB_SESSION_TOKEN_KEY);
+    }
 }
 
 export const api = {
