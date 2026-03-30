@@ -58,7 +58,7 @@
     "expo-web-browser": "~15.0.10",
     "express": "^5.2.1",
     "firebase": "^12.11.0",
-    "firebase-admin": "^13.6.1",
+    "firebase-admin": "^10.3.0",
     "form-data": "^4.0.5",
     "framer-motion": "^11.18.2",
     "imapflow": "^1.2.16",

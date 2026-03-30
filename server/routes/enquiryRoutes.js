@@ -677,8 +677,8 @@ router.get("/:id/detail", verifyToken, async (req, res) => {
       .find({
         activityType: { $ne: "System" },
         type: { $ne: "System" },
-        note: { $ne: "Enquiry created" },
-        remarks: { $ne: "Enquiry created" },
+        note: { $ne: "Enquiry created", $not: /^Call:/i },
+        remarks: { $ne: "Enquiry created", $not: /^Call:/i },
       })
       .sort({ activityTime: 1, createdAt: 1 })
       .select(

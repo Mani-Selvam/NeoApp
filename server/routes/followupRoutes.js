@@ -174,6 +174,7 @@ router.get("/", verifyToken, async (req, res) => {
     });
 
     const { data: response, source } = await cache.wrap(cacheKey, async () => {
+      const isStaff = String(req.user?.role || "").trim().toLowerCase() === "staff";
       // Use the selected date as the reference day when provided.
       const referenceDate = date || toLocalIsoDate(new Date());
       const scope = await getFollowUpAccessScope(req);
@@ -203,6 +204,17 @@ router.get("/", verifyToken, async (req, res) => {
         activityType: { $ne: "System" },
         type: { $ne: "System" },
       };
+
+      // Exclude auto-generated call-log follow-up rows (calls should appear only in Call Log).
+      query.$and = [
+        ...(Array.isArray(query.$and) ? query.$and : []),
+        {
+          $nor: [
+            { note: { $regex: /^Call:/i } },
+            { remarks: { $regex: /^Call:/i } },
+          ],
+        },
+      ];
 
       if (tab === "Today") {
         Object.assign(query, { date: referenceDate, ...activeFilter });
@@ -303,7 +315,7 @@ router.get("/", verifyToken, async (req, res) => {
             ...(enqNos.length > 0 ? [{ enqNo: { $in: enqNos } }] : []),
           ],
         })
-          .select("_id enqNo status")
+          .select("_id enqNo status assignedTo")
           .lean();
         const existingSet = new Set(existing.map((e) => String(e._id)));
         const statusByEnquiryId = new Map(
@@ -314,6 +326,14 @@ router.get("/", verifyToken, async (req, res) => {
             .filter((e) => e?.enqNo)
             .map((e) => [String(e.enqNo).trim(), e?.status || "New"]),
         );
+        const assignedToByEnquiryId = new Map(
+          existing.map((e) => [String(e._id), String(e?.assignedTo || "")]),
+        );
+        const assignedToByEnquiryNo = new Map(
+          existing
+            .filter((e) => e?.enqNo)
+            .map((e) => [String(e.enqNo).trim(), String(e?.assignedTo || "")]),
+        );
 
         for (let i = followUps.length - 1; i >= 0; i -= 1) {
           const enqId = followUps[i].enqId;
@@ -321,6 +341,17 @@ router.get("/", verifyToken, async (req, res) => {
           if (enqId && !existingSet.has(String(enqId))) {
             followUps.splice(i, 1);
             continue;
+          }
+
+          if (isStaff) {
+            const assignedTo =
+              (enqId && assignedToByEnquiryId.get(String(enqId))) ||
+              (enqNo && assignedToByEnquiryNo.get(enqNo)) ||
+              "";
+            if (!assignedTo || assignedTo !== String(req.userId)) {
+              followUps.splice(i, 1);
+              continue;
+            }
           }
 
           if (enqId && statusByEnquiryId.has(String(enqId))) {
@@ -400,6 +431,7 @@ router.post("/", verifyToken, async (req, res) => {
       enqId: enquiryId,
       enqNo,
       userId: ownerId,
+      createdBy: req.userId,
       assignedTo: assignedToId,
       staffName: req.user?.name || "Staff",
       activityType: req.body.activityType || req.body.type || "WhatsApp",
@@ -480,6 +512,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     const updateData = { ...req.body };
     // PROTECT USERID
     delete updateData.userId;
+    delete updateData.createdBy;
 
     const followUp = await FollowUp.findOneAndUpdate(filter, updateData, {
       returnDocument: "after",
@@ -570,6 +603,22 @@ router.get("/history/:enqNoOrId", verifyToken, async (req, res) => {
 
     const scope = await getFollowUpAccessScope(req);
     const filter = buildFollowUpScopedFilter(scope);
+    const isStaff = String(req.user?.role || "").trim().toLowerCase() === "staff";
+
+    if (isStaff) {
+      const ownerUserIds = Array.isArray(scope?.ownerUserIds) ? scope.ownerUserIds : [];
+      const ownerUserIdQuery =
+        ownerUserIds.length <= 1
+          ? ownerUserIds[0] || null
+          : { $in: ownerUserIds };
+      const enquiryQuery = mongoose.Types.ObjectId.isValid(enqNoOrId)
+        ? { _id: enqNoOrId, userId: ownerUserIdQuery, assignedTo: req.userId }
+        : { enqNo: enqNoOrId, userId: ownerUserIdQuery, assignedTo: req.userId };
+      const allowed = await Enquiry.findOne(enquiryQuery).select("_id").lean();
+      if (!allowed) {
+        return res.status(404).json({ message: "Enquiry not found or unauthorized" });
+      }
+    }
 
     // Try to find by enqNo first, then by ID
     let query = { enqNo: enqNoOrId, ...filter };
@@ -585,8 +634,8 @@ router.get("/history/:enqNoOrId", verifyToken, async (req, res) => {
       .find({
         activityType: { $ne: "System" },
         type: { $ne: "System" },
-        note: { $ne: "Enquiry created" },
-        remarks: { $ne: "Enquiry created" },
+        note: { $ne: "Enquiry created", $not: /^Call:/i },
+        remarks: { $ne: "Enquiry created", $not: /^Call:/i },
       })
       .populate("assignedTo", "name")
       .sort({ activityTime: 1, createdAt: 1 })

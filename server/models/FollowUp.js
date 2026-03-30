@@ -16,6 +16,7 @@ const followUpSchema = new mongoose.Schema({
         ref: "Enquiry",
     },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // Assigned staff member
     enqNo: { type: String, required: true },
     name: { type: String, required: true }, // Cached for easy display
@@ -52,6 +53,7 @@ const followUpSchema = new mongoose.Schema({
 
 // Indexes for performance
 followUpSchema.index({ userId: 1, date: -1, status: 1 });
+followUpSchema.index({ createdBy: 1, date: -1, status: 1 });
 followUpSchema.index({ assignedTo: 1, date: -1, status: 1 });
 followUpSchema.index({ userId: 1, nextAction: 1 });
 followUpSchema.index({ enqId: 1 });

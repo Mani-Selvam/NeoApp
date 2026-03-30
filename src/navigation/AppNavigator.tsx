@@ -12,9 +12,11 @@ import {
   AppState,
   BackHandler,
   DeviceEventEmitter,
+  Dimensions,
   Keyboard,
   Modal,
   Platform,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -117,6 +119,23 @@ function MainTabNavigator() {
   const currentTabRef = useRef("Home");
   const [chatBadgeCount, setChatBadgeCount] = useState(0);
 
+  const androidBottomInset = (() => {
+    if (Platform.OS !== "android") return 0;
+
+    // `react-native-safe-area-context` can report `0` for the bottom inset on
+    // Android when 3-button navigation is enabled. Fallback to a dimension-based
+    // navigation bar height estimate in that case.
+    const window = Dimensions.get("window");
+    const screen = Dimensions.get("screen");
+    const statusBarHeight = StatusBar.currentHeight ?? 0;
+    const rawNavBarHeight = Math.max(
+      0,
+      screen.height - window.height - statusBarHeight,
+    );
+    const navBarHeight = rawNavBarHeight >= 24 ? rawNavBarHeight : 0;
+    return Math.max(insets.bottom, navBarHeight);
+  })();
+
   useEffect(() => {
     if (Platform.OS !== "android") return undefined;
 
@@ -174,9 +193,15 @@ function MainTabNavigator() {
   }, [selfId]);
 
   const baseTabBarStyle = {
-    height: 68 + Math.min(insets.bottom, 10),
+    height:
+      Platform.OS === "android"
+        ? 68 + androidBottomInset
+        : 68 + Math.min(insets.bottom, 10),
     paddingTop: 8,
-    paddingBottom: Math.max(insets.bottom, 8),
+    paddingBottom:
+      Platform.OS === "android"
+        ? Math.max(androidBottomInset, 8)
+        : Math.max(insets.bottom, 8),
     paddingHorizontal: 10,
     borderTopWidth: 1,
     borderTopColor: "#E5EAF3",

@@ -3,7 +3,6 @@ const router = express.Router();
 const CallLog = require("../models/CallLog");
 const CallSession = require("../models/CallSession");
 const Enquiry = require("../models/Enquiry");
-const FollowUp = require("../models/FollowUp");
 const User = require("../models/User");
 const { verifyToken } = require("../middleware/auth");
 const mongoose = require("mongoose");
@@ -193,58 +192,6 @@ const toLocalIsoDate = (value = new Date()) => {
     const m = String(dt.getMonth() + 1).padStart(2, "0");
     const d = String(dt.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
-};
-
-const recordCallActivity = async ({
-    enquiry,
-    ownerId,
-    staffId,
-    staffName,
-    callType,
-    duration,
-    note,
-    activityAt,
-}) => {
-    if (!enquiry?._id || !ownerId) return;
-
-    const at = activityAt instanceof Date ? activityAt : new Date(activityAt || Date.now());
-    const date = toLocalIsoDate(at);
-    const parts = [
-        `Call: ${callType || "Phone Call"}`,
-        Number(duration || 0) > 0 ? `Duration ${Math.floor(Number(duration || 0))} sec` : "",
-        String(note || "").trim(),
-    ].filter(Boolean);
-    const remarks = parts.join(" | ").slice(0, 260);
-
-    await FollowUp.create({
-        enqId: enquiry._id,
-        enqNo: String(enquiry.enqNo || "").trim(),
-        userId: ownerId,
-        assignedTo: staffId || ownerId,
-        name: enquiry.name || "Enquiry",
-        mobile: enquiry.mobile || "",
-        image: enquiry.image || "",
-        product: enquiry.product || "",
-        date,
-        followUpDate: date,
-        nextFollowUpDate: date,
-        activityType: "Phone Call",
-        type: "Phone Call",
-        note: remarks || "Phone call activity",
-        remarks: remarks || "Phone call activity",
-        staffName: staffName || "Staff",
-        nextAction: "Followup",
-        status: "Completed",
-        activityTime: at,
-    });
-
-    await Enquiry.findByIdAndUpdate(enquiry._id, {
-        $set: { lastContactedAt: at, status: "Contacted" },
-    }).catch(() => null);
-
-    cache.invalidate("followups");
-    cache.invalidate("dashboard");
-    cache.invalidate("enquiries");
 };
 
 const buildEnquiryLookupScope = (req) => {
@@ -513,16 +460,15 @@ router.post("/webhook", async (req, res) => {
         });
 
         await newLog.save();
-        await recordCallActivity({
-            enquiry,
-            ownerId: targetUserId,
-            staffId: targetUserId,
-            staffName: enquiry?.enqBy || "Admin",
-            callType: newLog.callType,
-            duration: newLog.duration,
-            note: newLog.note,
-            activityAt: newLog.callTime,
-        });
+
+        if (enquiry?._id) {
+            await Enquiry.findByIdAndUpdate(enquiry._id, {
+                $set: { lastContactedAt: newLog.callTime },
+                $inc: { callCount: 1 },
+            }).catch(() => null);
+        }
+        cache.invalidate("dashboard");
+        cache.invalidate("enquiries");
 
         // Emit to owner/staff rooms only (tenant-safe)
         emitCallLogCreated(req, newLog, targetUserId, targetUserId);
@@ -697,16 +643,6 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
             });
 
             await newLog.save();
-            await recordCallActivity({
-                enquiry: existingEnquiry,
-                ownerId,
-                staffId: req.userId,
-                staffName: req.user?.name || "Staff",
-                callType: newLog.callType,
-                duration: newLog.duration,
-                note: newLog.note,
-                activityAt: newLog.callTime,
-            });
             syncCount++;
         }
 
@@ -785,23 +721,6 @@ router.post("/", verifyToken, async (req, res) => {
         });
 
         const savedLog = await newCallLog.save();
-        const linkedEnquiry =
-            linkedEnquiryId
-                ? await Enquiry.findById(linkedEnquiryId)
-                    .select("enqNo name mobile image product")
-                    .lean()
-                : null;
-
-        await recordCallActivity({
-            enquiry: linkedEnquiry,
-            ownerId,
-            staffId: req.userId,
-            staffName: req.user?.name || "Staff",
-            callType: savedLog.callType,
-            duration: savedLog.duration,
-            note: savedLog.note,
-            activityAt: savedLog.callTime,
-        });
 
         emitCallLogCreated(req, savedLog, ownerId, req.userId);
 
@@ -812,6 +731,8 @@ router.post("/", verifyToken, async (req, res) => {
                 $inc: { callCount: 1 }, // We might need to add this field to Enquiry model
             });
         }
+        cache.invalidate("dashboard");
+        cache.invalidate("enquiries");
 
         res.status(201).json(savedLog);
     } catch (err) {

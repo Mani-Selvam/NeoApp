@@ -12,12 +12,13 @@ import {
     Dimensions,
     Modal,
     Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+	ScrollView,
+	StatusBar,
+	StyleSheet,
+	Text,
+	TouchableOpacity,
+	useWindowDimensions,
+	View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Circle, G, Path } from "react-native-svg";
@@ -384,6 +385,8 @@ export default function ReportScreen({ navigation }) {
     const selfId = useMemo(() => normalizeId(user?.id || user?._id), [user?.id, user?._id]);
     const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
     const todayIso = useMemo(() => toIsoDate(new Date()), []);
+    const { width: windowWidth } = useWindowDimensions();
+    const leadLayoutStacked = windowWidth < 360;
 
     const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
     const [calendarVisible, setCalendarVisible] = useState(false);
@@ -942,24 +945,32 @@ export default function ReportScreen({ navigation }) {
                 ) : (
                     <>
                         {/* â”€â”€ LEAD OVERVIEW â€” Donut + Legend + Bars â”€â”€ */}
-                        <FadeIn delay={100}>
-                            <Card>
-                                <CardHeader title="Lead Overview" icon="people-outline" accent={C.sky} />
-                                <Text style={st.subHeading}>Lead Status Overview</Text>
-                                <View style={st.donutRow}>
-                                    <LeadPieChart size={162} data={leadM.chartData} />
-                                    <View style={st.donutLegend}>
-                                        {leadM.chartData.map(item => (
-                                            <View
-                                                key={item.label}
-                                                style={[st.legendRow, { borderColor:`${item.color}20`, backgroundColor:`${item.color}08` }]}>
-                                                <View style={[st.legendDot,{backgroundColor:item.color}]} />
-                                                <Text style={st.legendLabel}>{item.label}</Text>
-                                                <Text style={[st.legendVal,{color:item.color}]}>{item.value}</Text>
-                                            </View>
-                                        ))}
-                                    </View>
-                                </View>
+	                        <FadeIn delay={100}>
+	                            <Card>
+	                                <CardHeader title="Lead Overview" icon="people-outline" accent={C.sky} />
+	                                <Text style={st.subHeading}>Lead Status Overview</Text>
+	                                <View style={[st.donutRow, leadLayoutStacked && st.donutRowStacked]}>
+	                                    <View style={st.donutChartWrap}>
+	                                        <LeadPieChart size={162} data={leadM.chartData} />
+	                                    </View>
+	                                    <View style={[st.donutLegend, leadLayoutStacked && st.donutLegendStacked]}>
+	                                        {leadM.chartData.map(item => (
+	                                            <View
+	                                                key={item.label}
+	                                                style={[st.legendRow, { borderColor:`${item.color}20`, backgroundColor:`${item.color}08` }]}>
+	                                                <View style={[st.legendDot,{backgroundColor:item.color}]} />
+	                                                <Text
+	                                                    style={st.legendLabel}
+	                                                    numberOfLines={1}
+	                                                    ellipsizeMode="tail"
+	                                                >
+	                                                    {item.label}
+	                                                </Text>
+	                                                <Text style={[st.legendVal,{color:item.color}]}>{item.value}</Text>
+	                                            </View>
+	                                        ))}
+	                                    </View>
+	                                </View>
                                 {/* Status breakdown bars */}
                                 <View style={st.divider} />
                                 <Text style={st.subHeading}>Status Breakdown</Text>
@@ -1317,7 +1328,10 @@ const st = StyleSheet.create({
 
     // Lead overview
     donutRow: { flexDirection:"row", alignItems:"center", gap:18, paddingVertical:4 },
+    donutRowStacked: { flexDirection:"column", alignItems:"stretch" },
+    donutChartWrap: { alignSelf: "center" },
     donutLegend: { flex:1, gap:10 },
+    donutLegendStacked: { width: "100%" },
     pieCenterLabel: {
         position: "absolute",
         alignItems: "center",
@@ -1347,7 +1361,7 @@ const st = StyleSheet.create({
         paddingVertical:10,
     },
     legendDot: { width:9, height:9, borderRadius:5 },
-    legendLabel: { flex:1, fontSize:13, color:C.textSec, fontWeight:"600" },
+    legendLabel: { flex:1, flexShrink: 1, fontSize:13, color:C.textSec, fontWeight:"600" },
     legendVal: { fontSize:14, fontWeight:"800" },
 
     // Progress rows
