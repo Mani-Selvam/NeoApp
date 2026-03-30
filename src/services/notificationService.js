@@ -1506,6 +1506,38 @@ const getPrettyFollowUpLine = (activityType, name) => {
     return `Follow up with ${who} now.`;
 };
 
+const resolveEnquiryKeyFromItem = (item) => {
+    const rawId =
+        item?.enqId ||
+        item?.enquiryId ||
+        item?.enquiry?._id ||
+        item?.enquiry?.id ||
+        item?.enquiry ||
+        "";
+    const rawNo = item?.enqNo || item?.enquiry?.enqNo || item?.enquiryNo || "";
+
+    const normalizeId = (v) => {
+        if (!v) return "";
+        if (typeof v === "string") return v.trim();
+        if (typeof v === "number") return String(v);
+        if (typeof v === "object") {
+            if (v._id) return String(v._id).trim();
+            if (v.id) return String(v.id).trim();
+            if (v.toString && v.toString !== Object.prototype.toString) {
+                const s = String(v.toString()).trim();
+                if (s && s !== "[object Object]") return s;
+            }
+        }
+        const s = String(v).trim();
+        return s === "[object Object]" ? "" : s;
+    };
+
+    return {
+        enqId: normalizeId(rawId),
+        enqNo: String(rawNo || "").trim(),
+    };
+};
+
 const buildSoonContent = (item, when, minutesLeft, lang = "en") => {
     const name = String(item?.name || "Client").trim();
     const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
@@ -1667,6 +1699,7 @@ const buildDueAtContent = (item, when, lang = "en") => {
     const name = String(item?.name || "Client").trim();
     const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
     const timeLabel = when ? formatHHmm(when) : "";
+    const { enqId, enqNo } = resolveEnquiryKeyFromItem(item);
 
     const texts = getFollowUpDueTexts({ lang, name, activityType, timeLabel });
     return {
@@ -1675,8 +1708,8 @@ const buildDueAtContent = (item, when, lang = "en") => {
         data: {
             type: "followup-due",
             followUpId: String(item?._id || ""),
-            enqId: String(item?.enqId || item?._id || ""),
-            enqNo: String(item?.enqNo || ""),
+            enqId,
+            enqNo,
             name,
             activityType,
             when: when ? when.toISOString() : null,
@@ -1689,6 +1722,7 @@ const buildMissedContent = (item, when, lang = "en") => {
     const name = String(item?.name || "Client").trim();
     const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
     const timeLabel = when ? formatHHmm(when) : "";
+    const { enqId, enqNo } = resolveEnquiryKeyFromItem(item);
 
     const texts = getFollowUpMissedTexts({
         lang,
@@ -1703,8 +1737,8 @@ const buildMissedContent = (item, when, lang = "en") => {
         data: {
             type: "followup-missed",
             followUpId: String(item?._id || ""),
-            enqId: String(item?.enqId || item?._id || ""),
-            enqNo: String(item?.enqNo || ""),
+            enqId,
+            enqNo,
             name,
             activityType,
             when: when ? when.toISOString() : null,
@@ -2258,19 +2292,21 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
         const enqNoStr = enqNo ? String(enqNo).trim() : "";
         if (!enqIdStr && !enqNoStr) return { cancelled: 0, skipped: true, reason: "no-key" };
 
+        // Also cancel the "add next follow-up" prompt for this enquiry.
+        Promise.resolve(cancelNextFollowUpPromptForEnquiry({ enqId, enqNo })).catch(() => {});
+
         const pending = await getPendingNotifications();
         const matches = pending.filter((notif) => {
             const data = notif?.content?.data || {};
             const type = String(data?.type || "").trim();
             if (!type) return false;
-            // Only follow-up style notifications carry enq info.
+            // Only cancel notifications that are tied to a single enquiry.
             if (
                 type !== "followup-soon" &&
                 type !== "followup-due" &&
-                type !== "followup-missed"
-            ) {
-                return false;
-            }
+                type !== "followup-missed" &&
+                type !== "next-followup-prompt"
+            ) return false;
             const dEnqId = data?.enqId ? String(data.enqId) : "";
             const dEnqNo = data?.enqNo ? String(data.enqNo).trim() : "";
             if (enqIdStr && dEnqId && dEnqId === enqIdStr) return true;
@@ -2300,6 +2336,50 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
         return { cancelled: cancelledIds.length, skipped: false };
     } catch (error) {
         console.error("Failed to cancel enquiry notifications:", error);
+        return { cancelled: 0, skipped: false, error: true };
+    }
+};
+
+export const cancelNotificationsForFollowUpIds = async (followUpIds = []) => {
+    try {
+        if (!isNotificationSupported()) return { cancelled: 0, skipped: true };
+        const ids = (Array.isArray(followUpIds) ? followUpIds : []).map((v) => String(v || "").trim()).filter(Boolean);
+        if (ids.length === 0) return { cancelled: 0, skipped: true, reason: "no-ids" };
+        const idSet = new Set(ids);
+
+        const pending = await getPendingNotifications();
+        const matches = pending.filter((notif) => {
+            const data = notif?.content?.data || {};
+            const type = String(data?.type || "").trim();
+            if (
+                type !== "followup-soon" &&
+                type !== "followup-due" &&
+                type !== "followup-missed"
+            ) return false;
+            const followUpId = String(data?.followUpId || "").trim();
+            return Boolean(followUpId) && idSet.has(followUpId);
+        });
+
+        if (matches.length === 0) return { cancelled: 0, skipped: true, reason: "none" };
+
+        const cancelledIds = [];
+        for (const notif of matches) {
+            const id = String(notif?.identifier || "");
+            if (!id) continue;
+            try {
+                await cancelNotification(id);
+                cancelledIds.push(id);
+            } catch {}
+        }
+
+        await Promise.allSettled([
+            pruneStoredScheduleIds(TIME_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
+            pruneStoredScheduleIds(HOURLY_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
+        ]);
+
+        return { cancelled: cancelledIds.length, skipped: false };
+    } catch (error) {
+        console.error("Failed to cancel follow-up-id notifications:", error);
         return { cancelled: 0, skipped: false, error: true };
     }
 };
@@ -2468,6 +2548,7 @@ export default {
     setupGlobalNotificationListener,
 	    notifyMissedFollowUpsSummary,
 	    cancelNotificationsForEnquiry,
+	    cancelNotificationsForFollowUpIds,
 	    cancelNextFollowUpPromptForEnquiry,
 	    scheduleNextFollowUpPromptForEnquiry,
 	    showReportCsvReadyNotification,

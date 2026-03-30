@@ -1,4 +1,4 @@
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+﻿import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import * as Clipboard from "expo-clipboard";
@@ -1000,23 +1000,6 @@ export default function HomeScreen({ navigation }) {
 	  const [showLogout, setShowLogout] = useState(false);
 	  const [skipAnim, setSkipAnim] = useState(false);
 	  const couponCopyResetRef = useRef(null);
-	  const [voiceLang, setVoiceLang] = useState("en");
-	  const [voiceLangOpen, setVoiceLangOpen] = useState(false);
-
-	  useEffect(() => {
-	    let active = true;
-	    notificationService
-	      .getNotificationVoiceLanguage?.()
-	      .then((lang) => {
-	        if (!active) return;
-	        setVoiceLang(lang === "ta" ? "ta" : "en");
-	      })
-	      .catch(() => {});
-	    return () => {
-	      active = false;
-	    };
-	  }, []);
-
 	  useEffect(() => {
 	    AsyncStorage.getItem("homeIntroPlayed")
 	      .then((val) => {
@@ -1068,7 +1051,7 @@ export default function HomeScreen({ navigation }) {
   const revenueDeltaLabel = (() => {
     const now = Number(stats.overallSalesAmount || 0);
     const prev = Number(stats.prevRevenue || 0);
-    if (prev === 0 && now > 0) return "+∞%";
+    if (prev === 0 && now > 0) return "+âˆž%";
     if (prev === 0 && now === 0) return "0%";
     if (stats.revenueChangePct == null) return "0%";
     const pct = Number(stats.revenueChangePct || 0);
@@ -1353,18 +1336,8 @@ export default function HomeScreen({ navigation }) {
                   : rangeType === "month"
                     ? "Month"
                     : "Year"}{" "}
-              • {rangeLabel}
+              â€¢ {rangeLabel}
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={S.notifBtn}
-            activeOpacity={0.85}
-            onPress={() => setVoiceLangOpen(true)}
-          >
-            <Ionicons name="notifications-outline" size={20} color={C.textSub} />
-            <View style={S.notifLangPill}>
-              <Text style={S.notifLangText}>{voiceLang === "ta" ? "TA" : "EN"}</Text>
-            </View>
           </TouchableOpacity>
           <TouchableOpacity
             style={S.avatarBtn}
@@ -1409,51 +1382,7 @@ export default function HomeScreen({ navigation }) {
         </View>
       </SafeAreaView>
 
-      <Modal
-        visible={voiceLangOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setVoiceLangOpen(false)}
-      >
-        <View style={S.langModalBg}>
-          <View style={S.langModalCard}>
-            <Text style={S.langModalTitle}>Notification Voice</Text>
-            <Text style={S.langModalSub}>Choose Tamil or English for voice reminders.</Text>
-            <View style={S.langRow}>
-              <TouchableOpacity
-                style={[S.langChip, voiceLang === "en" && S.langChipActive]}
-                onPress={async () => {
-                  setVoiceLang("en");
-                  await notificationService.setNotificationVoiceLanguage?.("en");
-                  setVoiceLangOpen(false);
-                }}
-              >
-                <Text style={[S.langChipText, voiceLang === "en" && S.langChipTextActive]}>
-                  English
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[S.langChip, voiceLang === "ta" && S.langChipActive]}
-                onPress={async () => {
-                  setVoiceLang("ta");
-                  await notificationService.setNotificationVoiceLanguage?.("ta");
-                  setVoiceLangOpen(false);
-                }}
-              >
-                <Text style={[S.langChipText, voiceLang === "ta" && S.langChipTextActive]}>
-                  தமிழ்
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={S.langClose}
-              onPress={() => setVoiceLangOpen(false)}
-            >
-              <Text style={S.langCloseText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+
 
       <Modal
         visible={filterOpen}
@@ -1815,7 +1744,7 @@ export default function HomeScreen({ navigation }) {
           </MotiView>
           <SH
             title="Revenue & Conversion"
-            sub={`Filtered: ${rangeType} • ${rangeLabel}`}
+            sub={`Filtered: ${rangeType} â€¢ ${rangeLabel}`}
             titleSize={sectionTitleSize}
           />
           <MotiView

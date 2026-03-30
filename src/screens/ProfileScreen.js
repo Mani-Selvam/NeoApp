@@ -24,6 +24,7 @@ import { useAuth } from "../contexts/AuthContext";
 import getApiClient from "../services/apiClient";
 import { getImageUrl } from "../services/apiConfig";
 import { getEmailSettings } from "../services/emailService";
+import notificationService from "../services/notificationService";
 import * as userService from "../services/userService";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
@@ -105,6 +106,8 @@ const ProfileScreen = ({ navigation }) => {
     });
     const [isDisablingAccount, setIsDisablingAccount] = useState(false);
     const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+    const [voiceLang, setVoiceLang] = useState("en");
+    const [voiceLangOpen, setVoiceLangOpen] = useState(false);
 
     const openFeatureScreen = useCallback((routeName, featureKey, label) => {
         if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
@@ -125,6 +128,19 @@ const ProfileScreen = ({ navigation }) => {
             setEditName(user.name || "");
         }
     }, [user]);
+
+    useEffect(() => {
+        let active = true;
+        Promise.resolve(notificationService.getNotificationVoiceLanguage?.())
+            .then((lang) => {
+                if (!active) return;
+                setVoiceLang(lang === "ta" ? "ta" : "en");
+            })
+            .catch(() => {});
+        return () => {
+            active = false;
+        };
+    }, []);
 
     const loadSettingsStatus = useCallback(async () => {
         if (isStaffUser) return;
@@ -523,6 +539,80 @@ const ProfileScreen = ({ navigation }) => {
         </Modal>
     );
 
+    const renderVoiceLangModal = () => (
+        <Modal
+            visible={voiceLangOpen}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setVoiceLangOpen(false)}
+        >
+            <TouchableOpacity
+                activeOpacity={1}
+                style={styles.modalOverlay}
+                onPress={() => setVoiceLangOpen(false)}
+            >
+                <TouchableOpacity
+                    activeOpacity={1}
+                    style={styles.voiceModalContent}
+                    onPress={() => {}}
+                >
+                    <View style={styles.voiceModalHeader}>
+                        <Text style={styles.voiceModalTitle}>Notification Voice</Text>
+                        <TouchableOpacity onPress={() => setVoiceLangOpen(false)}>
+                            <Ionicons name="close" size={22} color={COLORS.textDim} />
+                        </TouchableOpacity>
+                    </View>
+                    <Text style={styles.voiceModalSub}>
+                        Choose Tamil or English for voice reminders.
+                    </Text>
+
+                    <View style={styles.voiceLangRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.voiceLangChip,
+                                voiceLang === "en" && styles.voiceLangChipActive,
+                            ]}
+                            onPress={async () => {
+                                setVoiceLang("en");
+                                await notificationService.setNotificationVoiceLanguage?.("en");
+                                setVoiceLangOpen(false);
+                            }}
+                        >
+                            <Text
+                                style={[
+                                    styles.voiceLangChipText,
+                                    voiceLang === "en" && styles.voiceLangChipTextActive,
+                                ]}
+                            >
+                                English
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.voiceLangChip,
+                                voiceLang === "ta" && styles.voiceLangChipActive,
+                            ]}
+                            onPress={async () => {
+                                setVoiceLang("ta");
+                                await notificationService.setNotificationVoiceLanguage?.("ta");
+                                setVoiceLangOpen(false);
+                            }}
+                        >
+                            <Text
+                                style={[
+                                    styles.voiceLangChipText,
+                                    voiceLang === "ta" && styles.voiceLangChipTextActive,
+                                ]}
+                            >
+                                தமிழ்
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
+            </TouchableOpacity>
+        </Modal>
+    );
+
     return (
         <SafeAreaView style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <View style={styles.header}>
@@ -591,6 +681,31 @@ const ProfileScreen = ({ navigation }) => {
                         <Text style={styles.infoValue}>{profile.mobile}</Text>
                         <TouchableOpacity style={styles.changeBtn} onPress={() => startChangeFlow('mobile')}>
                             <Text style={styles.changeBtnText}>Change</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.label}>Notifications</Text>
+                    <View style={styles.settingsCard}>
+                        <TouchableOpacity
+                            style={styles.settingsRow}
+                            onPress={() => setVoiceLangOpen(true)}
+                        >
+                            <View style={styles.settingsIconWrap}>
+                                <Ionicons name="volume-high-outline" size={18} color={COLORS.primary} />
+                            </View>
+                            <View style={styles.settingsContent}>
+                                <Text style={styles.settingsTitle}>Voice Language</Text>
+                                <Text style={styles.settingsSub}>
+                                    Currently: {voiceLang === "ta" ? "Tamil" : "English"}
+                                </Text>
+                            </View>
+                            <View style={styles.voiceLangPill}>
+                                <Text style={styles.voiceLangPillText}>
+                                    {voiceLang === "ta" ? "TA" : "EN"}
+                                </Text>
+                            </View>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -757,9 +872,10 @@ const ProfileScreen = ({ navigation }) => {
                 </View>
             </ScrollView>
 
-            {renderOtpModal()}
-        </SafeAreaView>
-    );
+	            {renderOtpModal()}
+                {renderVoiceLangModal()}
+	        </SafeAreaView>
+	    );
 };
 
 const SafeAreaView = ({ children, style }) => (
@@ -1002,10 +1118,10 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(15, 23, 42, 0.5)',
         justifyContent: 'flex-end',
     },
-    modalContent: {
-        backgroundColor: '#fff',
-        borderTopLeftRadius: 32,
-        borderTopRightRadius: 32,
+	    modalContent: {
+	        backgroundColor: '#fff',
+	        borderTopLeftRadius: 32,
+	        borderTopRightRadius: 32,
         padding: 24,
         paddingBottom: Platform.OS === 'ios' ? 40 : 24,
     },
@@ -1060,11 +1176,77 @@ const styles = StyleSheet.create({
         opacity: 0.6,
         backgroundColor: COLORS.textMuted,
     },
-    primaryBtnText: {
-        fontSize: 16,
-        color: '#fff',
-        fontWeight: '700',
-    },
-});
+	    primaryBtnText: {
+	        fontSize: 16,
+	        color: '#fff',
+	        fontWeight: '700',
+	    },
+
+        voiceModalContent: {
+            backgroundColor: "#fff",
+            borderTopLeftRadius: 32,
+            borderTopRightRadius: 32,
+            padding: 22,
+            paddingBottom: Platform.OS === "ios" ? 34 : 22,
+        },
+        voiceModalHeader: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 10,
+        },
+        voiceModalTitle: {
+            fontSize: 18,
+            fontWeight: "800",
+            color: COLORS.text,
+        },
+        voiceModalSub: {
+            fontSize: 13,
+            color: COLORS.textDim,
+            lineHeight: 18,
+            marginBottom: 14,
+        },
+        voiceLangRow: {
+            flexDirection: "row",
+            gap: 10,
+        },
+        voiceLangChip: {
+            flex: 1,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            paddingVertical: 12,
+            alignItems: "center",
+            backgroundColor: COLORS.bg,
+        },
+        voiceLangChipActive: {
+            borderColor: COLORS.primary,
+            backgroundColor: "#EEF2FF",
+        },
+        voiceLangChipText: {
+            fontSize: 14,
+            fontWeight: "700",
+            color: COLORS.textDim,
+        },
+        voiceLangChipTextActive: {
+            color: COLORS.primary,
+        },
+        voiceLangPill: {
+            minWidth: 44,
+            height: 28,
+            paddingHorizontal: 10,
+            borderRadius: 999,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "#EEF2FF",
+            borderWidth: 1,
+            borderColor: "#DDE3FF",
+        },
+        voiceLangPillText: {
+            fontSize: 12,
+            fontWeight: "900",
+            color: COLORS.primary,
+        },
+	});
 
 export default ProfileScreen;

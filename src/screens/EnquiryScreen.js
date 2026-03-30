@@ -45,6 +45,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { API_URL as GLOBAL_API_URL } from "../services/apiConfig";
 import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
+import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
 import {
     confirmPermissionRequest,
@@ -1246,23 +1247,46 @@ export default function EnquiryListScreen({ navigation, route }) {
         [navigation],
     );
 
-    const handleDelete = useCallback(async (enquiry) => {
-        const id = enquiry?._id;
-        if (!id) return;
-        try {
-            setDeletingEnquiryId(id);
-            await enquiryService.deleteEnquiry(id);
-            try {
-                await notificationService.cancelNotificationsForEnquiry?.({
-                    enqId: id,
-                    enqNo: enquiry?.enqNo,
-                });
-            } catch (e) {}
-            setEnquiries((p) => p.filter((e) => e._id !== id));
-            setDeleteEnquiryId((current) => (current === id ? null : current));
-        } catch (e) {
-            Alert.alert("Failed", getUserFacingError(e, "Failed to delete."));
-        } finally {
+	    const handleDelete = useCallback(async (enquiry) => {
+	        const id = enquiry?._id;
+	        if (!id) return;
+	        try {
+	            setDeletingEnquiryId(id);
+	            // Grab follow-up ids before deletion, so we can cancel any queued notifications even if enqId/enqNo is missing in old schedules.
+	            const followUpIds = await (async () => {
+	                try {
+	                    const key = enquiry?.enqNo || id;
+	                    const hist = await followupService.getFollowUpHistory(key);
+	                    const list = Array.isArray(hist?.data) ? hist.data : Array.isArray(hist) ? hist : [];
+	                    return list.map((x) => x?._id).filter(Boolean);
+	                } catch {
+	                    return [];
+	                }
+	            })();
+	            await enquiryService.deleteEnquiry(id);
+	            try {
+	                await notificationService.cancelNotificationsForEnquiry?.({
+	                    enqId: id,
+	                    enqNo: enquiry?.enqNo,
+	                });
+	                await notificationService.cancelNotificationsForFollowUpIds?.(followUpIds);
+	                await notificationService.cancelNextFollowUpPromptForEnquiry?.({
+	                    enqId: id,
+	                    enqNo: enquiry?.enqNo,
+	                });
+	            } catch (e) {}
+
+	            // Trigger a follow-up resync so hourly/time reminders reflect the deletion immediately.
+	            try {
+	                DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+	                    item: { status: "deleted", enqId: id, enqNo: enquiry?.enqNo },
+	                });
+	            } catch {}
+	            setEnquiries((p) => p.filter((e) => e._id !== id));
+	            setDeleteEnquiryId((current) => (current === id ? null : current));
+	        } catch (e) {
+	            Alert.alert("Failed", getUserFacingError(e, "Failed to delete."));
+	        } finally {
             setDeletingEnquiryId((current) =>
                 current === id ? null : current,
             );
