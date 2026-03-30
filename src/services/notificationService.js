@@ -1,10 +1,16 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import { Audio } from "expo-av";
 import * as Notifications from "expo-notifications";
 import * as Speech from "expo-speech";
 import { Platform } from "react-native";
 import { confirmPermissionRequest } from "../utils/appFeedback";
 import * as followupService from "./followupService";
+import {
+    getFollowUpDueTexts,
+    getFollowUpMissedTexts,
+    getFollowUpSoonTexts,
+} from "../constants/notificationPhrases";
 
 const HOURLY_FOLLOWUP_ACK_DATE_KEY = "hourlyFollowupAckDate";
 const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule"; // JSON: { dateKey, ids: [] }
@@ -12,6 +18,7 @@ const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule"; // JSON: { dateKey, i
 const MISSED_FOLLOWUP_ALERT_STATE_KEY = "missedFollowupAlertState"; // JSON: { dateKey, count }
 const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
 const NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY = "nextFollowupPromptSchedule"; // JSON: { idsByKey: { [enqKey]: id } }
+const NOTIFICATION_VOICE_LANG_KEY = "notificationVoiceLang"; // "en" | "ta"
 const DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES = 60;
 const DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES = 5;
 const DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES = 60;
@@ -28,6 +35,12 @@ const DAILY_TRIGGER_TYPE = TRIGGER_TYPES.DAILY || "daily";
 const CHANNEL_IDS = {
     default: "default_v4",
     followups: "followups_v4",
+    followups_soon_en: "followups_soon_en_v1",
+    followups_due_en: "followups_due_en_v1",
+    followups_missed_en: "followups_missed_en_v1",
+    followups_soon_ta: "followups_soon_ta_v1",
+    followups_due_ta: "followups_due_ta_v1",
+    followups_missed_ta: "followups_missed_ta_v1",
     enquiries: "enquiries_v4",
     coupons: "coupons_v4",
     team_chat: "team_chat_v1",
@@ -42,6 +55,42 @@ const NOTIFICATION_CHANNELS = {
         name: "Follow-ups",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
+    },
+    followups_soon_en: {
+        name: "Follow-ups (Soon) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "followup_soon_en.mp3",
+    },
+    followups_due_en: {
+        name: "Follow-ups (Due) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "followup_due_en.mp3",
+    },
+    followups_missed_en: {
+        name: "Follow-ups (Missed) EN",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "followup_missed_en.mp3",
+    },
+    followups_soon_ta: {
+        name: "Follow-ups (Soon) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "followup_soon_ta.mp3",
+    },
+    followups_due_ta: {
+        name: "Follow-ups (Due) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "followup_due_ta.mp3",
+    },
+    followups_missed_ta: {
+        name: "Follow-ups (Missed) TA",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "followup_missed_ta.mp3",
     },
     enquiries: {
         name: "Enquiries",
@@ -73,20 +122,225 @@ const isNotificationSupported = () => {
     return true;
 };
 
+let cachedVoiceLang = null;
+export const getNotificationVoiceLanguage = async () => {
+    if (cachedVoiceLang) return cachedVoiceLang;
+    try {
+        const raw = await AsyncStorage.getItem(NOTIFICATION_VOICE_LANG_KEY);
+        const value = String(raw || "").trim().toLowerCase();
+        cachedVoiceLang = value === "ta" ? "ta" : "en";
+    } catch {
+        cachedVoiceLang = "en";
+    }
+    return cachedVoiceLang;
+};
+
+export const setNotificationVoiceLanguage = async (lang) => {
+    const value = String(lang || "").trim().toLowerCase() === "ta" ? "ta" : "en";
+    cachedVoiceLang = value;
+    try {
+        await AsyncStorage.setItem(NOTIFICATION_VOICE_LANG_KEY, value);
+    } catch {
+        // ignore
+    }
+    return value;
+};
+
 const safeSpeak = async (text) => {
     try {
         if (!text || Platform.OS === "web") return;
+        const lang = await getNotificationVoiceLanguage();
         const isSpeaking = await Speech.isSpeakingAsync();
         if (isSpeaking) {
             await Speech.stop();
         }
         Speech.speak(String(text), {
-            language: "en-IN",
+            language: lang === "ta" ? "ta-IN" : "en-IN",
             rate: 0.95,
             pitch: 1.0,
         });
     } catch (_error) {
         // ignore voice issues
+    }
+	};
+
+let activeFollowupSound = null;
+let audioModeReady = false;
+
+const ensureAudioMode = async () => {
+    if (audioModeReady) return;
+    audioModeReady = true;
+    try {
+        await Audio.setAudioModeAsync({
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+        });
+    } catch {
+        // ignore audio mode issues
+    }
+};
+
+const stopActiveFollowupSound = async () => {
+    const sound = activeFollowupSound;
+    activeFollowupSound = null;
+    if (!sound) return;
+    try {
+        await sound.stopAsync();
+    } catch { }
+    try {
+        await sound.unloadAsync();
+    } catch { }
+};
+
+const normalizeActivityKeyForAudio = (activityType) => {
+    const raw = String(activityType || "").trim().toLowerCase();
+    if (raw === "phone call" || raw === "call" || raw === "phone") return "phone";
+    if (raw === "whatsapp" || raw === "wa") return "whatsapp";
+    if (raw === "email" || raw === "mail") return "email";
+    if (raw === "meeting" || raw === "online meeting") return "meeting";
+    return "followup";
+};
+
+const AUDIO_MODULES = {
+    en: {
+        phone: {
+            5: require("../assets/Audio/Phone/English/5Pmin.mp3"),
+            4: require("../assets/Audio/Phone/English/4Pmin.mp3"),
+            3: require("../assets/Audio/Phone/English/3Pmin.mp3"),
+            2: require("../assets/Audio/Phone/English/2Pmin.mp3"),
+            1: require("../assets/Audio/Phone/English/1Pmin.mp3"),
+            due: require("../assets/Audio/Phone/English/Pdue.mp3"),
+            missed: require("../assets/Audio/Phone/English/PMissed.mp3"),
+        },
+        whatsapp: {
+            5: require("../assets/Audio/Whatsapp/English/W5min.mp3"),
+            4: require("../assets/Audio/Whatsapp/English/W4min.mp3"),
+            3: require("../assets/Audio/Whatsapp/English/W3min.mp3"),
+            2: require("../assets/Audio/Whatsapp/English/W2min.mp3"),
+            1: require("../assets/Audio/Whatsapp/English/W1min.mp3"),
+            due: require("../assets/Audio/Whatsapp/English/Wdue.mp3"),
+            missed: require("../assets/Audio/Whatsapp/English/WMissed.mp3"),
+        },
+        email: {
+            5: require("../assets/Audio/Email/English/E5min.mp3"),
+            4: require("../assets/Audio/Email/English/E4min.mp3"),
+            3: require("../assets/Audio/Email/English/E3min.mp3"),
+            2: require("../assets/Audio/Email/English/E2min.mp3"),
+            1: require("../assets/Audio/Email/English/E1min.mp3"),
+            due: require("../assets/Audio/Email/English/Edue.mp3"),
+            missed: require("../assets/Audio/Email/English/EMissed.mp3"),
+        },
+        meeting: {
+            5: require("../assets/Audio/Meeting/English/M5min.mp3"),
+            4: require("../assets/Audio/Meeting/English/M4min.mp3"),
+            3: require("../assets/Audio/Meeting/English/M3min.mp3"),
+            2: require("../assets/Audio/Meeting/English/M2min.mp3"),
+            1: require("../assets/Audio/Meeting/English/M1min.mp3"),
+            due: require("../assets/Audio/Meeting/English/Mdue.mp3"),
+            missed: require("../assets/Audio/Meeting/English/Emissed.mp3"),
+        },
+    },
+    ta: {
+        phone: {
+            5: require("../assets/Audio/Phone/Tamil/T5min.mp3"),
+            4: require("../assets/Audio/Phone/Tamil/T4min.mp3"),
+            3: require("../assets/Audio/Phone/Tamil/T3min.mp3"),
+            2: require("../assets/Audio/Phone/Tamil/T2min.mp3"),
+            1: require("../assets/Audio/Phone/Tamil/T1min.mp3"),
+            due: require("../assets/Audio/Phone/Tamil/TDue.mp3"),
+            missed: require("../assets/Audio/Phone/Tamil/TMissed.mp3"),
+        },
+        whatsapp: {
+            5: require("../assets/Audio/Whatsapp/Tamil/WT5min.mp3"),
+            4: require("../assets/Audio/Whatsapp/Tamil/WT4min.mp3"),
+            3: require("../assets/Audio/Whatsapp/Tamil/WT3min.mp3"),
+            2: require("../assets/Audio/Whatsapp/Tamil/WT2min.mp3"),
+            1: require("../assets/Audio/Whatsapp/Tamil/WT1min.mp3"),
+            due: require("../assets/Audio/Whatsapp/Tamil/WTdue.mp3"),
+            missed: require("../assets/Audio/Whatsapp/Tamil/WTMissed.mp3"),
+        },
+        email: {
+            5: require("../assets/Audio/Email/Tamil/ET5min.mp3"),
+            4: require("../assets/Audio/Email/Tamil/ET4min.mp3"),
+            3: require("../assets/Audio/Email/Tamil/ET3min.mp3"),
+            2: require("../assets/Audio/Email/Tamil/ET2min.mp3"),
+            1: require("../assets/Audio/Email/Tamil/ET1min.mp3"),
+            due: require("../assets/Audio/Email/Tamil/ETdue.mp3"),
+            missed: require("../assets/Audio/Email/Tamil/ETMissed.mp3"),
+        },
+        meeting: {
+            5: require("../assets/Audio/Meeting/Tamil/MT5min.mp3"),
+            4: require("../assets/Audio/Meeting/Tamil/MT4min.mp3"),
+            3: require("../assets/Audio/Meeting/Tamil/MT3min.mp3"),
+            2: require("../assets/Audio/Meeting/Tamil/MT2min.mp3"),
+            1: require("../assets/Audio/Meeting/Tamil/MT1min.mp3"),
+            due: require("../assets/Audio/Meeting/Tamil/MTDue.mp3"),
+            missed: require("../assets/Audio/Meeting/Tamil/MTMissed.mp3"),
+        },
+    },
+};
+
+const playAudioModule = async (moduleRef) => {
+    try {
+        if (!moduleRef || Platform.OS === "web") return false;
+        await ensureAudioMode();
+        await stopActiveFollowupSound();
+        const { sound } = await Audio.Sound.createAsync(moduleRef, { shouldPlay: true });
+        activeFollowupSound = sound;
+        sound.setOnPlaybackStatusUpdate((status) => {
+            if (!status || !status.isLoaded) return;
+            if (status.didJustFinish) {
+                sound.unloadAsync().catch(() => { });
+                if (activeFollowupSound === sound) activeFollowupSound = null;
+            }
+        });
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+export const playAudioForNotificationData = async (data = {}) => {
+    try {
+        const type = String(data?.type || "").trim();
+        if (!type) return false;
+        if (Platform.OS === "web") return false;
+
+        if (
+            type !== "followup-soon" &&
+            type !== "followup-due" &&
+            type !== "followup-missed"
+        ) {
+            return false;
+        }
+
+        const lang = await getNotificationVoiceLanguage();
+        const activityKey = normalizeActivityKeyForAudio(data?.activityType);
+        const pack = AUDIO_MODULES[lang] || AUDIO_MODULES.en;
+        const entry = pack?.[activityKey] || null;
+        if (!entry) return false;
+
+        if (type === "followup-soon") {
+            const minutesLeft = Math.max(1, Math.round(Number(data?.minutesLeft || 0)));
+            if (minutesLeft >= 1 && minutesLeft <= 5 && entry[minutesLeft]) {
+                return await playAudioModule(entry[minutesLeft]);
+            }
+            return false;
+        }
+
+        if (type === "followup-due") {
+            return await playAudioModule(entry.due);
+        }
+
+        if (type === "followup-missed") {
+            return await playAudioModule(entry.missed);
+        }
+
+        return false;
+    } catch {
+        return false;
     }
 };
 
@@ -101,6 +355,7 @@ const scheduleDateNotification = async ({
     data = {},
     channelId = "followups",
     color = "#0EA5E9",
+    sound = "default",
     sticky = false,
     priority = "high",
     vibrate = [0, 250, 250, 250],
@@ -114,7 +369,7 @@ const scheduleDateNotification = async ({
             subtitle,
             data,
             categoryIdentifier,
-            sound: "default",
+            sound,
             vibrate,
             ios: { sound: true },
             android: {
@@ -274,6 +529,29 @@ export const initializeNotifications = async () => {
                 enableVibrate: true,
                 enableLights: true,
             });
+
+            // Follow-up voice channels (custom sounds). NOTE: Android channels cannot change sound after creation.
+            for (const key of [
+                "followups_soon_en",
+                "followups_due_en",
+                "followups_missed_en",
+                "followups_soon_ta",
+                "followups_due_ta",
+                "followups_missed_ta",
+            ]) {
+                const meta = NOTIFICATION_CHANNELS[key];
+                const id = CHANNEL_IDS[key];
+                if (!meta || !id) continue;
+                await Notifications.setNotificationChannelAsync(id, {
+                    name: meta.name,
+                    importance: Notifications.AndroidImportance.HIGH,
+                    vibrationPattern: meta.vibrationPattern,
+                    lightColor: meta.lightColor,
+                    sound: meta.sound || "default",
+                    enableVibrate: true,
+                    enableLights: true,
+                });
+            }
 
             // Channel for enquiries
             await Notifications.setNotificationChannelAsync(CHANNEL_IDS.enquiries, {
@@ -859,6 +1137,11 @@ export const setupForegroundNotificationListener = (callback) => {
 export const speakForNotificationData = async (data = {}) => {
     const type = String(data?.type || "").trim();
     if (!type) return;
+    const lang = await getNotificationVoiceLanguage();
+
+    // Prefer pre-recorded MP3 reminders (when app is foreground) over TTS.
+    const audioPlayed = await playAudioForNotificationData(data);
+    if (audioPlayed) return;
 
     if (
         type === "hourly-followup-reminder" ||
@@ -874,37 +1157,93 @@ export const speakForNotificationData = async (data = {}) => {
             if (minutesLeft > 0) {
                 const t = String(activityType || "").trim().toLowerCase();
                 if (t === "phone call") {
-                    const line = name
-                        ? `Your customer is waiting. Call ${name} in ${minutesLeft} minutes.`
-                        : `Your customer is waiting. Call in ${minutesLeft} minutes.`;
-                    await safeSpeak(line);
+                    if (lang === "ta") {
+                        const line = minutesLeft === 1
+                            ? "வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் 1 நிமிடத்தில் அழைக்கவும்."
+                            : `வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் ${minutesLeft} நிமிடங்களில் அழைக்கவும்.`;
+                        await safeSpeak(line);
+                    } else {
+                        const line = name
+                            ? `Your customer is waiting. Call ${name} in ${minutesLeft} minutes.`
+                            : `Your customer is waiting. Call in ${minutesLeft} minutes.`;
+                        await safeSpeak(line);
+                    }
                 } else {
-                    const line = name
-                        ? `${activityType} for ${name} in ${minutesLeft} minutes.`
-                        : `${activityType} in ${minutesLeft} minutes.`;
-                    await safeSpeak(line);
+                    if (lang === "ta") {
+                        const minsLabel = minutesLeft === 1 ? "1 நிமிடத்தில்" : `${minutesLeft} நிமிடங்களில்`;
+                        if (t === "whatsapp") {
+                            await safeSpeak(`வாட்ஸ்அப் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
+                        } else if (t === "email") {
+                            await safeSpeak(`மின்னஞ்சல் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
+                        } else if (t === "meeting") {
+                            await safeSpeak(`ஆன்லைன் சந்திப்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
+                        } else {
+                            await safeSpeak(`பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
+                        }
+                    } else {
+                        const line = name
+                            ? `${activityType} for ${name} in ${minutesLeft} minutes.`
+                            : `${activityType} in ${minutesLeft} minutes.`;
+                        await safeSpeak(line);
+                    }
                 }
             }
             return;
         }
         if (type === "followup-missed") {
-            const line = name ? `${name}, ${activityType} missed.` : `${activityType} missed.`;
-            await safeSpeak(`${line} Please follow up now.`);
+            const t = String(activityType || "").trim().toLowerCase();
+            if (lang === "ta") {
+                if (t === "phone call") {
+                    await safeSpeak("நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.");
+                } else if (t === "whatsapp") {
+                    await safeSpeak("நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது வாட்ஸ்அப் செய்தி அனுப்பவும்.");
+                } else if (t === "email") {
+                    await safeSpeak("நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்.");
+                } else if (t === "meeting") {
+                    await safeSpeak("நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக.");
+                } else {
+                    await safeSpeak("நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்.");
+                }
+            } else {
+                const line = name ? `${name}, ${activityType} missed.` : `${activityType} missed.`;
+                await safeSpeak(`${line} Please follow up now.`);
+            }
             return;
         }
         if (type === "followup-due") {
-            const line = name ? `${name}, ${activityType} due now.` : `${activityType} due now.`;
-            await safeSpeak(line);
+            const t = String(activityType || "").trim().toLowerCase();
+            if (lang === "ta") {
+                if (t === "phone call") {
+                    await safeSpeak("வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.");
+                } else if (t === "whatsapp") {
+                    await safeSpeak("இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம். தயவு செய்து வாட்ஸ்அப் செய்தி அனுப்பவும்.");
+                } else if (t === "email") {
+                    await safeSpeak("இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம். தயவு செய்து மின்னஞ்சல் அனுப்பவும்.");
+                } else if (t === "meeting") {
+                    await safeSpeak("இப்போது ஆன்லைன் சந்திப்பு நேரம். தயவு செய்து இணைக.");
+                } else {
+                    await safeSpeak("இப்போது பின்தொடர்பு நேரம். தயவு செய்து தொடரவும்.");
+                }
+            } else {
+                const line = name ? `${name}, ${activityType} due now.` : `${activityType} due now.`;
+                await safeSpeak(line);
+            }
             return;
         }
         if (type === "hourly-followup-reminder") {
             const count = Number(data?.followUpCount || 0);
-            if (count > 0) await safeSpeak(`You have ${count} follow ups due today.`);
+            if (count > 0) {
+                if (lang === "ta") await safeSpeak(`இன்று உங்களுக்கு ${count} பின்தொடர்புகள் உள்ளன.`);
+                else await safeSpeak(`You have ${count} follow ups due today.`);
+            }
             return;
         }
         if (type === "daily-reminder") {
             const count = Number(data?.followUpCount || 0);
-            if (count > 0) await safeSpeak(`Reminder. You have ${count} follow ups today.`);
+            if (count > 0) {
+                if (lang === "ta") await safeSpeak(`நினைவூட்டு. இன்று உங்களுக்கு ${count} பின்தொடர்புகள் உள்ளன.`);
+                else await safeSpeak(`Reminder. You have ${count} follow ups today.`);
+            }
             return;
         }
     }
@@ -1095,37 +1434,16 @@ const getPrettyFollowUpLine = (activityType, name) => {
     return `Follow up with ${who} now.`;
 };
 
-const buildSoonContent = (item, when, minutesLeft) => {
+const buildSoonContent = (item, when, minutesLeft, lang = "en") => {
     const name = String(item?.name || "Client").trim();
     const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
     const mins = Math.max(1, Math.round(Number(minutesLeft || 0)));
-    const minLabel = mins === 1 ? "1 minute" : `${mins} minutes`;
-    const t = String(activityType || "").trim().toLowerCase();
 
-    const title =
-        t === "phone call"
-            ? `Call in ${minLabel}`
-            : t === "whatsapp"
-              ? `WhatsApp in ${minLabel}`
-              : t === "email"
-                ? `Email in ${minLabel}`
-                : t === "meeting"
-                  ? `Meeting in ${minLabel}`
-                  : `Follow-up in ${minLabel}`;
-
-    const waitingHint =
-        mins <= 3 && t === "phone call"
-            ? "Your customer is waiting. Please be ready."
-            : mins <= 3
-              ? "Your customer is waiting."
-              : "";
-
-    const body = `${name} • ${activityType} in ${minLabel}.${waitingHint ? ` ${waitingHint}` : ""}`;
-
-    const due = buildDueAtContent(item, when);
+    const texts = getFollowUpSoonTexts({ lang, name, activityType, minutesLeft: mins });
+    const due = buildDueAtContent(item, when, lang);
     return {
-        title,
-        body,
+        title: texts.title,
+        body: texts.body,
         data: { ...due.data, type: "followup-soon", minutesLeft: mins, name, activityType },
     };
 };
@@ -1273,28 +1591,15 @@ const parseLocalDateTime = (dateStr, timeStr) => {
     return d;
 };
 
-const buildDueAtContent = (item, when) => {
+const buildDueAtContent = (item, when, lang = "en") => {
     const name = String(item?.name || "Client").trim();
     const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
     const timeLabel = when ? formatHHmm(when) : "";
 
-    const title =
-        activityType.toLowerCase() === "meeting"
-            ? "Meeting reminder"
-            : activityType.toLowerCase() === "email"
-              ? "Email follow-up"
-              : activityType.toLowerCase() === "whatsapp"
-                ? "WhatsApp follow-up"
-                : activityType.toLowerCase() === "phone call"
-                  ? "Call reminder"
-                  : "Follow-up reminder";
-
-    const line = getPrettyFollowUpLine(activityType, name);
-    const body = timeLabel ? `${name} • ${timeLabel}. ${line}` : `${name}. ${line}`;
-
+    const texts = getFollowUpDueTexts({ lang, name, activityType, timeLabel });
     return {
-        title,
-        body,
+        title: texts.title,
+        body: texts.body,
         data: {
             type: "followup-due",
             followUpId: String(item?._id || ""),
@@ -1308,31 +1613,21 @@ const buildDueAtContent = (item, when) => {
     };
 };
 
-const buildMissedContent = (item, when) => {
+const buildMissedContent = (item, when, lang = "en") => {
     const name = String(item?.name || "Client").trim();
     const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
     const timeLabel = when ? formatHHmm(when) : "";
 
-    const title = "You might have missed this";
-    const t = activityType.toLowerCase();
-    const actionText =
-        t === "phone call"
-            ? "Your customer is waiting. Please make the call now."
-            : t === "whatsapp"
-              ? "Please send WhatsApp now."
-            : t === "email"
-                ? "Please send the email now."
-                : t === "meeting"
-                  ? "Please confirm and connect now."
-                  : "Please follow up now.";
-
-    const body = timeLabel
-        ? `${name} • ${activityType} at ${timeLabel}. ${actionText}`
-        : `${name} • ${activityType}. ${actionText}`;
+    const texts = getFollowUpMissedTexts({
+        lang,
+        name,
+        activityType,
+        timeLabel: timeLabel ? `at ${timeLabel}` : "",
+    });
 
     return {
-        title,
-        body,
+        title: texts.title,
+        body: texts.body,
         data: {
             type: "followup-missed",
             followUpId: String(item?._id || ""),
@@ -1473,12 +1768,32 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             // Ensure we schedule the nearest reminders first (avoid hitting caps due to sorting by latest date).
             .sort((a, b) => a.ms - b.ms);
 
-        await cancelTimeFollowUpReminders();
-        if (timeBasedFollowUps.length === 0) {
-            return { scheduled: 0, skipped: true, reason: "none-due" };
-        }
+	        await cancelTimeFollowUpReminders();
+	        if (timeBasedFollowUps.length === 0) {
+	            return { scheduled: 0, skipped: true, reason: "none-due" };
+	        }
 
-        const ids = [];
+	        const lang = await getNotificationVoiceLanguage();
+	        const soundChannels =
+	            lang === "ta"
+	                ? {
+	                      soon: "followups_soon_ta",
+	                      due: "followups_due_ta",
+	                      missed: "followups_missed_ta",
+	                      soonSound: "followup_soon_ta.mp3",
+	                      dueSound: "followup_due_ta.mp3",
+	                      missedSound: "followup_missed_ta.mp3",
+	                  }
+	                : {
+	                      soon: "followups_soon_en",
+	                      due: "followups_due_en",
+	                      missed: "followups_missed_en",
+	                      soonSound: "followup_soon_en.mp3",
+	                      dueSound: "followup_due_en.mp3",
+	                      missedSound: "followup_missed_en.mp3",
+	                  };
+
+	        const ids = [];
         // Allow scheduling "right now" triggers (use a tiny past buffer to avoid missing exact-minute schedules).
         const safeNow = new Date(now.getTime() - 1000);
 
@@ -1506,15 +1821,16 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                             1,
                             Math.round((when.getTime() - t.getTime()) / (60 * 1000)),
                         );
-                        const soon = buildSoonContent(item, when, minutesLeft);
-                        const id = await scheduleDateNotification({
-                            when: t,
-                            title: soon.title,
-                            body: soon.body,
-                            data: soon.data,
-                            channelId,
-                            color: "#0EA5E9",
-                        });
+	                        const soon = buildSoonContent(item, when, minutesLeft, lang);
+	                        const id = await scheduleDateNotification({
+	                            when: t,
+	                            title: soon.title,
+	                            body: soon.body,
+	                            data: soon.data,
+	                            channelId: soundChannels.soon,
+	                            sound: soundChannels.soonSound,
+	                            color: "#0EA5E9",
+	                        });
                         ids.push(id);
                         scheduledAtMs.add(t.getTime());
                     }
@@ -1526,29 +1842,31 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     const t = new Date(when.getTime() - minutesLeft * 60 * 1000);
                     if (t.getTime() <= safeNow.getTime() || t.getTime() >= when.getTime()) continue;
                     if (scheduledAtMs.has(t.getTime())) continue;
-                    const soon = buildSoonContent(item, when, minutesLeft);
-                    const id = await scheduleDateNotification({
-                        when: t,
-                        title: soon.title,
-                        body: soon.body,
-                        data: soon.data,
-                        channelId,
-                        color: "#0EA5E9",
-                    });
+	                    const soon = buildSoonContent(item, when, minutesLeft, lang);
+	                    const id = await scheduleDateNotification({
+	                        when: t,
+	                        title: soon.title,
+	                        body: soon.body,
+	                        data: soon.data,
+	                        channelId: soundChannels.soon,
+	                        sound: soundChannels.soonSound,
+	                        color: "#0EA5E9",
+	                    });
                     ids.push(id);
                     scheduledAtMs.add(t.getTime());
                 }
 
                 // Due notification at exact time.
-                const due = buildDueAtContent(item, when);
-                const dueId = await scheduleDateNotification({
-                    when,
-                    title: due.title,
-                    body: due.body,
-                    data: due.data,
-                    channelId,
-                    color: "#0EA5E9",
-                });
+	                const due = buildDueAtContent(item, when, lang);
+	                const dueId = await scheduleDateNotification({
+	                    when,
+	                    title: due.title,
+	                    body: due.body,
+	                    data: due.data,
+	                    channelId: soundChannels.due,
+	                    sound: soundChannels.dueSound,
+	                    color: "#0EA5E9",
+	                });
                 ids.push(dueId);
 
                 // Optional active reminder mode (disabled by default).
@@ -1577,7 +1895,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             }
 
             // Missed reminders: every 5 minutes for 1 hour after due, then every 1 hour.
-            const missed = buildMissedContent(item, when);
+	            const missed = buildMissedContent(item, when, lang);
             const missedFastMs = Math.max(0, Number(missedFastMinutes || 0)) * 60 * 1000;
             const missedFastEveryMs = Math.max(1, Number(missedFastEveryMinutes || 5)) * 60 * 1000;
             const missedHourlyEveryMs = Math.max(1, Number(missedHourlyEveryMinutes || 60)) * 60 * 1000;
@@ -1589,14 +1907,15 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                 const t = new Date(when.getTime() + mins * 60 * 1000);
                 if (t.getTime() <= safeNow.getTime()) continue;
                 if (scheduledAtMs.has(t.getTime())) continue;
-                const id = await scheduleDateNotification({
-                    when: t,
-                    title: missed.title,
-                    body: missed.body,
-                    data: missed.data,
-                    channelId,
-                    color: "#FF3B5C",
-                });
+	                const id = await scheduleDateNotification({
+	                    when: t,
+	                    title: missed.title,
+	                    body: missed.body,
+	                    data: missed.data,
+	                    channelId: soundChannels.missed,
+	                    sound: soundChannels.missedSound,
+	                    color: "#FF3B5C",
+	                });
                 ids.push(id);
                 scheduledAtMs.add(t.getTime());
             }
@@ -1608,14 +1927,15 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             ) {
                 if (t.getTime() <= safeNow.getTime()) continue;
                 if (scheduledAtMs.has(t.getTime())) continue;
-                const id = await scheduleDateNotification({
-                    when: t,
-                    title: missed.title,
-                    body: missed.body,
-                    data: missed.data,
-                    channelId,
-                    color: "#FF9500",
-                });
+	                const id = await scheduleDateNotification({
+	                    when: t,
+	                    title: missed.title,
+	                    body: missed.body,
+	                    data: missed.data,
+	                    channelId: soundChannels.missed,
+	                    sound: soundChannels.missedSound,
+	                    color: "#FF9500",
+	                });
                 ids.push(id);
                 scheduledAtMs.add(t.getTime());
             }
@@ -2028,10 +2348,11 @@ export default {
     cancelAllNotifications,
     cancelNotification,
     getDevicePushToken,
-    setupNotificationListener,
-    setupForegroundNotificationListener,
-    speakForNotificationData,
-    checkAndNotifyTodayFollowUps,
+	    setupNotificationListener,
+	    setupForegroundNotificationListener,
+	    playAudioForNotificationData,
+	    speakForNotificationData,
+	    checkAndNotifyTodayFollowUps,
     cancelFollowUpNotifications,
     scheduleHourlyFollowUpRemindersForToday,
     cancelHourlyFollowUpReminders,
@@ -2044,5 +2365,7 @@ export default {
     cancelNotificationsForEnquiry,
     cancelNextFollowUpPromptForEnquiry,
     scheduleNextFollowUpPromptForEnquiry,
+    getNotificationVoiceLanguage,
+    setNotificationVoiceLanguage,
     resetNotificationLocalState,
 };

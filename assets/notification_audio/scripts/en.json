@@ -1,0 +1,38 @@
+﻿{
+  "phone": {
+    "soon_5": "Your customer is waiting. Call {NAME} in 5 minutes.",
+    "soon_4": "Your customer is waiting. Call {NAME} in 4 minutes.",
+    "soon_3": "Your customer is waiting. Call {NAME} in 3 minutes. Please be ready.",
+    "soon_2": "Your customer is waiting. Call {NAME} in 2 minutes. Please be ready.",
+    "soon_1": "Your customer is waiting. Call {NAME} in 1 minute. Please be ready.",
+    "due": "Your customer is waiting. Please call {NAME} now.",
+    "missed": "You might have missed this call. Your customer is waiting. Please call {NAME} now."
+  },
+  "whatsapp": {
+    "soon_5": "WhatsApp follow-up with {NAME} in 5 minutes. Please be ready.",
+    "soon_4": "WhatsApp follow-up with {NAME} in 4 minutes. Please be ready.",
+    "soon_3": "WhatsApp follow-up with {NAME} in 3 minutes. Please be ready.",
+    "soon_2": "WhatsApp follow-up with {NAME} in 2 minutes. Please be ready.",
+    "soon_1": "WhatsApp follow-up with {NAME} in 1 minute. Please be ready.",
+    "due": "WhatsApp follow-up due now. Please send the message.",
+    "missed": "You might have missed this WhatsApp follow-up. Please send the message now."
+  },
+  "email": {
+    "soon_5": "Email follow-up with {NAME} in 5 minutes. Please be ready.",
+    "soon_4": "Email follow-up with {NAME} in 4 minutes. Please be ready.",
+    "soon_3": "Email follow-up with {NAME} in 3 minutes. Please be ready.",
+    "soon_2": "Email follow-up with {NAME} in 2 minutes. Please be ready.",
+    "soon_1": "Email follow-up with {NAME} in 1 minute. Please be ready.",
+    "due": "Email follow-up due now. Please send the email.",
+    "missed": "You might have missed this email follow-up. Please send the email now."
+  },
+  "meeting": {
+    "soon_5": "Online meeting with {NAME} in 5 minutes. Please be ready.",
+    "soon_4": "Online meeting with {NAME} in 4 minutes. Please be ready.",
+    "soon_3": "Online meeting with {NAME} in 3 minutes. Please be ready.",
+    "soon_2": "Online meeting with {NAME} in 2 minutes. Please be ready.",
+    "soon_1": "Online meeting with {NAME} in 1 minute. Please be ready.",
+    "due": "Meeting due now. Please connect.",
+    "missed": "You might have missed this meeting. Please confirm and connect now."
+  }
+}

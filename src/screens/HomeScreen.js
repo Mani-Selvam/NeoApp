@@ -49,6 +49,7 @@ import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import { getImageUrl } from "../services/apiConfig";
 import * as dashboardService from "../services/dashboardService";
 import { getBillingCoupons } from "../services/userService";
+import notificationService from "../services/notificationService";
 
 // -----------------------------------------------------------------------------
 // RESPONSIVE BREAKPOINTS
@@ -973,44 +974,60 @@ export default function HomeScreen({ navigation }) {
   const [rangeAnchor, setRangeAnchor] = useState(() => toLocalIsoDate(new Date()));
   const [filterOpen, setFilterOpen] = useState(false);
   const [draftRangeType, setDraftRangeType] = useState("day");
-  const [draftRangeAnchor, setDraftRangeAnchor] = useState(() =>
-    toLocalIsoDate(new Date()),
-  );
-  const [stats, setStats] = useState({
-    totalEnquiry: 0,
-    todayFollowup: 0,
-    missedFollowup: 0,
-    salesMonthly: 0,
-    monthlyRevenue: 0,
-    overallSalesAmount: 0,
-    prevRevenue: 0,
-    revenueChangePct: null,
-    weekSales: [],
-    drops: 0,
-    new: 0,
-    ip: 0,
-    conv: 0,
-  });
-  const [coupons, setCoupons] = useState([]);
-  const [copiedCouponCode, setCopiedCouponCode] = useState("");
-  const [todayTasks, setTodayTasks] = useState([]);
-  const [missedTasks, setMissedTasks] = useState([]);
-  const [showMenu, setShowMenu] = useState(false);
-  const [showLogout, setShowLogout] = useState(false);
-  const [skipAnim, setSkipAnim] = useState(false);
-  const couponCopyResetRef = useRef(null);
+	  const [draftRangeAnchor, setDraftRangeAnchor] = useState(() =>
+	    toLocalIsoDate(new Date()),
+	  );
+	  const [stats, setStats] = useState({
+	    totalEnquiry: 0,
+	    todayFollowup: 0,
+	    missedFollowup: 0,
+	    salesMonthly: 0,
+	    monthlyRevenue: 0,
+	    overallSalesAmount: 0,
+	    prevRevenue: 0,
+	    revenueChangePct: null,
+	    weekSales: [],
+	    drops: 0,
+	    new: 0,
+	    ip: 0,
+	    conv: 0,
+	  });
+	  const [coupons, setCoupons] = useState([]);
+	  const [copiedCouponCode, setCopiedCouponCode] = useState("");
+	  const [todayTasks, setTodayTasks] = useState([]);
+	  const [missedTasks, setMissedTasks] = useState([]);
+	  const [showMenu, setShowMenu] = useState(false);
+	  const [showLogout, setShowLogout] = useState(false);
+	  const [skipAnim, setSkipAnim] = useState(false);
+	  const couponCopyResetRef = useRef(null);
+	  const [voiceLang, setVoiceLang] = useState("en");
+	  const [voiceLangOpen, setVoiceLangOpen] = useState(false);
 
-  useEffect(() => {
-    AsyncStorage.getItem("homeIntroPlayed")
-      .then((val) => {
-        if (val === "1") setSkipAnim(true);
-        else {
-          setSkipAnim(false);
-          AsyncStorage.setItem("homeIntroPlayed", "1").catch(() => {});
-        }
-      })
-      .catch(() => setSkipAnim(false));
-  }, []);
+	  useEffect(() => {
+	    let active = true;
+	    notificationService
+	      .getNotificationVoiceLanguage?.()
+	      .then((lang) => {
+	        if (!active) return;
+	        setVoiceLang(lang === "ta" ? "ta" : "en");
+	      })
+	      .catch(() => {});
+	    return () => {
+	      active = false;
+	    };
+	  }, []);
+
+	  useEffect(() => {
+	    AsyncStorage.getItem("homeIntroPlayed")
+	      .then((val) => {
+	        if (val === "1") setSkipAnim(true);
+	        else {
+	          setSkipAnim(false);
+	          AsyncStorage.setItem("homeIntroPlayed", "1").catch(() => {});
+	        }
+	      })
+	      .catch(() => setSkipAnim(false));
+	  }, []);
 
   useEffect(() => {
     return () => {
@@ -1219,8 +1236,8 @@ export default function HomeScreen({ navigation }) {
     } catch {}
   };
 
-  const todayActivityCount = Number(stats.todayFollowup || todayTasks.length || 0);
-  const missedActivityCount = Number(stats.missedFollowup || missedTasks.length || 0);
+	  const todayActivityCount = Number(stats.todayFollowup || todayTasks.length || 0);
+	  const missedActivityCount = Number(stats.missedFollowup || missedTasks.length || 0);
 
   const weekSeries = Array.isArray(stats.weekSales) ? stats.weekSales : [];
   const highlightIdx = weekSeries.length
@@ -1340,6 +1357,16 @@ export default function HomeScreen({ navigation }) {
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
+            style={S.notifBtn}
+            activeOpacity={0.85}
+            onPress={() => setVoiceLangOpen(true)}
+          >
+            <Ionicons name="notifications-outline" size={20} color={C.textSub} />
+            <View style={S.notifLangPill}>
+              <Text style={S.notifLangText}>{voiceLang === "ta" ? "TA" : "EN"}</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={S.avatarBtn}
             activeOpacity={0.85}
             onPress={() => navigation.navigate("ProfileScreen")}
@@ -1381,6 +1408,52 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      <Modal
+        visible={voiceLangOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setVoiceLangOpen(false)}
+      >
+        <View style={S.langModalBg}>
+          <View style={S.langModalCard}>
+            <Text style={S.langModalTitle}>Notification Voice</Text>
+            <Text style={S.langModalSub}>Choose Tamil or English for voice reminders.</Text>
+            <View style={S.langRow}>
+              <TouchableOpacity
+                style={[S.langChip, voiceLang === "en" && S.langChipActive]}
+                onPress={async () => {
+                  setVoiceLang("en");
+                  await notificationService.setNotificationVoiceLanguage?.("en");
+                  setVoiceLangOpen(false);
+                }}
+              >
+                <Text style={[S.langChipText, voiceLang === "en" && S.langChipTextActive]}>
+                  English
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[S.langChip, voiceLang === "ta" && S.langChipActive]}
+                onPress={async () => {
+                  setVoiceLang("ta");
+                  await notificationService.setNotificationVoiceLanguage?.("ta");
+                  setVoiceLangOpen(false);
+                }}
+              >
+                <Text style={[S.langChipText, voiceLang === "ta" && S.langChipTextActive]}>
+                  தமிழ்
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={S.langClose}
+              onPress={() => setVoiceLangOpen(false)}
+            >
+              <Text style={S.langCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={filterOpen}
@@ -2332,6 +2405,29 @@ const S = StyleSheet.create({
     borderColor: C.border,
     marginRight: 10,
   },
+  notifBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: C.bg,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    marginRight: 10,
+  },
+  notifLangPill: {
+    position: "absolute",
+    right: 5,
+    bottom: 5,
+    paddingHorizontal: 5,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: C.blue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  notifLangText: { fontSize: 9, fontWeight: "900", color: "#fff" },
   filterBtnText: {
     fontSize: 11,
     color: C.textSub,
@@ -2356,6 +2452,49 @@ const S = StyleSheet.create({
     borderWidth: 2,
     borderColor: "rgba(255,255,255,0.9)",
   },
+  langModalBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  langModalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: C.surface,
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  langModalTitle: { fontSize: 16, fontWeight: "900", color: C.ink },
+  langModalSub: { marginTop: 6, fontSize: 12, color: C.textDim, fontWeight: "600" },
+  langRow: { flexDirection: "row", gap: 10, marginTop: 14 },
+  langChip: {
+    flex: 1,
+    height: 44,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  langChipActive: { backgroundColor: C.blue, borderColor: C.blue },
+  langChipText: { fontSize: 13, fontWeight: "900", color: C.textSub },
+  langChipTextActive: { color: "#fff" },
+  langClose: {
+    marginTop: 14,
+    height: 44,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  langCloseText: { fontSize: 13, fontWeight: "900", color: C.textSub },
   filterOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
