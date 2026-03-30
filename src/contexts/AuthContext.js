@@ -551,7 +551,8 @@ export const AuthProvider = ({ children }) => {
             // ignore if native modules are not present
         }
         try {
-            await notificationService.cancelTodayFollowUpReminders?.();
+            await notificationService.cancelAllNotifications?.();
+            await notificationService.resetNotificationLocalState?.();
         } catch (e) {
             // ignore notification cancellation issues
         }

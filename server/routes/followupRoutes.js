@@ -19,12 +19,15 @@ const parseTimeToMinutes = (value) => {
   const raw = String(value || "").trim();
   if (!raw) return null;
 
-  const match = raw.match(/^(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?$/);
+  // Supports: "HH:MM", "H:MM", "HH.MM", "HH:MM:SS", and optional AM/PM (with or without space)
+  const match = raw.match(
+    /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
+  );
   if (!match) return null;
 
   let hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const meridian = String(match[3] || "").toUpperCase();
+  const minutes = Number(match[2] ?? "0");
+  const meridian = String(match[4] || "").toUpperCase();
 
   if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) {
     return null;
@@ -52,6 +55,11 @@ const isMissedForReference = (item, referenceDate) => {
 
   const todayIso = toLocalIsoDate(new Date());
   if (referenceDate !== todayIso) return false;
+
+  const dueAt = item?.dueAt ? new Date(item.dueAt) : null;
+  if (dueAt && !Number.isNaN(dueAt.getTime())) {
+    return dueAt.getTime() < Date.now();
+  }
 
   const dueMinutes = parseTimeToMinutes(item?.time);
   if (dueMinutes == null) return false;
@@ -159,6 +167,11 @@ router.get("/", verifyToken, async (req, res) => {
       page = 1,
       limit = 20,
     } = req.query;
+    const cacheReferenceDate = date || toLocalIsoDate(new Date());
+    const cacheRealToday = toLocalIsoDate(new Date());
+    const cacheIsRealToday = cacheReferenceDate === cacheRealToday;
+    const realtimeTtlMs =
+      cacheIsRealToday && (tab === "Today" || tab === "Missed") ? 10000 : 60000;
     const cacheKey = cache.key("followups", {
       userId: req.userId,
       role: req.user.role,
@@ -177,6 +190,9 @@ router.get("/", verifyToken, async (req, res) => {
       const isStaff = String(req.user?.role || "").trim().toLowerCase() === "staff";
       // Use the selected date as the reference day when provided.
       const referenceDate = date || toLocalIsoDate(new Date());
+      const realToday = toLocalIsoDate(new Date());
+      const isRealToday = referenceDate === realToday;
+      const now = new Date();
       const scope = await getFollowUpAccessScope(req);
       let query = buildFollowUpScopedFilter(scope);
 
@@ -216,10 +232,36 @@ router.get("/", verifyToken, async (req, res) => {
         },
       ];
 
+      // Real-time status sync: once the follow-up time passes, mark as Missed (today only).
+      if (isRealToday) {
+        try {
+          await FollowUp.updateMany(
+            {
+              ...query,
+              date: referenceDate,
+              dueAt: { $lt: now },
+              status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
+            },
+            { $set: { status: "Missed" } },
+          );
+        } catch (_updateError) {}
+      }
+
       if (tab === "Today") {
         Object.assign(query, { date: referenceDate, ...activeFilter });
         query.$and = [
           ...(Array.isArray(query.$and) ? query.$and : []),
+          ...(isRealToday
+            ? [
+                {
+                  $or: [
+                    { dueAt: { $gte: now } },
+                    { dueAt: null },
+                    { dueAt: { $exists: false } },
+                  ],
+                },
+              ]
+            : []),
           {
             $nor: [
               { status: SALES_REGEX },
@@ -239,6 +281,22 @@ router.get("/", verifyToken, async (req, res) => {
         Object.assign(query, { date: { $lte: referenceDate }, ...activeFilter });
         query.$and = [
           ...(Array.isArray(query.$and) ? query.$and : []),
+          ...(isRealToday
+            ? [
+                (() => {
+                  // Real-time missed: past dates OR today with dueAt already passed.
+                  // Only applies when filtering for "today" in the UI.
+                  // Falls back to date-only behavior for legacy rows without dueAt.
+                  delete query.date;
+                  return {
+                    $or: [
+                      { date: { $lt: referenceDate } },
+                      { date: referenceDate, dueAt: { $lt: now } },
+                    ],
+                  };
+                })(),
+              ]
+            : []),
           {
             $nor: [
               { status: SALES_REGEX },
@@ -385,7 +443,7 @@ router.get("/", verifyToken, async (req, res) => {
           pages: hasMore ? pageNum + 1 : pageNum,
         },
       };
-    });
+    }, realtimeTtlMs);
 
     res.json(response);
     console.log(

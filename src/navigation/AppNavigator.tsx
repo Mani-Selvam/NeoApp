@@ -524,6 +524,7 @@ export default function AppNavigator() {
   const [incomingMatch, setIncomingMatch] = useState<any>(null);
   const notificationsInitRef = useRef<boolean>(false);
   const hourlySyncRef = useRef<boolean>(false);
+  const hourlySyncPendingRef = useRef<boolean>(false);
 
   // Initialize Socket & Call Monitor when logged in
   useEffect(() => {
@@ -551,7 +552,10 @@ export default function AppNavigator() {
 
     const syncHourlyFollowUps = async () => {
       if (disposed) return;
-      if (hourlySyncRef.current) return;
+      if (hourlySyncRef.current) {
+        hourlySyncPendingRef.current = true;
+        return;
+      }
       hourlySyncRef.current = true;
       try {
         if (!notificationsInitRef.current) {
@@ -559,31 +563,70 @@ export default function AppNavigator() {
           notificationsInitRef.current = true;
         }
 
-        const res: any = await followupService.getFollowUps("Today", 1, 200);
-        const list = Array.isArray(res?.data)
-          ? res.data
-          : Array.isArray(res)
-            ? res
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const now = new Date();
+        const dateFrom = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10);
+        const dateTo = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10);
+        const [todayRes, missedRes, allRes]: any = await Promise.all([
+          followupService.getFollowUps("Today", 1, 200, todayIso).catch(() => null),
+          followupService.getFollowUps("Missed", 1, 200, todayIso).catch(() => null),
+          followupService
+            .getFollowUps("All", 1, 500, "", { dateFrom, dateTo })
+            .catch(() => null),
+        ]);
+        const todayList = Array.isArray(todayRes?.data)
+          ? todayRes.data
+          : Array.isArray(todayRes)
+            ? todayRes
+            : [];
+        const missedList = Array.isArray(missedRes?.data)
+          ? missedRes.data
+          : Array.isArray(missedRes)
+            ? missedRes
+            : [];
+        const allList = Array.isArray(allRes?.data)
+          ? allRes.data
+          : Array.isArray(allRes)
+            ? allRes
             : [];
 
         await notificationService.scheduleHourlyFollowUpRemindersForToday(
-          list,
+          todayList,
           {
             endHour: 21,
             channelId: "followups",
           },
         );
         await notificationService.scheduleTimeFollowUpRemindersForToday?.(
-          list,
+          allList,
           {
             channelId: "followups",
-            missedAfterMinutes: 20,
+            preRemindMinutes: 60,
+            preRemindEveryMinutes: 5,
+            missedFastMinutes: 60,
+            missedFastEveryMinutes: 5,
+            missedHourlyEveryMinutes: 30,
+            missedHourlyMaxHours: 12,
+            endHour: 21,
+            windowDays: 7,
+            missedLookbackDays: 2,
+            dueRepeatForMinutes: 0,
           },
         );
+
+        await notificationService.notifyMissedFollowUpsSummary?.(missedList);
       } catch (e) {
         console.warn("[Notifications] Hourly follow-up sync failed", e);
       } finally {
         hourlySyncRef.current = false;
+        if (!disposed && hourlySyncPendingRef.current) {
+          hourlySyncPendingRef.current = false;
+          setTimeout(() => syncHourlyFollowUps(), 250);
+        }
       }
     };
 
@@ -592,6 +635,9 @@ export default function AppNavigator() {
     const appStateSub = AppState.addEventListener("change", (state) => {
       if (state === "active") syncHourlyFollowUps();
     });
+    const periodicSync = setInterval(() => {
+      syncHourlyFollowUps();
+    }, 60 * 1000);
 
     const callLogSub = DeviceEventEmitter.addListener(
       "CALL_LOG_CREATED",
@@ -601,11 +647,20 @@ export default function AppNavigator() {
         ).catch(() => {});
       },
     );
+    const followUpChangedSub = DeviceEventEmitter.addListener(
+      "FOLLOWUP_CHANGED",
+      () => {
+        // Reschedule follow-up reminders immediately when new follow-ups are created/updated.
+        syncHourlyFollowUps();
+      },
+    );
 
     return () => {
       disposed = true;
       appStateSub?.remove?.();
+      clearInterval(periodicSync);
       callLogSub?.remove?.();
+      followUpChangedSub?.remove?.();
     };
   }, [isLoggedIn, user]);
 
@@ -615,6 +670,18 @@ export default function AppNavigator() {
       notificationService.setupGlobalNotificationListener(navigationRef);
     return () => {
       subscription && subscription.remove();
+    };
+  }, []);
+
+  // Speak follow-up reminders while app is in foreground.
+  useEffect(() => {
+    const sub = notificationService.setupForegroundNotificationListener?.(
+      (data: any) => {
+        notificationService.speakForNotificationData?.(data);
+      },
+    );
+    return () => {
+      sub?.remove?.();
     };
   }, []);
 

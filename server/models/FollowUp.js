@@ -38,9 +38,10 @@ const followUpSchema = new mongoose.Schema({
     remarks: { type: String, required: true },
     enquiryStatus: { type: String },
     followUpDate: { type: String }, // YYYY-MM-DD
-    nextFollowUpDate: { type: String }, // YYYY-MM-DD
-    activityTime: { type: Date, default: Date.now },
-    staffName: { type: String },
+  nextFollowUpDate: { type: String }, // YYYY-MM-DD
+  dueAt: { type: Date }, // Computed from nextFollowUpDate + time (for real-time missed logic)
+  activityTime: { type: Date, default: Date.now },
+  staffName: { type: String },
     nextAction: {
         type: String,
         enum: ["Followup", "Sales", "Drop"],
@@ -62,13 +63,42 @@ followUpSchema.index({ userId: 1, nextFollowUpDate: 1, status: 1 });
 followUpSchema.index({ assignedTo: 1, nextFollowUpDate: 1, status: 1 });
 
 followUpSchema.pre("validate", function syncLegacyFields() {
-    if (!this.activityType) this.activityType = this.type || "WhatsApp";
-    if (!this.type) this.type = this.activityType || "WhatsApp";
-    if (!this.note && this.remarks) this.note = this.remarks;
-    if (!this.remarks && this.note) this.remarks = this.note;
-    if (!this.followUpDate && this.date) this.followUpDate = this.date;
-    if (!this.nextFollowUpDate && this.date) this.nextFollowUpDate = this.date;
-    if (!this.activityTime) this.activityTime = new Date();
+  if (!this.activityType) this.activityType = this.type || "WhatsApp";
+  if (!this.type) this.type = this.activityType || "WhatsApp";
+  if (!this.note && this.remarks) this.note = this.remarks;
+  if (!this.remarks && this.note) this.remarks = this.note;
+  if (!this.followUpDate && this.date) this.followUpDate = this.date;
+  if (!this.nextFollowUpDate && this.date) this.nextFollowUpDate = this.date;
+  if (!this.activityTime) this.activityTime = new Date();
+
+  const dateStr = this.nextFollowUpDate || this.followUpDate || this.date;
+  const timeStr = this.time;
+  const parseDueAt = (iso, time) => {
+    if (!iso || typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+    if (!time || typeof time !== "string") return null;
+    const t = time.trim();
+    const m = t.match(/^(\d{1,2})(?:[:.](\d{2}))?(?:\s*([AaPp][Mm]))?$/);
+    if (!m) return null;
+    let hh = Number(m[1]);
+    const mm = Number(m[2] ?? "0");
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) return null;
+    const mer = String(m[3] || "").toUpperCase();
+    if (mer) {
+      if (hh < 1 || hh > 12) return null;
+      if (mer === "AM") {
+        if (hh === 12) hh = 0;
+      } else if (mer === "PM") {
+        if (hh !== 12) hh += 12;
+      }
+    }
+    hh = Math.min(23, Math.max(0, hh));
+    const [yy, mo, dd] = iso.split("-").map((n) => Number(n));
+    const dt = new Date(yy, (mo || 1) - 1, dd || 1, hh, mm, 0, 0);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+
+  const dueAt = parseDueAt(dateStr, timeStr);
+  if (dueAt) this.dueAt = dueAt;
 });
 
 module.exports = mongoose.model("FollowUp", followUpSchema);

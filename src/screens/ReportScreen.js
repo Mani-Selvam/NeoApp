@@ -468,7 +468,7 @@ export default function ReportScreen({ navigation }) {
                 .filter(Boolean)
         )).sort((a, b) => a.localeCompare(b));
         if (user?.role === "Staff") {
-            return [user?.name || uniqueStaff[0] || adminName];
+            return [user?.name || "Staff"];
         }
         return [ALL_STAFF, ...uniqueStaff];
     }, [adminName, reportData.callLogs, reportData.enquiries, reportData.followups, user?.name, user?.role]);
@@ -478,7 +478,7 @@ export default function ReportScreen({ navigation }) {
     ], []);
     useEffect(() => {
         if (user?.role === "Staff") {
-            setStaffFilter(user?.name || adminName);
+            if (user?.name) setStaffFilter(user.name);
         }
     }, [adminName, user?.name, user?.role]);
     const applyDateRange = useCallback(() => {
@@ -572,6 +572,18 @@ export default function ReportScreen({ navigation }) {
     },[filteredEnq]);
 
     const staffPerf = useMemo(() => {
+        if (isStaffUser) {
+            const selfName = user?.name || "Staff";
+            return [
+                {
+                    name: selfName,
+                    enquiriesCreated: filteredEnq.length,
+                    followupsDone: filteredFups.length,
+                    salesLeads: filteredEnq.filter((i) => i?.status === "Converted").length,
+                },
+            ];
+        }
+
         const map={};
         const ensure = (name) => {
             const n = normalizeStaffLabel(name, adminName);
@@ -585,9 +597,10 @@ export default function ReportScreen({ navigation }) {
             ensure(creator).enquiriesCreated += 1;
 
             // Sales Leads -> credited to assigned staff when converted, else creator/admin
+            const assigneeName = normalizeStaffLabel(i?.assignedTo?.name || i?.assignedToName || "", creator);
+            ensure(assigneeName); // ensure assignee row exists even if zero actions yet
             if (i?.status === "Converted") {
-                const assignee = normalizeStaffLabel(i?.assignedTo?.name || i?.assignedToName || "", creator);
-                ensure(assignee).salesLeads += 1;
+                ensure(assigneeName).salesLeads += 1;
             }
         });
 

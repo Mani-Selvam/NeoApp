@@ -41,6 +41,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { API_URL as GLOBAL_API_URL } from "../services/apiConfig";
 import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
+import notificationService from "../services/notificationService";
 import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
 import { getImageUrl } from "../utils/imageHelper";
 import {
@@ -722,10 +723,18 @@ export default function EnquiryListScreen({ navigation, route }) {
     navigation.navigate("AddEnquiry", { enquiry });
   }, [navigation]);
 
-  const handleDelete = useCallback(async (id) => {
+  const handleDelete = useCallback(async (enquiry) => {
+    const id = enquiry?._id;
+    if (!id) return;
     try {
       setDeletingEnquiryId(id);
       await enquiryService.deleteEnquiry(id);
+      try {
+        await notificationService.cancelNotificationsForEnquiry?.({
+          enqId: id,
+          enqNo: enquiry?.enqNo,
+        });
+      } catch (e) {}
       setEnquiries((p) => p.filter((e) => e._id !== id));
       setDeleteEnquiryId((current) => (current === id ? null : current));
     } catch (e) {
@@ -747,7 +756,7 @@ export default function EnquiryListScreen({ navigation, route }) {
       deleteMode={deleteEnquiryId === item._id}
       deleting={deletingEnquiryId === item._id}
       onDeleteCancel={() => setDeleteEnquiryId(null)}
-      onDeleteConfirm={(enquiry) => handleDelete(enquiry._id)}
+      onDeleteConfirm={(enquiry) => handleDelete(enquiry)}
     />
   ), [openDetail, handleCall, handleWhatsApp, handleDelete, deleteEnquiryId, deletingEnquiryId]);
 

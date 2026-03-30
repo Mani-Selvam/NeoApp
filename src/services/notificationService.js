@@ -1,23 +1,39 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
+import * as Speech from "expo-speech";
 import { Platform } from "react-native";
 import { confirmPermissionRequest } from "../utils/appFeedback";
+import * as followupService from "./followupService";
 
 const HOURLY_FOLLOWUP_ACK_DATE_KEY = "hourlyFollowupAckDate";
 const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule"; // JSON: { dateKey, ids: [] }
 const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule"; // JSON: { dateKey, ids: [] }
+const MISSED_FOLLOWUP_ALERT_STATE_KEY = "missedFollowupAlertState"; // JSON: { dateKey, count }
 const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
+const DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES = 60;
+const DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES = 5;
+const DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES = 60;
+const DEFAULT_FOLLOWUP_MISSED_FAST_EVERY_MINUTES = 5;
+const DEFAULT_FOLLOWUP_MISSED_HOURLY_EVERY_MINUTES = 30;
+const DEFAULT_FOLLOWUP_MISSED_HOURLY_MAX_HOURS = 12;
+const DEFAULT_FOLLOWUP_DUE_REPEAT_FOR_MINUTES = 0;
+const DEFAULT_FOLLOWUP_SCHEDULE_WINDOW_DAYS = 7;
+const DEFAULT_FOLLOWUP_MISSED_LOOKBACK_DAYS = 2;
+const MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC = 120;
 const TRIGGER_TYPES = Notifications.SchedulableTriggerInputTypes || {};
 const DATE_TRIGGER_TYPE = TRIGGER_TYPES.DATE || "date";
 const DAILY_TRIGGER_TYPE = TRIGGER_TYPES.DAILY || "daily";
 const CHANNEL_IDS = {
-    default: "default_v2",
-    followups: "followups_v2",
-    enquiries: "enquiries_v2",
-    coupons: "coupons_v2",
+    default: "default_v4",
+    followups: "followups_v4",
+    enquiries: "enquiries_v4",
+    coupons: "coupons_v4",
     team_chat: "team_chat_v1",
-    billing: "billing_v2",
+    billing: "billing_v4",
+};
+const CATEGORY_IDS = {
+    followups: "FOLLOWUP_ACTIONS",
 };
 const NOTIFICATION_CHANNELS = {
     followups: {
@@ -55,8 +71,61 @@ const isNotificationSupported = () => {
     return true;
 };
 
+const safeSpeak = async (text) => {
+    try {
+        if (!text || Platform.OS === "web") return;
+        const isSpeaking = await Speech.isSpeakingAsync();
+        if (isSpeaking) {
+            await Speech.stop();
+        }
+        Speech.speak(String(text), {
+            language: "en-IN",
+            rate: 0.95,
+            pitch: 1.0,
+        });
+    } catch (_error) {
+        // ignore voice issues
+    }
+};
+
 const resolveChannelId = (channelId = "default") =>
     CHANNEL_IDS[channelId] || channelId;
+
+const scheduleDateNotification = async ({
+    when,
+    title,
+    body,
+    subtitle = "Tap to open Follow-ups",
+    data = {},
+    channelId = "followups",
+    color = "#0EA5E9",
+    sticky = false,
+    priority = "high",
+    vibrate = [0, 250, 250, 250],
+    categoryIdentifier = CATEGORY_IDS.followups,
+}) => {
+    const resolvedChannelId = resolveChannelId(channelId);
+    return Notifications.scheduleNotificationAsync({
+        content: {
+            title,
+            body,
+            subtitle,
+            data,
+            categoryIdentifier,
+            sound: "default",
+            vibrate,
+            ios: { sound: true },
+            android: {
+                channelId: resolvedChannelId,
+                smallIcon: "icon",
+                color,
+                priority,
+                sticky,
+            },
+        },
+        trigger: buildDateTrigger(when, channelId),
+    });
+};
 
 const buildDateTrigger = (date, channelId = "followups") => {
     const trigger = { type: DATE_TRIGGER_TYPE, date };
@@ -136,6 +205,7 @@ const scheduleImmediateNotification = async ({
 if (isNotificationSupported()) {
     Notifications.setNotificationHandler({
         handleNotification: async () => ({
+            shouldShowAlert: true,
             shouldShowBanner: true,
             shouldShowList: true,
             shouldPlaySound: true,
@@ -243,6 +313,30 @@ export const initializeNotifications = async () => {
                 enableVibrate: true,
                 enableLights: true,
             });
+        }
+
+        // Actions (Complete / Cancel) for follow-up notifications.
+        try {
+            await Notifications.setNotificationCategoryAsync(
+                CATEGORY_IDS.followups,
+                [
+                    {
+                        identifier: "FOLLOWUP_COMPLETE",
+                        buttonTitle: "Complete",
+                        options: { opensAppToForeground: true },
+                    },
+                    {
+                        identifier: "FOLLOWUP_CANCEL",
+                        buttonTitle: "Cancel",
+                        options: { opensAppToForeground: false },
+                    },
+                ],
+                {
+                    previewPlaceholder: "Update follow-up",
+                },
+            );
+        } catch (_categoryError) {
+            // ignore category errors
         }
 
         console.log("Notifications initialized successfully");
@@ -516,7 +610,7 @@ export const showEnquiryErrorNotification = async (errorMessage) => {
                     badge: 1,
                 },
                 android: {
-                    channelId: "enquiries",
+                    channelId: resolveChannelId("enquiries"),
                     smallIcon: "icon",
                     color: "#DC2626",
                     vibrate: [0, 300, 150, 300],
@@ -574,7 +668,7 @@ export const showEnquiryStatusNotification = async (enquiryName, newStatus) => {
                     badge: 1,
                 },
                 android: {
-                    channelId: "enquiries",
+                    channelId: resolveChannelId("enquiries"),
                     smallIcon: "icon",
                     color: "#0EA5E9",
                     vibrate: [0, 200, 200],
@@ -612,7 +706,7 @@ export const scheduleDailyNotification = (hour = 9, minute = 0) => {
                     sound: true,
                 },
                 android: {
-                    channelId: "followups",
+                    channelId: resolveChannelId("followups"),
                     smallIcon: "icon",
                     color: "#0EA5E9",
                 },
@@ -736,6 +830,146 @@ export const setupForegroundNotificationListener = (callback) => {
     return subscription;
 };
 
+export const speakForNotificationData = async (data = {}) => {
+    const type = String(data?.type || "").trim();
+    if (!type) return;
+
+    if (
+        type === "hourly-followup-reminder" ||
+        type === "daily-reminder" ||
+        type === "followup-soon" ||
+        type === "followup-due" ||
+        type === "followup-missed"
+    ) {
+        const name = String(data?.name || "").trim();
+        const activityType = String(data?.activityType || "follow-up").trim();
+        if (type === "followup-soon") {
+            const minutesLeft = Number(data?.minutesLeft || 0);
+            if (minutesLeft > 0) {
+                const t = String(activityType || "").trim().toLowerCase();
+                if (t === "phone call") {
+                    const line = name
+                        ? `Your customer is waiting. Call ${name} in ${minutesLeft} minutes.`
+                        : `Your customer is waiting. Call in ${minutesLeft} minutes.`;
+                    await safeSpeak(line);
+                } else {
+                    const line = name
+                        ? `${activityType} for ${name} in ${minutesLeft} minutes.`
+                        : `${activityType} in ${minutesLeft} minutes.`;
+                    await safeSpeak(line);
+                }
+            }
+            return;
+        }
+        if (type === "followup-missed") {
+            const line = name ? `${name}, ${activityType} missed.` : `${activityType} missed.`;
+            await safeSpeak(`${line} Please follow up now.`);
+            return;
+        }
+        if (type === "followup-due") {
+            const line = name ? `${name}, ${activityType} due now.` : `${activityType} due now.`;
+            await safeSpeak(line);
+            return;
+        }
+        if (type === "hourly-followup-reminder") {
+            const count = Number(data?.followUpCount || 0);
+            if (count > 0) await safeSpeak(`You have ${count} follow ups due today.`);
+            return;
+        }
+        if (type === "daily-reminder") {
+            const count = Number(data?.followUpCount || 0);
+            if (count > 0) await safeSpeak(`Reminder. You have ${count} follow ups today.`);
+            return;
+        }
+    }
+
+    if (type === "followup-missed-summary" || data?.overdueCount) {
+        const count = Number(data?.overdueCount || 0);
+        if (count > 0) await safeSpeak(`You have ${count} missed follow ups.`);
+    }
+
+    if (
+        type === "enquiry-success" ||
+        type === "new-enquiry-alert" ||
+        type === "enquiry-status" ||
+        type === "enquiry-error"
+    ) {
+        const enquiryName = String(data?.enquiryName || "").trim();
+        if (type === "enquiry-success") {
+            await safeSpeak(enquiryName ? `New enquiry added. ${enquiryName}.` : "New enquiry added.");
+            return;
+        }
+        if (type === "new-enquiry-alert") {
+            await safeSpeak(enquiryName ? `New enquiry. ${enquiryName}.` : "New enquiry alert.");
+            return;
+        }
+        if (type === "enquiry-status") {
+            const status = String(data?.status || "").trim();
+            await safeSpeak(
+                enquiryName && status ? `${enquiryName} status updated to ${status}.` : "Enquiry status updated.",
+            );
+            return;
+        }
+        if (type === "enquiry-error") {
+            await safeSpeak("Enquiry creation failed. Please try again.");
+        }
+    }
+};
+
+export const notifyMissedFollowUpsSummary = async (followUps = []) => {
+    try {
+        if (!isNotificationSupported()) return { notified: false, skipped: true };
+
+        const list = Array.isArray(followUps) ? followUps : [];
+        const count = list.filter(isActiveFollowUp).length;
+        if (count <= 0) return { notified: false, skipped: true, reason: "none" };
+
+        const todayKey = getTodayKey();
+        const rawState = await AsyncStorage.getItem(MISSED_FOLLOWUP_ALERT_STATE_KEY);
+        let prev = { dateKey: "", count: 0 };
+        try {
+            prev = rawState ? JSON.parse(rawState) : prev;
+        } catch {}
+
+        if (prev?.dateKey === todayKey && Number(prev?.count || 0) === count) {
+            return { notified: false, skipped: true, reason: "no-change" };
+        }
+
+        await AsyncStorage.setItem(
+            MISSED_FOLLOWUP_ALERT_STATE_KEY,
+            JSON.stringify({ dateKey: todayKey, count }),
+        );
+
+        const body =
+            count === 1
+                ? "You have 1 missed follow-up. Tap to open Follow-ups."
+                : `You have ${count} missed follow-ups. Tap to open Follow-ups.`;
+
+        await scheduleImmediateNotification({
+            title: "Missed follow-ups",
+            body,
+            channelId: "followups",
+            color: "#FF9500",
+            badge: count,
+            data: {
+                type: "followup-missed-summary",
+                overdueCount: count,
+                timestamp: new Date().toISOString(),
+            },
+        });
+
+        // Speak only when app is active (foreground listener also covers it).
+        await safeSpeak(
+            count === 1 ? "You have 1 missed follow up." : `You have ${count} missed follow ups.`,
+        );
+
+        return { notified: true, skipped: false, count };
+    } catch (error) {
+        console.error("Failed to notify missed follow-ups:", error);
+        return { notified: false, skipped: false, error: true };
+    }
+};
+
 // Check for today's follow-ups and show notification
 export const checkAndNotifyTodayFollowUps = async (followUps) => {
     try {
@@ -831,8 +1065,43 @@ const getPrettyFollowUpLine = (activityType, name) => {
     if (type === "whatsapp") return `WhatsApp ${who}: quick update + next step.`;
     if (type === "email") return `Email ${who}: short recap + ask for confirmation.`;
     if (type === "meeting") return `Meeting ${who}: confirm time + share agenda.`;
-    if (type === "phone call") return `Call ${who}: 2 minutes to move this forward.`;
+    if (type === "phone call") return `Your customer is waiting. Please call ${who} now.`;
     return `Follow up with ${who} now.`;
+};
+
+const buildSoonContent = (item, when, minutesLeft) => {
+    const name = String(item?.name || "Client").trim();
+    const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
+    const mins = Math.max(1, Math.round(Number(minutesLeft || 0)));
+    const minLabel = mins === 1 ? "1 minute" : `${mins} minutes`;
+    const t = String(activityType || "").trim().toLowerCase();
+
+    const title =
+        t === "phone call"
+            ? `Call in ${minLabel}`
+            : t === "whatsapp"
+              ? `WhatsApp in ${minLabel}`
+              : t === "email"
+                ? `Email in ${minLabel}`
+                : t === "meeting"
+                  ? `Meeting in ${minLabel}`
+                  : `Follow-up in ${minLabel}`;
+
+    const waitingHint =
+        mins <= 3 && t === "phone call"
+            ? "Your customer is waiting. Please be ready."
+            : mins <= 3
+              ? "Your customer is waiting."
+              : "";
+
+    const body = `${name} • ${activityType} in ${minLabel}.${waitingHint ? ` ${waitingHint}` : ""}`;
+
+    const due = buildDueAtContent(item, when);
+    return {
+        title,
+        body,
+        data: { ...due.data, type: "followup-soon", minutesLeft: mins, name, activityType },
+    };
 };
 
 const buildHourlyFollowUpContent = (todayFollowUps, tipIndex = 0) => {
@@ -922,7 +1191,8 @@ export const acknowledgeHourlyFollowUpReminders = async () => {
     try {
         const todayKey = getTodayKey();
         await AsyncStorage.setItem(HOURLY_FOLLOWUP_ACK_DATE_KEY, todayKey);
-        await cancelTodayFollowUpReminders();
+        // Only cancel hourly reminders. Time-based "due/missed" reminders should continue to work.
+        await cancelHourlyFollowUpReminders();
     } catch (error) {
         console.error("Failed to acknowledge hourly follow-up reminders:", error);
     }
@@ -948,11 +1218,29 @@ const parseLocalDateTime = (dateStr, timeStr) => {
 
     if (timeStr && typeof timeStr === "string") {
         const t = timeStr.trim();
-        const m24 = t.match(/^(\d{1,2}):(\d{2})$/);
-        if (m24) {
-            const hh = Math.min(23, Math.max(0, Number(m24[1])));
-            const mm = Math.min(59, Math.max(0, Number(m24[2])));
-            d.setHours(hh, mm, 0, 0);
+        // Supports: "HH:MM", "H:MM", "HH.MM", "HH:MM:SS", optional AM/PM ("11:30 PM", "11:30PM")
+        const m = t.match(
+            /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
+        );
+        if (m) {
+            let hh = Number(m[1]);
+            const mm = Number(m[2] ?? "0");
+            const meridian = String(m[4] || "").toUpperCase();
+
+            if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) {
+                // ignore
+            } else if (meridian) {
+                if (hh >= 1 && hh <= 12) {
+                    if (meridian === "AM") {
+                        if (hh === 12) hh = 0;
+                    } else if (meridian === "PM") {
+                        if (hh !== 12) hh += 12;
+                    }
+                    d.setHours(Math.min(23, Math.max(0, hh)), Math.min(59, Math.max(0, mm)), 0, 0);
+                }
+            } else {
+                d.setHours(Math.min(23, Math.max(0, hh)), Math.min(59, Math.max(0, mm)), 0, 0);
+            }
         }
     }
 
@@ -986,6 +1274,7 @@ const buildDueAtContent = (item, when) => {
             followUpId: String(item?._id || ""),
             enqId: String(item?.enqId || item?._id || ""),
             enqNo: String(item?.enqNo || ""),
+            name,
             activityType,
             when: when ? when.toISOString() : null,
             timestamp: new Date().toISOString(),
@@ -1002,10 +1291,10 @@ const buildMissedContent = (item, when) => {
     const t = activityType.toLowerCase();
     const actionText =
         t === "phone call"
-            ? "Please make the call now."
+            ? "Your customer is waiting. Please make the call now."
             : t === "whatsapp"
               ? "Please send WhatsApp now."
-              : t === "email"
+            : t === "email"
                 ? "Please send the email now."
                 : t === "meeting"
                   ? "Please confirm and connect now."
@@ -1023,6 +1312,7 @@ const buildMissedContent = (item, when) => {
             followUpId: String(item?._id || ""),
             enqId: String(item?.enqId || item?._id || ""),
             enqNo: String(item?.enqNo || ""),
+            name,
             activityType,
             when: when ? when.toISOString() : null,
             timestamp: new Date().toISOString(),
@@ -1085,7 +1375,7 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
                     vibrate: [0, 250, 250, 250],
                     ios: { sound: true },
                     android: {
-                        channelId,
+                        channelId: resolveChannelId(channelId),
                         smallIcon: "icon",
                         color: "#0EA5E9",
                         priority: "high",
@@ -1118,110 +1408,216 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
 
 export const scheduleTimeFollowUpRemindersForToday = async (
     followUps,
-    { channelId = "followups", missedAfterMinutes = 20 } = {},
+    {
+        channelId = "followups",
+        preRemindMinutes = DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES,
+        preRemindEveryMinutes = DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES,
+        missedFastMinutes = DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES,
+        missedFastEveryMinutes = DEFAULT_FOLLOWUP_MISSED_FAST_EVERY_MINUTES,
+        missedHourlyEveryMinutes = DEFAULT_FOLLOWUP_MISSED_HOURLY_EVERY_MINUTES,
+        missedHourlyMaxHours = DEFAULT_FOLLOWUP_MISSED_HOURLY_MAX_HOURS,
+        endHour = 21,
+        windowDays = DEFAULT_FOLLOWUP_SCHEDULE_WINDOW_DAYS,
+        missedLookbackDays = DEFAULT_FOLLOWUP_MISSED_LOOKBACK_DAYS,
+        dueRepeatForMinutes = DEFAULT_FOLLOWUP_DUE_REPEAT_FOR_MINUTES,
+    } = {},
 ) => {
     try {
         if (Platform.OS === "web") return { scheduled: 0, skipped: true };
 
         const todayKey = getTodayKey();
-        const ackDate = await AsyncStorage.getItem(HOURLY_FOLLOWUP_ACK_DATE_KEY);
-        if (ackDate === todayKey) {
-            return { scheduled: 0, skipped: true, reason: "acknowledged" };
-        }
-
         const list = Array.isArray(followUps) ? followUps : [];
-        const todayFollowUps = list.filter(isActiveFollowUp).filter(isDueToday);
+        const now = new Date();
+        const nowMs = now.getTime();
+        const lookbackMs = Math.max(0, Number(missedLookbackDays || 0)) * 24 * 60 * 60 * 1000;
+        const windowMs = Math.max(0, Number(windowDays || 0)) * 24 * 60 * 60 * 1000;
+        const startMs = nowMs - lookbackMs;
+        const endMs = nowMs + windowMs;
+
+        const timeBasedFollowUps = list
+            .filter(isActiveFollowUp)
+            .map((item) => {
+                const timeStr = item?.time;
+                const dateStr = item?.nextFollowUpDate || item?.followUpDate || item?.date;
+                const when = timeStr ? parseLocalDateTime(dateStr, timeStr) : null;
+                const ms = when ? when.getTime() : NaN;
+                return { item, when, ms };
+            })
+            .filter(({ when, ms }) => Boolean(when) && Number.isFinite(ms) && ms >= startMs && ms <= endMs)
+            // Ensure we schedule the nearest reminders first (avoid hitting caps due to sorting by latest date).
+            .sort((a, b) => a.ms - b.ms);
 
         await cancelTimeFollowUpReminders();
-        if (todayFollowUps.length === 0) {
+        if (timeBasedFollowUps.length === 0) {
             return { scheduled: 0, skipped: true, reason: "none-due" };
         }
 
-        const now = new Date();
         const ids = [];
+        // Allow scheduling "right now" triggers (use a tiny past buffer to avoid missing exact-minute schedules).
+        const safeNow = new Date(now.getTime() - 1000);
 
-        for (const item of todayFollowUps) {
-            const dateStr = item?.nextFollowUpDate || item?.followUpDate || item?.date;
-            const timeStr = item?.time;
-            if (!timeStr) continue; // optional time => skip time-based scheduling
+        for (const entry of timeBasedFollowUps) {
+            if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
+            const item = entry.item;
+            const when = entry.when;
+            const scheduledAtMs = new Set();
 
-            const when = parseLocalDateTime(dateStr, timeStr);
-            if (!when) continue;
+            // Pre-reminders: start 1 hour before, repeat every 5 minutes until due time.
+            if (when.getTime() > safeNow.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) {
+                const preWindowMs = Math.max(0, Number(preRemindMinutes || 0)) * 60 * 1000;
+                const preEveryMs = Math.max(1, Number(preRemindEveryMinutes || 5)) * 60 * 1000;
+                const preStart = new Date(when.getTime() - preWindowMs);
 
-            // If time already passed today, schedule a "missed" nudge soon.
-            if (when.getTime() <= now.getTime()) {
-                const missed = buildMissedContent(item, when);
-                const id = await Notifications.scheduleNotificationAsync({
-                    content: {
-                        title: missed.title,
-                        body: missed.body,
-                        subtitle: "Tap to open Follow-ups",
-                        data: missed.data,
-                        sound: "default",
-                        vibrate: [0, 250, 250, 250],
-                        ios: { sound: true },
-                        android: {
+                if (preWindowMs > 0) {
+                    for (
+                        let t = new Date(preStart);
+                        t.getTime() < when.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
+                        t = new Date(t.getTime() + preEveryMs)
+                    ) {
+                        if (t.getTime() <= safeNow.getTime()) continue;
+                        if (scheduledAtMs.has(t.getTime())) continue;
+                        const minutesLeft = Math.max(
+                            1,
+                            Math.round((when.getTime() - t.getTime()) / (60 * 1000)),
+                        );
+                        const soon = buildSoonContent(item, when, minutesLeft);
+                        const id = await scheduleDateNotification({
+                            when: t,
+                            title: soon.title,
+                            body: soon.body,
+                            data: soon.data,
                             channelId,
-                            smallIcon: "icon",
-                            color: "#FF3B5C",
-                            priority: "high",
-                            sticky: false,
-                        },
-                    },
-                    trigger: buildDateTrigger(
-                        new Date(now.getTime() + 60 * 1000),
-                        channelId,
-                    ),
-                });
-                ids.push(id);
-                continue;
-            }
+                            color: "#0EA5E9",
+                        });
+                        ids.push(id);
+                        scheduledAtMs.add(t.getTime());
+                    }
+                }
 
-            const due = buildDueAtContent(item, when);
-            const dueId = await Notifications.scheduleNotificationAsync({
-                content: {
+                // Extra pre-reminders at 5/4/3/2/1 min before due (more reliable than 5-min grid).
+                for (const minutesLeft of [5, 4, 3, 2, 1]) {
+                    if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
+                    const t = new Date(when.getTime() - minutesLeft * 60 * 1000);
+                    if (t.getTime() <= safeNow.getTime() || t.getTime() >= when.getTime()) continue;
+                    if (scheduledAtMs.has(t.getTime())) continue;
+                    const soon = buildSoonContent(item, when, minutesLeft);
+                    const id = await scheduleDateNotification({
+                        when: t,
+                        title: soon.title,
+                        body: soon.body,
+                        data: soon.data,
+                        channelId,
+                        color: "#0EA5E9",
+                    });
+                    ids.push(id);
+                    scheduledAtMs.add(t.getTime());
+                }
+
+                // Due notification at exact time.
+                const due = buildDueAtContent(item, when);
+                const dueId = await scheduleDateNotification({
+                    when,
                     title: due.title,
                     body: due.body,
-                    subtitle: "Tap to open Follow-ups",
                     data: due.data,
-                    sound: "default",
-                    vibrate: [0, 250, 250, 250],
-                    ios: { sound: true },
-                    android: {
-                        channelId,
-                        smallIcon: "icon",
-                        color: "#0EA5E9",
-                        priority: "high",
-                        sticky: false,
-                    },
-                },
-                trigger: buildDateTrigger(when, channelId),
-            });
-            ids.push(dueId);
+                    channelId,
+                    color: "#0EA5E9",
+                });
+                ids.push(dueId);
 
-            // Extra nudge for missed meeting/call/etc.
-            const missedWhen = new Date(when.getTime() + missedAfterMinutes * 60 * 1000);
+                // Optional active reminder mode (disabled by default).
+                const repeats = Math.max(0, Math.min(30, Number(dueRepeatForMinutes || 0)));
+                if (repeats > 0) {
+                    for (
+                        let i = 1;
+                        i <= repeats && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
+                        i += 1
+                    ) {
+                        const t = new Date(when.getTime() + i * 60 * 1000);
+                        if (t.getTime() <= safeNow.getTime()) continue;
+                        if (scheduledAtMs.has(t.getTime())) continue;
+                        const id = await scheduleDateNotification({
+                            when: t,
+                            title: due.title,
+                            body: due.body,
+                            data: due.data,
+                            channelId,
+                            color: "#FF9500",
+                        });
+                        ids.push(id);
+                        scheduledAtMs.add(t.getTime());
+                    }
+                }
+            }
+
+            // Missed reminders: every 5 minutes for 1 hour after due, then every 1 hour.
             const missed = buildMissedContent(item, when);
-            const missedId = await Notifications.scheduleNotificationAsync({
-                content: {
+            const missedFastMs = Math.max(0, Number(missedFastMinutes || 0)) * 60 * 1000;
+            const missedFastEveryMs = Math.max(1, Number(missedFastEveryMinutes || 5)) * 60 * 1000;
+            const missedHourlyEveryMs = Math.max(1, Number(missedHourlyEveryMinutes || 60)) * 60 * 1000;
+            const missedFastEnd = new Date(when.getTime() + missedFastMs);
+
+            // Missed: send every 1 minute for the first 5 minutes after due time.
+            for (const mins of [1, 2, 3, 4, 5]) {
+                if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
+                const t = new Date(when.getTime() + mins * 60 * 1000);
+                if (t.getTime() <= safeNow.getTime()) continue;
+                if (scheduledAtMs.has(t.getTime())) continue;
+                const id = await scheduleDateNotification({
+                    when: t,
                     title: missed.title,
                     body: missed.body,
-                    subtitle: "Tap to open Follow-ups",
                     data: missed.data,
-                    sound: "default",
-                    vibrate: [0, 250, 250, 250],
-                    ios: { sound: true },
-                    android: {
+                    channelId,
+                    color: "#FF3B5C",
+                });
+                ids.push(id);
+                scheduledAtMs.add(t.getTime());
+            }
+
+            for (
+                let t = new Date(when.getTime() + Math.max(missedFastEveryMs, 10 * 60 * 1000));
+                t.getTime() <= missedFastEnd.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
+                t = new Date(t.getTime() + missedFastEveryMs)
+            ) {
+                if (t.getTime() <= safeNow.getTime()) continue;
+                if (scheduledAtMs.has(t.getTime())) continue;
+                const id = await scheduleDateNotification({
+                    when: t,
+                    title: missed.title,
+                    body: missed.body,
+                    data: missed.data,
+                    channelId,
+                    color: "#FF9500",
+                });
+                ids.push(id);
+                scheduledAtMs.add(t.getTime());
+            }
+
+            const hourlyMaxHours = Math.max(0, Number(missedHourlyMaxHours || 0));
+            if (hourlyMaxHours > 0 && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) {
+                const hourlyEnd = new Date(when.getTime() + hourlyMaxHours * 60 * 60 * 1000);
+                const dayEnd = new Date(when);
+                dayEnd.setHours(Number(endHour || 21), 0, 0, 0);
+                const stopAt = new Date(Math.min(hourlyEnd.getTime(), dayEnd.getTime()));
+
+                for (
+                    let t = new Date(missedFastEnd.getTime() + missedHourlyEveryMs);
+                    t.getTime() <= stopAt.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
+                    t = new Date(t.getTime() + missedHourlyEveryMs)
+                ) {
+                    if (t.getTime() <= safeNow.getTime()) continue;
+                    const id = await scheduleDateNotification({
+                        when: t,
+                        title: missed.title,
+                        body: missed.body,
+                        data: missed.data,
                         channelId,
-                        smallIcon: "icon",
-                        color: "#FF9500",
-                        priority: "high",
-                        sticky: false,
-                    },
-                },
-                trigger: buildDateTrigger(missedWhen, channelId),
-            });
-            ids.push(missedId);
+                        color: "#FF3B5C",
+                    });
+                    ids.push(id);
+                }
+            }
         }
 
         await AsyncStorage.setItem(
@@ -1240,7 +1636,22 @@ export const scheduleTimeFollowUpRemindersForToday = async (
 export const setupGlobalNotificationListener = (navigationRef) => {
     return Notifications.addNotificationResponseReceivedListener(response => {
         const data = response.notification.request.content.data;
+        const actionId = response.actionIdentifier;
         console.log("Global notification tapped:", data);
+
+        if (actionId === "FOLLOWUP_CANCEL") {
+            return;
+        }
+
+        const isComplete = actionId === "FOLLOWUP_COMPLETE";
+        const isDefaultAction =
+            actionId === Notifications.DEFAULT_ACTION_IDENTIFIER ||
+            actionId === "expo-notifications-default";
+
+        // Avoid repeating voice when user taps action buttons (especially Complete).
+        if (isDefaultAction) {
+            Promise.resolve(speakForNotificationData(data)).catch(() => {});
+        }
 
         if (navigationRef.isReady()) {
             // Handle different notification types
@@ -1252,13 +1663,53 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                 data.type === "followup-due" ||
                 data.type === "followup-missed"
             ) {
-                // User has acknowledged the reminder by tapping it.
-                acknowledgeHourlyFollowUpReminders().catch(() => {});
-                // Navigate to FollowUp screen
-                // We need to navigate to the nested tab
-                navigationRef.navigate('Main', {
-                    screen: 'FollowUp',
-                    params: { screen: 'ENQUIRY_LIST' }
+                if (isComplete) {
+                    // Mark completed so it doesn't show in Missed list if user doesn't schedule next follow-up.
+                    Promise.resolve(completeFollowUpFromNotification(data)).catch(() => {});
+                    Promise.resolve(
+                        cancelNotificationsForEnquiry?.({
+                            enqId: data?.enqId,
+                            enqNo: data?.enqNo,
+                        }),
+                    ).catch(() => {});
+                }
+
+                // Acknowledge hourly reminders only when user actually opens/acts.
+                if (
+                    actionId === "FOLLOWUP_COMPLETE" ||
+                    isDefaultAction
+                ) {
+                    acknowledgeHourlyFollowUpReminders().catch(() => {});
+                }
+
+                const enquiry = {
+                    enqId: data?.enqId || null,
+                    _id: data?.enqId || null,
+                    enqNo: data?.enqNo || "",
+                    name: data?.name || "",
+                    mobile: data?.mobile || "",
+                    product: data?.product || "",
+                };
+
+                navigationRef.navigate("Main", {
+                    screen: "FollowUp",
+                    params: isComplete
+                        ? {
+                              openComposer: true,
+                              composerToken: `${Date.now()}`,
+                              enquiry,
+                              focusTab: "Today",
+                              focusSearch: data?.name || "",
+                          }
+                        : data.type === "followup-missed"
+                          ? {
+                                openComposer: true,
+                                composerToken: `${Date.now()}`,
+                                enquiry,
+                                focusTab: "Missed",
+                                openMissedModal: true,
+                            }
+                          : { focusTab: "Today" },
                 });
             } else if (data.type === 'enquiry-success' || data.type === 'new-enquiry-alert') {
                 navigationRef.navigate('Main', {
@@ -1302,6 +1753,106 @@ export const cancelFollowUpNotifications = async () => {
     }
 };
 
+export const resetNotificationLocalState = async () => {
+    try {
+        await Promise.allSettled([
+            AsyncStorage.removeItem(HOURLY_FOLLOWUP_ACK_DATE_KEY),
+            AsyncStorage.removeItem(HOURLY_FOLLOWUP_SCHEDULE_KEY),
+            AsyncStorage.removeItem(TIME_FOLLOWUP_SCHEDULE_KEY),
+            AsyncStorage.removeItem(MISSED_FOLLOWUP_ALERT_STATE_KEY),
+            AsyncStorage.removeItem("lastNotificationDate"),
+        ]);
+    } catch {
+        // ignore
+    }
+};
+
+const pruneStoredScheduleIds = async (storageKey, idsToRemove = []) => {
+    try {
+        const removeSet = new Set((Array.isArray(idsToRemove) ? idsToRemove : []).map(String));
+        if (removeSet.size === 0) return;
+        const raw = await AsyncStorage.getItem(storageKey);
+        if (!raw) return;
+        let parsed = null;
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            return;
+        }
+        const ids = Array.isArray(parsed?.ids) ? parsed.ids : [];
+        const nextIds = ids.filter((id) => !removeSet.has(String(id)));
+        if (nextIds.length === ids.length) return;
+        await AsyncStorage.setItem(storageKey, JSON.stringify({ ...(parsed || {}), ids: nextIds }));
+    } catch {
+        // ignore
+    }
+};
+
+export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
+    try {
+        if (!isNotificationSupported()) return { cancelled: 0, skipped: true };
+        const enqIdStr = enqId ? String(enqId) : "";
+        const enqNoStr = enqNo ? String(enqNo).trim() : "";
+        if (!enqIdStr && !enqNoStr) return { cancelled: 0, skipped: true, reason: "no-key" };
+
+        const pending = await getPendingNotifications();
+        const matches = pending.filter((notif) => {
+            const data = notif?.content?.data || {};
+            const type = String(data?.type || "").trim();
+            if (!type) return false;
+            // Only follow-up style notifications carry enq info.
+            if (
+                type !== "followup-soon" &&
+                type !== "followup-due" &&
+                type !== "followup-missed"
+            ) {
+                return false;
+            }
+            const dEnqId = data?.enqId ? String(data.enqId) : "";
+            const dEnqNo = data?.enqNo ? String(data.enqNo).trim() : "";
+            if (enqIdStr && dEnqId && dEnqId === enqIdStr) return true;
+            if (enqNoStr && dEnqNo && dEnqNo === enqNoStr) return true;
+            return false;
+        });
+
+        if (matches.length === 0) return { cancelled: 0, skipped: true, reason: "none" };
+
+        const cancelledIds = [];
+        for (const notif of matches) {
+            const id = String(notif?.identifier || "");
+            if (!id) continue;
+            try {
+                await cancelNotification(id);
+                cancelledIds.push(id);
+            } catch {
+                // ignore per-id
+            }
+        }
+
+        await Promise.allSettled([
+            pruneStoredScheduleIds(TIME_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
+            pruneStoredScheduleIds(HOURLY_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
+        ]);
+
+        return { cancelled: cancelledIds.length, skipped: false };
+    } catch (error) {
+        console.error("Failed to cancel enquiry notifications:", error);
+        return { cancelled: 0, skipped: false, error: true };
+    }
+};
+
+const completeFollowUpFromNotification = async (data = {}) => {
+    try {
+        const followUpId = String(data?.followUpId || "").trim();
+        if (!followUpId) return { completed: false, skipped: true, reason: "no-followup-id" };
+        await followupService.updateFollowUp(followUpId, { status: "Completed" });
+        return { completed: true };
+    } catch (error) {
+        console.warn("Failed to complete follow-up from notification:", error?.message || error);
+        return { completed: false, error: true };
+    }
+};
+
 export default {
     initializeNotifications,
     showFollowUpNotification,
@@ -1320,6 +1871,7 @@ export default {
     getDevicePushToken,
     setupNotificationListener,
     setupForegroundNotificationListener,
+    speakForNotificationData,
     checkAndNotifyTodayFollowUps,
     cancelFollowUpNotifications,
     scheduleHourlyFollowUpRemindersForToday,
@@ -1329,4 +1881,7 @@ export default {
     cancelTodayFollowUpReminders,
     acknowledgeHourlyFollowUpReminders,
     setupGlobalNotificationListener,
+    notifyMissedFollowUpsSummary,
+    cancelNotificationsForEnquiry,
+    resetNotificationLocalState,
 };

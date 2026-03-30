@@ -131,6 +131,7 @@ router.get("/summary", verifyToken, async (req, res) => {
         });
 
         // ⚡ Use cache.wrap to deduplicate concurrent requests
+        // Keep TTL low because "Missed" is real-time (dueAt < now), and users expect it to update fast.
         const { data: response, source } = await cache.wrap(cacheKey, async () => {
             const today = toLocalIsoDate(parsedRef);
             const dateFilter = { date: { $gte: rangeFrom, $lte: rangeTo } };
@@ -154,6 +155,38 @@ router.get("/summary", verifyToken, async (req, res) => {
                 // Hide call-log derived follow-ups (calls should appear only in Call Log screen).
                 note: { $ne: "Enquiry created", $not: /^Call:/i },
                 remarks: { $ne: "Enquiry created", $not: /^Call:/i },
+            };
+
+            const realToday = toLocalIsoDate(new Date());
+            const isRealToday = today === realToday;
+            const now = new Date();
+
+            const todayOpenFollowUpQuery = {
+                ...query,
+                date: today,
+                ...activeFollowUpFilter,
+                ...(isRealToday
+                    ? {
+                          $or: [
+                              { dueAt: { $gte: now } },
+                              { dueAt: null },
+                              { dueAt: { $exists: false } },
+                          ],
+                      }
+                    : {}),
+            };
+
+            const missedFollowUpQuery = {
+                ...query,
+                ...activeFollowUpFilter,
+                ...(isRealToday
+                    ? {
+                          $or: [
+                              { date: { $lt: today } },
+                              { date: today, dueAt: { $lt: now } },
+                          ],
+                      }
+                    : { date: { $lt: today } }),
             };
 
             // Run all queries in parallel
@@ -219,21 +252,21 @@ router.get("/summary", verifyToken, async (req, res) => {
                     },
                     { $sort: { _id: 1 } },
                 ]),
-                FollowUp.countDocuments({ ...query, date: today, ...activeFollowUpFilter }),
-                FollowUp.countDocuments({ ...query, date: { $lt: today }, ...activeFollowUpFilter }),
+                FollowUp.countDocuments(todayOpenFollowUpQuery),
+                FollowUp.countDocuments(missedFollowUpQuery),
                 Enquiry.find({ ...query, ...dateFilter })
                     .select('name enqNo date status mobile product cost')
                     .sort({ createdAt: -1 })
                     .limit(5)
                     .lean(),
-                FollowUp.find({ ...query, date: today, ...activeFollowUpFilter })
-                    .select('name mobile image product enqNo date followUpDate nextFollowUpDate type activityType remarks status')
-                    .sort({ date: 1, activityTime: -1, createdAt: -1 })
+                FollowUp.find(todayOpenFollowUpQuery)
+                    .select('name mobile image product enqNo date time dueAt followUpDate nextFollowUpDate type activityType remarks status')
+                    .sort({ dueAt: 1, activityTime: -1, createdAt: -1 })
                     .limit(5)
                     .lean(),
-                FollowUp.find({ ...query, date: { $lt: today }, ...activeFollowUpFilter })
-                    .select('name mobile image product enqNo date followUpDate nextFollowUpDate type activityType remarks status')
-                    .sort({ date: -1, activityTime: -1, createdAt: -1 })
+                FollowUp.find(missedFollowUpQuery)
+                    .select('name mobile image product enqNo date time dueAt followUpDate nextFollowUpDate type activityType remarks status')
+                    .sort({ date: -1, dueAt: -1, activityTime: -1, createdAt: -1 })
                     .limit(5)
                     .lean()
             ]);
@@ -254,7 +287,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                 else if (status === "not interested" || status === "dropped" || status === "drop") counts.notInterested = c.count;
                 else if (status === "converted") counts.converted = c.count;
                 else if (status === "closed") counts.closed = c.count;
-            });
+        }, 10000);
 
             const converted = counts.converted || 0;
             const conversionRate = totalEnquiry > 0 ? Math.round((converted / totalEnquiry) * 100) : 0;
