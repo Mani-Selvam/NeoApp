@@ -1,7 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system/legacy";
+import * as IntentLauncher from "expo-intent-launcher";
 import * as Notifications from "expo-notifications";
+import * as Sharing from "expo-sharing";
 import * as Speech from "expo-speech";
 import { Platform } from "react-native";
 import { confirmPermissionRequest } from "../utils/appFeedback";
@@ -45,6 +48,7 @@ const CHANNEL_IDS = {
     coupons: "coupons_v4",
     team_chat: "team_chat_v1",
     billing: "billing_v4",
+    reports: "reports_v1",
 };
 const CATEGORY_IDS = {
     followups: "FOLLOWUP_ACTIONS",
@@ -112,6 +116,64 @@ const NOTIFICATION_CHANNELS = {
         lightColor: "#F59E0B",
         vibrationPattern: [0, 220, 160, 220],
     },
+    reports: {
+        name: "Reports",
+        lightColor: "#B8892A",
+        vibrationPattern: [0, 150, 120, 150],
+    },
+};
+
+const openCsvFileUri = async (uri) => {
+    const safeUri = String(uri || "").trim();
+    if (!safeUri) return { opened: false, skipped: true, reason: "no-uri" };
+
+    if (Platform.OS === "android") {
+        let dataUri = safeUri;
+        try {
+            if (safeUri.startsWith("file://") && FileSystem.getContentUriAsync) {
+                dataUri = await FileSystem.getContentUriAsync(safeUri);
+            }
+        } catch {}
+
+        try {
+            await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+                data: dataUri,
+                flags: IntentLauncher.Flags?.GRANT_READ_URI_PERMISSION
+                    ? IntentLauncher.Flags.GRANT_READ_URI_PERMISSION
+                    : 1,
+                type: "text/csv",
+            });
+            return { opened: true };
+        } catch (error) {
+            console.warn("Failed to open CSV via intent:", error?.message || error);
+            try {
+                const available = await Sharing.isAvailableAsync();
+                if (!available) return { opened: false, error: true, reason: "no-sharing" };
+                await Sharing.shareAsync(safeUri, {
+                    mimeType: "text/csv",
+                    UTI: "public.comma-separated-values-text",
+                    dialogTitle: "Open report CSV",
+                });
+                return { opened: true, shared: true };
+            } catch {
+                return { opened: false, error: true };
+            }
+        }
+    }
+
+    try {
+        const available = await Sharing.isAvailableAsync();
+        if (!available) return { opened: false, skipped: true, reason: "no-sharing" };
+        await Sharing.shareAsync(safeUri, {
+            mimeType: "text/csv",
+            UTI: "public.comma-separated-values-text",
+            dialogTitle: "Open report CSV",
+        });
+        return { opened: true, shared: true };
+    } catch (error) {
+        console.warn("Failed to share/open CSV:", error?.message || error);
+        return { opened: false, error: true };
+    }
 };
 
 // Helper to check if notifications are supported
@@ -584,16 +646,26 @@ export const initializeNotifications = async () => {
                 enableLights: true,
             });
 
-            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.billing, {
-                name: NOTIFICATION_CHANNELS.billing.name,
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: NOTIFICATION_CHANNELS.billing.vibrationPattern,
-                lightColor: NOTIFICATION_CHANNELS.billing.lightColor,
-                sound: "default",
-                enableVibrate: true,
-                enableLights: true,
-            });
-        }
+	            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.billing, {
+	                name: NOTIFICATION_CHANNELS.billing.name,
+	                importance: Notifications.AndroidImportance.HIGH,
+	                vibrationPattern: NOTIFICATION_CHANNELS.billing.vibrationPattern,
+	                lightColor: NOTIFICATION_CHANNELS.billing.lightColor,
+	                sound: "default",
+	                enableVibrate: true,
+	                enableLights: true,
+	            });
+
+	            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.reports, {
+	                name: NOTIFICATION_CHANNELS.reports.name,
+	                importance: Notifications.AndroidImportance.DEFAULT,
+	                vibrationPattern: NOTIFICATION_CHANNELS.reports.vibrationPattern,
+	                lightColor: NOTIFICATION_CHANNELS.reports.lightColor,
+	                sound: "default",
+	                enableVibrate: true,
+	                enableLights: true,
+	            });
+	        }
 
         // Actions (Complete / Cancel) for follow-up notifications.
         try {
@@ -2115,6 +2187,8 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                 });
             } else if (data.type === "billing-alert") {
                 navigationRef.navigate("PricingScreen");
+            } else if (data.type === "report-csv-ready") {
+                Promise.resolve(openCsvFileUri(data?.uri)).catch(() => {});
             }
         }
     });
@@ -2318,6 +2392,37 @@ export const scheduleNextFollowUpPromptForEnquiry = async ({
         console.error("Failed to schedule next follow-up prompt:", error);
         return { scheduled: 0, skipped: false, error: true };
     }
+	};
+
+export const showReportCsvReadyNotification = async ({ uri, fileName } = {}) => {
+    try {
+        if (!isNotificationSupported()) return { shown: 0, skipped: true };
+        const safeName = String(fileName || "report.csv").trim() || "report.csv";
+        const safeUri = String(uri || "").trim();
+        const body = `Saved: ${safeName}. Tap to open.`;
+
+        await Notifications.scheduleNotificationAsync({
+            content: {
+                title: "Report CSV Ready",
+                body,
+                data: {
+                    type: "report-csv-ready",
+                    uri: safeUri,
+                    fileName: safeName,
+                    timestamp: new Date().toISOString(),
+                },
+                sound: "default",
+                ...(Platform.OS === "android"
+                    ? { channelId: CHANNEL_IDS.reports }
+                    : {}),
+            },
+            trigger: null,
+        });
+        return { shown: 1, skipped: false };
+    } catch (error) {
+        console.error("Failed to show CSV ready notification:", error);
+        return { shown: 0, skipped: false, error: true };
+    }
 };
 
 const completeFollowUpFromNotification = async (data = {}) => {
@@ -2361,11 +2466,12 @@ export default {
     cancelTodayFollowUpReminders,
     acknowledgeHourlyFollowUpReminders,
     setupGlobalNotificationListener,
-    notifyMissedFollowUpsSummary,
-    cancelNotificationsForEnquiry,
-    cancelNextFollowUpPromptForEnquiry,
-    scheduleNextFollowUpPromptForEnquiry,
-    getNotificationVoiceLanguage,
-    setNotificationVoiceLanguage,
-    resetNotificationLocalState,
+	    notifyMissedFollowUpsSummary,
+	    cancelNotificationsForEnquiry,
+	    cancelNextFollowUpPromptForEnquiry,
+	    scheduleNextFollowUpPromptForEnquiry,
+	    showReportCsvReadyNotification,
+	    getNotificationVoiceLanguage,
+	    setNotificationVoiceLanguage,
+	    resetNotificationLocalState,
 };

@@ -47,6 +47,38 @@ const parseTimeToMinutes = (value) => {
   return hours * 60 + minutes;
 };
 
+const parseDueAtLocal = (isoDate, timeStr) => {
+  const iso = String(isoDate || "").trim();
+  const time = String(timeStr || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  if (!time) return null;
+
+  // Supports: "HH:MM", "H:MM", "HH.MM", optional seconds, optional AM/PM
+  const m = time.match(
+    /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
+  );
+  if (!m) return null;
+  let hh = Number(m[1]);
+  const mm = Number(m[2] ?? "0");
+  const meridian = String(m[4] || "").toUpperCase();
+  if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) return null;
+
+  if (meridian) {
+    if (hh < 1 || hh > 12) return null;
+    if (meridian === "AM") {
+      if (hh === 12) hh = 0;
+    } else if (meridian === "PM") {
+      if (hh !== 12) hh += 12;
+    }
+  } else if (hh > 23) {
+    return null;
+  }
+
+  const [yy, mo, dd] = iso.split("-").map((n) => Number(n));
+  const dt = new Date(yy, (mo || 1) - 1, dd || 1, hh, mm, 0, 0);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+};
+
 const isMissedForReference = (item, referenceDate) => {
   const itemDate = String(item?.date || item?.nextFollowUpDate || item?.followUpDate || "").trim();
   if (!itemDate) return false;
@@ -244,6 +276,34 @@ router.get("/", verifyToken, async (req, res) => {
             },
             { $set: { status: "Missed" } },
           );
+
+          // Backfill missed status for legacy rows missing `dueAt` but having a past `time` today.
+          const legacy = await FollowUp.find({
+            ...query,
+            date: referenceDate,
+            $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
+            time: { $exists: true, $ne: null, $ne: "" },
+            status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
+          })
+            .select("_id time nextFollowUpDate followUpDate date")
+            .lean();
+
+          if (Array.isArray(legacy) && legacy.length > 0) {
+            const nowMinutes = now.getHours() * 60 + now.getMinutes();
+            const ids = legacy
+              .filter((row) => {
+                const mins = parseTimeToMinutes(row?.time);
+                return mins != null && mins < nowMinutes;
+              })
+              .map((row) => row?._id)
+              .filter(Boolean);
+            if (ids.length > 0) {
+              await FollowUp.updateMany(
+                { _id: { $in: ids } },
+                { $set: { status: "Missed", dueAt: now } },
+              );
+            }
+          }
         } catch (_updateError) {}
       }
 
@@ -291,7 +351,14 @@ router.get("/", verifyToken, async (req, res) => {
                   return {
                     $or: [
                       { date: { $lt: referenceDate } },
-                      { date: referenceDate, dueAt: { $lt: now } },
+                      {
+                        date: referenceDate,
+                        $or: [
+                          { dueAt: { $lt: now } },
+                          { dueAt: null },
+                          { dueAt: { $exists: false } },
+                        ],
+                      },
                     ],
                   };
                 })(),
@@ -571,6 +638,22 @@ router.put("/:id", verifyToken, async (req, res) => {
     // PROTECT USERID
     delete updateData.userId;
     delete updateData.createdBy;
+
+    // Ensure `dueAt` is recomputed when date/time changes (findOneAndUpdate does not run schema hooks).
+    const effDate = String(
+      updateData.nextFollowUpDate ||
+        updateData.followUpDate ||
+        updateData.date ||
+        "",
+    ).trim();
+    const effTime = String(updateData.time || "").trim();
+    if (effDate && effTime) {
+      const dueAt = parseDueAtLocal(effDate, effTime);
+      if (dueAt) updateData.dueAt = dueAt;
+    } else if ("time" in updateData || "date" in updateData || "nextFollowUpDate" in updateData) {
+      // If time/date removed, also remove dueAt so it doesn't mis-classify later.
+      updateData.dueAt = null;
+    }
 
     const followUp = await FollowUp.findOneAndUpdate(filter, updateData, {
       returnDocument: "after",

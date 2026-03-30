@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import * as FileSystem from "expo-file-system/legacy";
@@ -12,52 +13,69 @@ import {
     Dimensions,
     Modal,
     Platform,
-	ScrollView,
-	StatusBar,
-	StyleSheet,
-	Text,
-	TouchableOpacity,
-	useWindowDimensions,
-	View,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+    SafeAreaView,
+    useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import Svg, { Circle, G, Path } from "react-native-svg";
 import AppSideMenu from "../components/AppSideMenu";
 import { useAuth } from "../contexts/AuthContext";
-import { SkeletonBox, SkeletonCard, SkeletonLine, SkeletonPulse, SkeletonSpacer } from "../components/skeleton/Skeleton";
+import {
+    SkeletonBox,
+    SkeletonCard,
+    SkeletonLine,
+    SkeletonPulse,
+    SkeletonSpacer,
+} from "../components/skeleton/Skeleton";
 import { getCallLogs } from "../services/callLogService";
 import { getAllEnquiries } from "../services/enquiryService";
 import { getFollowUps } from "../services/followupService";
-
+import notificationService from "../services/notificationService";
 
 // â”€â”€â”€ Premium Light Palette â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const C = {
-    bg:           "#F5F3EF",
-    surface:      "#FFFFFF",
-    surfaceWarm:  "#FFFAF4",
-    border:       "#EAE6DF",
+    bg: "#F5F3EF",
+    surface: "#FFFFFF",
+    surfaceWarm: "#FFFAF4",
+    border: "#EAE6DF",
     borderStrong: "#D6D0C8",
-    text:         "#1A1714",
-    textSec:      "#5C574F",
-    textMuted:    "#9B958C",
-    gold:         "#B8892A",
-    goldLight:    "#F5E9C8",
-    goldMid:      "#E8D4A0",
-    teal:         "#1A7A6E",
-    tealLight:    "#E0F2EF",
-    rose:         "#C0443A",
-    roseLight:    "#FDE8E6",
-    violet:       "#6045A8",
-    violetLight:  "#EDE8F9",
-    sky:          "#1868B7",
-    skyLight:     "#E3EEFF",
-    amber:        "#C07820",
-    amberLight:   "#FEF3E2",
-    emerald:      "#1B7A48",
+    text: "#1A1714",
+    textSec: "#5C574F",
+    textMuted: "#9B958C",
+    gold: "#B8892A",
+    goldLight: "#F5E9C8",
+    goldMid: "#E8D4A0",
+    teal: "#1A7A6E",
+    tealLight: "#E0F2EF",
+    rose: "#C0443A",
+    roseLight: "#FDE8E6",
+    violet: "#6045A8",
+    violetLight: "#EDE8F9",
+    sky: "#1868B7",
+    skyLight: "#E3EEFF",
+    amber: "#C07820",
+    amberLight: "#FEF3E2",
+    emerald: "#1B7A48",
     emeraldLight: "#E3F5EC",
 };
 
-const CHART_COLORS = [C.gold, C.teal, C.rose, C.violet, C.sky, C.amber, C.emerald];
+const CHART_COLORS = [
+    C.gold,
+    C.teal,
+    C.rose,
+    C.violet,
+    C.sky,
+    C.amber,
+    C.emerald,
+];
 const ALL_STAFF = "All Staff";
 const ALL_STATUS = "All Statuses";
 const REPORT_STATUS_OPTIONS = [
@@ -68,6 +86,7 @@ const REPORT_STATUS_OPTIONS = [
     "Converted",
     "Closed",
 ];
+const REPORT_CSV_DIR_KEY = "reportCsvDirectoryUri";
 const saveCsvToDevice = async ({ fileName, content }) => {
     const localDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
     if (!localDir) throw new Error("Export directory not available");
@@ -77,17 +96,39 @@ const saveCsvToDevice = async ({ fileName, content }) => {
     });
 
     if (Platform.OS === "android" && FileSystem.StorageAccessFramework) {
+        const writeToDirectory = async (directoryUri) => {
+            const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
+                directoryUri,
+                fileName,
+                "text/csv",
+            );
+            await FileSystem.writeAsStringAsync(targetUri, content, {
+                encoding: FileSystem.EncodingType.UTF8,
+            });
+            return targetUri;
+        };
+
+        // Reuse last chosen folder if available (no prompt).
         try {
-            const permission = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+            const existingDir = await AsyncStorage.getItem(REPORT_CSV_DIR_KEY);
+            const dirUri = String(existingDir || "").trim();
+            if (dirUri) {
+                const targetUri = await writeToDirectory(dirUri);
+                return { uri: targetUri, downloaded: true };
+            }
+        } catch {}
+
+        try {
+            const permission =
+                await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
             if (permission.granted && permission.directoryUri) {
-                const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
-                    permission.directoryUri,
-                    fileName,
-                    "text/csv"
-                );
-                await FileSystem.writeAsStringAsync(targetUri, content, {
-                    encoding: FileSystem.EncodingType.UTF8,
-                });
+                try {
+                    await AsyncStorage.setItem(
+                        REPORT_CSV_DIR_KEY,
+                        String(permission.directoryUri),
+                    );
+                } catch {}
+                const targetUri = await writeToDirectory(permission.directoryUri);
                 return { uri: targetUri, downloaded: true };
             }
         } catch (error) {
@@ -99,19 +140,33 @@ const saveCsvToDevice = async ({ fileName, content }) => {
 };
 
 // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const normalizeList = (p) => Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : [];
-const safeDate = (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; };
-const fmt = (v) => `\u20B9${Number(v||0).toLocaleString("en-IN",{maximumFractionDigits:0})}`;
+const normalizeList = (p) =>
+    Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : [];
+const safeDate = (v) => {
+    if (!v) return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+};
+const fmt = (v) =>
+    `\u20B9${Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 const toDayRange = (value = new Date()) => {
     const d = safeDate(value) || new Date();
     return {
         start: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0),
-        end: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999),
+        end: new Date(
+            d.getFullYear(),
+            d.getMonth(),
+            d.getDate(),
+            23,
+            59,
+            59,
+            999,
+        ),
     };
 };
 const toIsoDate = (value = new Date()) => {
     const d = safeDate(value) || new Date();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const formatDayLabel = (value) => {
     const d = safeDate(value) || new Date();
@@ -131,10 +186,16 @@ const formatShortDate = (value) => {
         year: "numeric",
     });
 };
-const inRange = (v, r) => { if (!r) return true; const p=safeDate(v); if (!p) return false; return p>=r.start&&p<=r.end; };
-const getEnqDate  = (i) => i?.enquiryDateTime||i?.date||i?.createdAt||null;
-const getFupDate  = (i) => i?.nextFollowUpDate||i?.followUpDate||i?.date||i?.createdAt||null;
-const getCallDate = (i) => i?.callTime||i?.createdAt||null;
+const inRange = (v, r) => {
+    if (!r) return true;
+    const p = safeDate(v);
+    if (!p) return false;
+    return p >= r.start && p <= r.end;
+};
+const getEnqDate = (i) => i?.enquiryDateTime || i?.date || i?.createdAt || null;
+const getFupDate = (i) =>
+    i?.nextFollowUpDate || i?.followUpDate || i?.date || i?.createdAt || null;
+const getCallDate = (i) => i?.callTime || i?.createdAt || null;
 const normalizeStaffLabel = (name, adminName = "Admin") => {
     const v = String(name || "").trim();
     if (!v || v === "Unassigned") return adminName;
@@ -143,10 +204,10 @@ const normalizeStaffLabel = (name, adminName = "Admin") => {
 const getStaffName = (item, adminName = "Admin") =>
     normalizeStaffLabel(
         item?.staffName ||
-        item?.assignedTo?.name ||
-        item?.assignedToName ||
-        item?.enqBy ||
-        "Unassigned",
+            item?.assignedTo?.name ||
+            item?.assignedToName ||
+            item?.enqBy ||
+            "Unassigned",
         adminName,
     );
 const normalizeStatusValue = (status) => {
@@ -155,38 +216,57 @@ const normalizeStatusValue = (status) => {
     if (status === "Drop") return "Closed";
     return status;
 };
-const getItemStatus = (item) => normalizeStatusValue(item?.status || item?.enqId?.status || item?.enquiryStatus || "");
+const getItemStatus = (item) =>
+    normalizeStatusValue(
+        item?.status || item?.enqId?.status || item?.enquiryStatus || "",
+    );
 const buildExplicitDateRange = (fromDate, toDate) => {
     const from = safeDate(fromDate) || new Date();
     const to = safeDate(toDate) || from;
     const safeFrom = from <= to ? from : to;
     const safeTo = to >= from ? to : from;
     return {
-        start: new Date(safeFrom.getFullYear(), safeFrom.getMonth(), safeFrom.getDate(), 0, 0, 0, 0),
-        end: new Date(safeTo.getFullYear(), safeTo.getMonth(), safeTo.getDate(), 23, 59, 59, 999),
+        start: new Date(
+            safeFrom.getFullYear(),
+            safeFrom.getMonth(),
+            safeFrom.getDate(),
+            0,
+            0,
+            0,
+            0,
+        ),
+        end: new Date(
+            safeTo.getFullYear(),
+            safeTo.getMonth(),
+            safeTo.getDate(),
+            23,
+            59,
+            59,
+            999,
+        ),
     };
 };
-const formatAppliedRangeLabel = (fromDate, toDate) => `${formatShortDate(fromDate)} - ${formatShortDate(toDate)}`;
-const isSameIsoDate = (left, right) => String(left || "") === String(right || "");
+const formatAppliedRangeLabel = (fromDate, toDate) =>
+    `${formatShortDate(fromDate)} - ${formatShortDate(toDate)}`;
+const isSameIsoDate = (left, right) =>
+    String(left || "") === String(right || "");
 const normalizeId = (value) => String(value?._id || value || "").trim();
 const getStaffId = (item) =>
     normalizeId(
         item?.assignedTo?._id ||
-        item?.assignedTo ||
-        item?.staffId?._id ||
-        item?.staffId ||
-        item?.assignedToId ||
-        item?.enqId?.assignedTo?._id ||
-        item?.enqId?.assignedTo ||
-        item?.enquiryId?.assignedTo?._id ||
-        item?.enquiryId?.assignedTo
+            item?.assignedTo ||
+            item?.staffId?._id ||
+            item?.staffId ||
+            item?.assignedToId ||
+            item?.enqId?.assignedTo?._id ||
+            item?.enqId?.assignedTo ||
+            item?.enquiryId?.assignedTo?._id ||
+            item?.enquiryId?.assignedTo,
     );
-const matchesStaffFilter = (item, staffFilter, adminName) => (
-    staffFilter === ALL_STAFF || getStaffName(item, adminName) === staffFilter
-);
-const matchesStatusFilter = (item, statusFilter) => (
-    statusFilter === ALL_STATUS || getItemStatus(item) === statusFilter
-);
+const matchesStaffFilter = (item, staffFilter, adminName) =>
+    staffFilter === ALL_STAFF || getStaffName(item, adminName) === staffFilter;
+const matchesStatusFilter = (item, statusFilter) =>
+    statusFilter === ALL_STATUS || getItemStatus(item) === statusFilter;
 const polarToCartesian = (cx, cy, radius, angleInDegrees) => {
     const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
     return {
@@ -206,10 +286,10 @@ const describeSlice = (cx, cy, radius, startAngle, endAngle) => {
     ].join(" ");
 };
 const statusColor = (s) => {
-    const v = String(s||"").toLowerCase();
-    if (v.includes("converted")||v.includes("closed")) return C.emerald;
-    if (v.includes("interest")||v.includes("contact")) return C.sky;
-    if (v.includes("not")||v.includes("lost")) return C.rose;
+    const v = String(s || "").toLowerCase();
+    if (v.includes("converted") || v.includes("closed")) return C.emerald;
+    if (v.includes("interest") || v.includes("contact")) return C.sky;
+    if (v.includes("not") || v.includes("lost")) return C.rose;
     return C.amber;
 };
 const displayStatusLabel = (status) => {
@@ -219,15 +299,26 @@ const displayStatusLabel = (status) => {
 };
 
 // â”€â”€â”€ Animated Counter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const AnimCounter = ({ value, style, prefix="" }) => {
+const AnimCounter = ({ value, style, prefix = "" }) => {
     const anim = useRef(new Animated.Value(0)).current;
     const [display, setDisplay] = useState(0);
     useEffect(() => {
-        Animated.timing(anim, { toValue: value, duration: 900, useNativeDriver: false }).start();
-        const id = anim.addListener(({ value: v }) => setDisplay(Math.round(v)));
+        Animated.timing(anim, {
+            toValue: value,
+            duration: 900,
+            useNativeDriver: false,
+        }).start();
+        const id = anim.addListener(({ value: v }) =>
+            setDisplay(Math.round(v)),
+        );
         return () => anim.removeListener(id);
     }, [value]);
-    return <Text style={style}>{prefix}{display}</Text>;
+    return (
+        <Text style={style}>
+            {prefix}
+            {display}
+        </Text>
+    );
 };
 
 // â”€â”€â”€ Donut Chart (pure RN view layers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -236,9 +327,20 @@ const LeadPieChart = ({ data, size = 162 }) => {
     const total = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
     if (total <= 0) {
         return (
-            <View style={{ width: size, height: size, alignItems:"center", justifyContent:"center" }}>
+            <View
+                style={{
+                    width: size,
+                    height: size,
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}>
                 <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-                    <Circle cx={size/2} cy={size/2} r={(size/2)-8} fill={C.border} />
+                    <Circle
+                        cx={size / 2}
+                        cy={size / 2}
+                        r={size / 2 - 8}
+                        fill={C.border}
+                    />
                 </Svg>
                 <View style={st.pieCenterLabel}>
                     <Text style={st.pieCenterValue}>0</Text>
@@ -251,13 +353,24 @@ const LeadPieChart = ({ data, size = 162 }) => {
     let cumulative = 0;
     const segments = data.map((d, i) => {
         const pct = (Number(d.value) || 0) / total;
-        const seg = { ...d, pct, startPct: cumulative, color: d.color || CHART_COLORS[i % CHART_COLORS.length] };
+        const seg = {
+            ...d,
+            pct,
+            startPct: cumulative,
+            color: d.color || CHART_COLORS[i % CHART_COLORS.length],
+        };
         cumulative += pct;
         return seg;
     });
 
     return (
-        <View style={{ width: size, height: size, alignItems:"center", justifyContent:"center" }}>
+        <View
+            style={{
+                width: size,
+                height: size,
+                alignItems: "center",
+                justifyContent: "center",
+            }}>
             <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
                 <G>
                     {segments.map((seg, i) => {
@@ -266,7 +379,13 @@ const LeadPieChart = ({ data, size = 162 }) => {
                         return (
                             <Path
                                 key={seg.label || i}
-                                d={describeSlice(size / 2, size / 2, size / 2 - 6, start, end)}
+                                d={describeSlice(
+                                    size / 2,
+                                    size / 2,
+                                    size / 2 - 6,
+                                    start,
+                                    end,
+                                )}
                                 fill={seg.color}
                                 stroke={C.surface}
                                 strokeWidth={2}
@@ -284,23 +403,50 @@ const LeadPieChart = ({ data, size = 162 }) => {
 };
 
 const BarChart = ({ data, height = 90, color = C.teal }) => {
-    const max = Math.max(...data.map(d => d.value), 1);
+    const max = Math.max(...data.map((d) => d.value), 1);
     const anims = useRef(data.map(() => new Animated.Value(0))).current;
     useEffect(() => {
-        Animated.stagger(55, data.map((d, i) =>
-            Animated.spring(anims[i], { toValue: d.value / max, useNativeDriver: false, friction: 6 })
-        )).start();
+        Animated.stagger(
+            55,
+            data.map((d, i) =>
+                Animated.spring(anims[i], {
+                    toValue: d.value / max,
+                    useNativeDriver: false,
+                    friction: 6,
+                }),
+            ),
+        ).start();
     }, []);
     return (
-        <View style={{ flexDirection:"row", alignItems:"flex-end", height, gap:5 }}>
+        <View
+            style={{
+                flexDirection: "row",
+                alignItems: "flex-end",
+                height,
+                gap: 5,
+            }}>
             {data.map((d, i) => (
-                <View key={i} style={{ flex:1, alignItems:"center", gap:3 }}>
-                    <Animated.View style={{
-                        width:"80%", borderRadius:5,
-                        backgroundColor: i === data.length-1 ? color : `${color}55`,
-                        height: anims[i].interpolate({ inputRange:[0,1], outputRange:[4, height-20] }),
-                    }} />
-                    <Text style={{ fontSize:9, color:C.textMuted, fontWeight:"600" }}>{d.label}</Text>
+                <View key={i} style={{ flex: 1, alignItems: "center", gap: 3 }}>
+                    <Animated.View
+                        style={{
+                            width: "80%",
+                            borderRadius: 5,
+                            backgroundColor:
+                                i === data.length - 1 ? color : `${color}55`,
+                            height: anims[i].interpolate({
+                                inputRange: [0, 1],
+                                outputRange: [4, height - 20],
+                            }),
+                        }}
+                    />
+                    <Text
+                        style={{
+                            fontSize: 9,
+                            color: C.textMuted,
+                            fontWeight: "600",
+                        }}>
+                        {d.label}
+                    </Text>
                 </View>
             ))}
         </View>
@@ -308,70 +454,139 @@ const BarChart = ({ data, height = 90, color = C.teal }) => {
 };
 
 // â”€â”€â”€ Animated Progress Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const AnimProgressBar = ({ value, total, color, delay=0 }) => {
+const AnimProgressBar = ({ value, total, color, delay = 0 }) => {
     const anim = useRef(new Animated.Value(0)).current;
-    const pct = total > 0 ? Math.min(100, Math.max(3, Math.round((value/total)*100))) : 0;
+    const pct =
+        total > 0
+            ? Math.min(100, Math.max(3, Math.round((value / total) * 100)))
+            : 0;
     useEffect(() => {
         const t = setTimeout(() => {
-            Animated.timing(anim, { toValue: pct, duration: 750, useNativeDriver: false }).start();
+            Animated.timing(anim, {
+                toValue: pct,
+                duration: 750,
+                useNativeDriver: false,
+            }).start();
         }, delay);
         return () => clearTimeout(t);
     }, [pct]);
     return (
         <View style={st.progressTrack}>
-            <Animated.View style={[st.progressFill, {
-                backgroundColor: color,
-                width: anim.interpolate({ inputRange:[0,100], outputRange:["0%","100%"] }),
-            }]} />
+            <Animated.View
+                style={[
+                    st.progressFill,
+                    {
+                        backgroundColor: color,
+                        width: anim.interpolate({
+                            inputRange: [0, 100],
+                            outputRange: ["0%", "100%"],
+                        }),
+                    },
+                ]}
+            />
         </View>
     );
 };
 
 // â”€â”€â”€ Fade + slide in â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const FadeIn = ({ children, delay=0 }) => {
+const FadeIn = ({ children, delay = 0 }) => {
     const opacity = useRef(new Animated.Value(0)).current;
     const translateY = useRef(new Animated.Value(18)).current;
     useEffect(() => {
         const t = setTimeout(() => {
             Animated.parallel([
-                Animated.timing(opacity,    { toValue:1, duration:480, useNativeDriver:true }),
-                Animated.timing(translateY, { toValue:0, duration:480, useNativeDriver:true }),
+                Animated.timing(opacity, {
+                    toValue: 1,
+                    duration: 480,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(translateY, {
+                    toValue: 0,
+                    duration: 480,
+                    useNativeDriver: true,
+                }),
             ]).start();
         }, delay);
         return () => clearTimeout(t);
     }, []);
-    return <Animated.View style={{ opacity, transform:[{translateY}] }}>{children}</Animated.View>;
+    return (
+        <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+            {children}
+        </Animated.View>
+    );
 };
 
 // â”€â”€â”€ Filter Pill â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const FilterPill = ({ label, value, onPress, icon, accent, isOpen }) => (
     <TouchableOpacity
-        style={[st.filterPill, { borderColor:`${accent||C.gold}35`, backgroundColor:`${accent||C.gold}08` }]}
-        onPress={onPress} activeOpacity={0.75}>
-        <Ionicons name={icon} size={13} color={accent||C.gold} />
-        <View style={{flex:1}}>
+        style={[
+            st.filterPill,
+            {
+                borderColor: `${accent || C.gold}35`,
+                backgroundColor: `${accent || C.gold}08`,
+            },
+        ]}
+        onPress={onPress}
+        activeOpacity={0.75}>
+        <Ionicons name={icon} size={13} color={accent || C.gold} />
+        <View style={{ flex: 1 }}>
             <Text style={st.filterPillLabel}>{label}</Text>
-            <Text style={[st.filterPillValue, {color:accent||C.text}]} numberOfLines={1}>{value}</Text>
+            <Text
+                style={[st.filterPillValue, { color: accent || C.text }]}
+                numberOfLines={1}>
+                {value}
+            </Text>
         </View>
-        <Ionicons name={isOpen ? "chevron-up" : "chevron-down"} size={12} color={C.textMuted} />
+        <Ionicons
+            name={isOpen ? "chevron-up" : "chevron-down"}
+            size={12}
+            color={C.textMuted}
+        />
     </TouchableOpacity>
 );
 
-const FilterDropdownMenu = ({ options, selectedValue, onSelect, accent, getOptionLabel }) => (
-    <View style={[st.filterMenu, { borderColor:`${accent||C.gold}30` }]}>
+const FilterDropdownMenu = ({
+    options,
+    selectedValue,
+    onSelect,
+    accent,
+    getOptionLabel,
+}) => (
+    <View style={[st.filterMenu, { borderColor: `${accent || C.gold}30` }]}>
         {options.map((option) => {
             const isSelected = option === selectedValue;
-            const label = typeof getOptionLabel === "function" ? getOptionLabel(option) : option;
+            const label =
+                typeof getOptionLabel === "function"
+                    ? getOptionLabel(option)
+                    : option;
             return (
                 <TouchableOpacity
                     key={option}
-                    style={[st.filterMenuItem, isSelected && { backgroundColor:`${accent||C.gold}14` }]}
+                    style={[
+                        st.filterMenuItem,
+                        isSelected && {
+                            backgroundColor: `${accent || C.gold}14`,
+                        },
+                    ]}
                     onPress={() => onSelect(option)}
                     activeOpacity={0.75}>
-                    <Text style={[st.filterMenuText, isSelected && { color:accent||C.gold, fontWeight:"700" }]}>
+                    <Text
+                        style={[
+                            st.filterMenuText,
+                            isSelected && {
+                                color: accent || C.gold,
+                                fontWeight: "700",
+                            },
+                        ]}>
                         {label}
                     </Text>
-                    {isSelected && <Ionicons name="checkmark" size={14} color={accent||C.gold} />}
+                    {isSelected && (
+                        <Ionicons
+                            name="checkmark"
+                            size={14}
+                            color={accent || C.gold}
+                        />
+                    )}
                 </TouchableOpacity>
             );
         })}
@@ -379,15 +594,21 @@ const FilterDropdownMenu = ({ options, selectedValue, onSelect, accent, getOptio
 );
 
 // â”€â”€â”€ Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const Card = ({ children, style }) => <View style={[st.card, style]}>{children}</View>;
+const Card = ({ children, style }) => (
+    <View style={[st.card, style]}>{children}</View>
+);
 
 const CardHeader = ({ title, icon, accent, right }) => (
     <View style={st.cardHeader}>
-        <View style={[st.cardIconBg, { backgroundColor:`${accent||C.gold}18` }]}>
-            <Ionicons name={icon} size={16} color={accent||C.gold} />
+        <View
+            style={[
+                st.cardIconBg,
+                { backgroundColor: `${accent || C.gold}18` },
+            ]}>
+            <Ionicons name={icon} size={16} color={accent || C.gold} />
         </View>
         <Text style={st.cardTitle}>{title}</Text>
-        {right && <View style={{marginLeft:"auto"}}>{right}</View>}
+        {right && <View style={{ marginLeft: "auto" }}>{right}</View>}
     </View>
 );
 
@@ -395,17 +616,22 @@ const CardHeader = ({ title, icon, accent, right }) => (
 export default function ReportScreen({ navigation }) {
     const insets = useSafeAreaInsets();
     const { user, logout } = useAuth();
-    const selfId = useMemo(() => normalizeId(user?.id || user?._id), [user?.id, user?._id]);
+    const selfId = useMemo(
+        () => normalizeId(user?.id || user?._id),
+        [user?.id, user?._id],
+    );
     const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
     const adminName = useMemo(
-        () => (isStaffUser ? "Admin" : (user?.name || "Admin")),
+        () => (isStaffUser ? "Admin" : user?.name || "Admin"),
         [isStaffUser, user?.name],
     );
     const todayIso = useMemo(() => toIsoDate(new Date()), []);
     const { width: windowWidth } = useWindowDimensions();
     const leadLayoutStacked = windowWidth < 360;
 
-    const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
+    const [selectedDate, setSelectedDate] = useState(() =>
+        toIsoDate(new Date()),
+    );
     const [calendarVisible, setCalendarVisible] = useState(false);
     const [calendarTarget, setCalendarTarget] = useState("from");
     const [menuVisible, setMenuVisible] = useState(false);
@@ -414,39 +640,68 @@ export default function ReportScreen({ navigation }) {
     const [draftToDate, setDraftToDate] = useState(todayIso);
     const [fromDate, setFromDate] = useState(todayIso);
     const [toDate, setToDate] = useState(todayIso);
-    const [staffFilter, setStaffFilter] = useState(user?.role === "Staff" ? (user?.name || "Unassigned") : ALL_STAFF);
+    const [staffFilter, setStaffFilter] = useState(
+        user?.role === "Staff" ? user?.name || "Unassigned" : ALL_STAFF,
+    );
     const [statusFilter, setStatusFilter] = useState(ALL_STATUS);
     const [isLoading, setIsLoading] = useState(true);
-    const [reportData, setReportData] = useState({ enquiries:[], followups:[], callLogs:[] });
+    const [reportData, setReportData] = useState({
+        enquiries: [],
+        followups: [],
+        callLogs: [],
+    });
 
     const loadReportData = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [enqR,fupR,callR] = await Promise.all([
-                getAllEnquiries(1,1000,"","",""),
-                getFollowUps("All",1,1000),
-                getCallLogs({limit:500}),
+            const [enqR, fupR, callR] = await Promise.all([
+                getAllEnquiries(1, 1000, "", "", ""),
+                getFollowUps("All", 1, 1000),
+                getCallLogs({ limit: 500 }),
             ]);
-            setReportData({ enquiries:normalizeList(enqR), followups:normalizeList(fupR), callLogs:normalizeList(callR) });
-        } catch(e) { console.error(e); }
-        finally { setIsLoading(false); }
+            setReportData({
+                enquiries: normalizeList(enqR),
+                followups: normalizeList(fupR),
+                callLogs: normalizeList(callR),
+            });
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setIsLoading(false);
+        }
     }, []);
 
-    useFocusEffect(useCallback(() => { loadReportData(); }, [loadReportData]));
+    useFocusEffect(
+        useCallback(() => {
+            loadReportData();
+        }, [loadReportData]),
+    );
 
     useEffect(() => {
-        const subEnquiry = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () => {
-            loadReportData();
-        });
-        const subFollowup = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () => {
-            loadReportData();
-        });
-        const subCreated = DeviceEventEmitter.addListener("ENQUIRY_CREATED", () => {
-            loadReportData();
-        });
-        const subCall = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-            loadReportData();
-        });
+        const subEnquiry = DeviceEventEmitter.addListener(
+            "ENQUIRY_UPDATED",
+            () => {
+                loadReportData();
+            },
+        );
+        const subFollowup = DeviceEventEmitter.addListener(
+            "FOLLOWUP_CHANGED",
+            () => {
+                loadReportData();
+            },
+        );
+        const subCreated = DeviceEventEmitter.addListener(
+            "ENQUIRY_CREATED",
+            () => {
+                loadReportData();
+            },
+        );
+        const subCall = DeviceEventEmitter.addListener(
+            "CALL_LOG_CREATED",
+            () => {
+                loadReportData();
+            },
+        );
         return () => {
             subEnquiry.remove();
             subFollowup.remove();
@@ -455,36 +710,59 @@ export default function ReportScreen({ navigation }) {
         };
     }, [loadReportData]);
 
-    const filterRange = useMemo(() => buildExplicitDateRange(fromDate, toDate), [fromDate, toDate]);
-    const rangeLabel = useMemo(() => formatAppliedRangeLabel(fromDate, toDate), [fromDate, toDate]);
+    const filterRange = useMemo(
+        () => buildExplicitDateRange(fromDate, toDate),
+        [fromDate, toDate],
+    );
+    const rangeLabel = useMemo(
+        () => formatAppliedRangeLabel(fromDate, toDate),
+        [fromDate, toDate],
+    );
     const hasPendingDateChanges = useMemo(
-        () => !isSameIsoDate(draftFromDate, fromDate) || !isSameIsoDate(draftToDate, toDate),
-        [draftFromDate, draftToDate, fromDate, toDate]
+        () =>
+            !isSameIsoDate(draftFromDate, fromDate) ||
+            !isSameIsoDate(draftToDate, toDate),
+        [draftFromDate, draftToDate, fromDate, toDate],
     );
     const staffOptions = useMemo(() => {
-        const uniqueStaff = Array.from(new Set(
-            [...reportData.enquiries, ...reportData.followups, ...reportData.callLogs]
-                .map((item) => getStaffName(item, adminName))
-                .filter(Boolean)
-        )).sort((a, b) => a.localeCompare(b));
+        const uniqueStaff = Array.from(
+            new Set(
+                [
+                    ...reportData.enquiries,
+                    ...reportData.followups,
+                    ...reportData.callLogs,
+                ]
+                    .map((item) => getStaffName(item, adminName))
+                    .filter(Boolean),
+            ),
+        ).sort((a, b) => a.localeCompare(b));
         if (user?.role === "Staff") {
             return [user?.name || "Staff"];
         }
         return [ALL_STAFF, ...uniqueStaff];
-    }, [adminName, reportData.callLogs, reportData.enquiries, reportData.followups, user?.name, user?.role]);
-    const statusOptions = useMemo(() => [
-        ALL_STATUS,
-        ...REPORT_STATUS_OPTIONS,
-    ], []);
+    }, [
+        adminName,
+        reportData.callLogs,
+        reportData.enquiries,
+        reportData.followups,
+        user?.name,
+        user?.role,
+    ]);
+    const statusOptions = useMemo(
+        () => [ALL_STATUS, ...REPORT_STATUS_OPTIONS],
+        [],
+    );
     useEffect(() => {
         if (user?.role === "Staff") {
             if (user?.name) setStaffFilter(user.name);
         }
     }, [adminName, user?.name, user?.role]);
     const applyDateRange = useCallback(() => {
-        const fromValue = safeDate(draftFromDate) || safeDate(todayIso) || new Date();
+        const fromValue =
+            safeDate(draftFromDate) || safeDate(todayIso) || new Date();
         const toValue = safeDate(draftToDate) || fromValue;
-        const normalizedFrom = fromValue > toValue ? draftToDate : draftFromDate;
+        const normalizedFrom =
+            fromValue > toValue ? draftToDate : draftFromDate;
         const normalizedTo = toValue < fromValue ? draftFromDate : draftToDate;
         setFromDate(normalizedFrom);
         setToDate(normalizedTo);
@@ -499,7 +777,11 @@ export default function ReportScreen({ navigation }) {
             start.setDate(baseDate.getDate() - 6);
             nextFrom = toIsoDate(start);
         } else if (type === "month") {
-            const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+            const start = new Date(
+                baseDate.getFullYear(),
+                baseDate.getMonth(),
+                1,
+            );
             nextFrom = toIsoDate(start);
         }
         setDraftFromDate(nextFrom);
@@ -515,7 +797,11 @@ export default function ReportScreen({ navigation }) {
         const baseDate = new Date();
         const weekStart = new Date(baseDate);
         weekStart.setDate(baseDate.getDate() - 6);
-        const monthStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+        const monthStart = new Date(
+            baseDate.getFullYear(),
+            baseDate.getMonth(),
+            1,
+        );
         const weekStartIso = toIsoDate(weekStart);
         const monthStartIso = toIsoDate(monthStart);
         if (fromDate === today && toDate === today) return "today";
@@ -524,39 +810,95 @@ export default function ReportScreen({ navigation }) {
         return "";
     }, [fromDate, toDate, todayIso]);
 
-    const filteredEnq   = useMemo(() => reportData.enquiries.filter(item => {
-        if (isStaffUser && getStaffId(item) !== selfId) return false;
-        if (!inRange(getEnqDate(item),filterRange)) return false;
-        if (!matchesStaffFilter(item, staffFilter, adminName)) return false;
-        if (!matchesStatusFilter(item, statusFilter)) return false;
-        return true;
-    }), [adminName, filterRange, isStaffUser, reportData.enquiries, selfId, staffFilter, statusFilter]);
+    const filteredEnq = useMemo(
+        () =>
+            reportData.enquiries.filter((item) => {
+                if (isStaffUser && getStaffId(item) !== selfId) return false;
+                if (!inRange(getEnqDate(item), filterRange)) return false;
+                if (!matchesStaffFilter(item, staffFilter, adminName))
+                    return false;
+                if (!matchesStatusFilter(item, statusFilter)) return false;
+                return true;
+            }),
+        [
+            adminName,
+            filterRange,
+            isStaffUser,
+            reportData.enquiries,
+            selfId,
+            staffFilter,
+            statusFilter,
+        ],
+    );
 
-    const filteredFups  = useMemo(() => reportData.followups.filter(item => {
-        if (isStaffUser && getStaffId(item) !== selfId) return false;
-        if (!inRange(getFupDate(item),filterRange)) return false;
-        if (!matchesStaffFilter(item, staffFilter, adminName)) return false;
-        if (!matchesStatusFilter(item, statusFilter)) return false;
-        return true;
-    }), [adminName, filterRange, isStaffUser, reportData.followups, selfId, staffFilter, statusFilter]);
+    const filteredFups = useMemo(
+        () =>
+            reportData.followups.filter((item) => {
+                if (isStaffUser && getStaffId(item) !== selfId) return false;
+                if (!inRange(getFupDate(item), filterRange)) return false;
+                if (!matchesStaffFilter(item, staffFilter, adminName))
+                    return false;
+                if (!matchesStatusFilter(item, statusFilter)) return false;
+                return true;
+            }),
+        [
+            adminName,
+            filterRange,
+            isStaffUser,
+            reportData.followups,
+            selfId,
+            staffFilter,
+            statusFilter,
+        ],
+    );
 
-    const filteredCalls = useMemo(() => reportData.callLogs.filter((item) => {
-        if (isStaffUser && getStaffId(item) !== selfId) return false;
-        if (!inRange(getCallDate(item), filterRange)) return false;
-        if (!matchesStaffFilter(item, staffFilter, adminName)) return false;
-        const itemStatus = getItemStatus(item);
-        if (statusFilter !== ALL_STATUS && itemStatus && itemStatus !== statusFilter) return false;
-        return true;
-    }), [adminName, filterRange, isStaffUser, reportData.callLogs, selfId, staffFilter, statusFilter]);
+    const filteredCalls = useMemo(
+        () =>
+            reportData.callLogs.filter((item) => {
+                if (isStaffUser && getStaffId(item) !== selfId) return false;
+                if (!inRange(getCallDate(item), filterRange)) return false;
+                if (!matchesStaffFilter(item, staffFilter, adminName))
+                    return false;
+                const itemStatus = getItemStatus(item);
+                if (
+                    statusFilter !== ALL_STATUS &&
+                    itemStatus &&
+                    itemStatus !== statusFilter
+                )
+                    return false;
+                return true;
+            }),
+        [
+            adminName,
+            filterRange,
+            isStaffUser,
+            reportData.callLogs,
+            selfId,
+            staffFilter,
+            statusFilter,
+        ],
+    );
 
     const leadM = useMemo(() => {
-        const counts = filteredEnq.reduce((a,i)=>{const k=i?.status||"New";a[k]=(a[k]||0)+1;return a;},{});
+        const counts = filteredEnq.reduce((a, i) => {
+            const k = i?.status || "New";
+            a[k] = (a[k] || 0) + 1;
+            return a;
+        }, {});
         const chartData = [
             { label: "New", value: counts.New || 0, color: C.amber },
             { label: "Connected", value: counts.Contacted || 0, color: C.sky },
-            { label: "Followup", value: counts.Interested || 0, color: C.violet },
+            {
+                label: "Followup",
+                value: counts.Interested || 0,
+                color: C.violet,
+            },
             { label: "Sales", value: counts.Converted || 0, color: C.emerald },
-            { label: "Lost", value: (counts["Not Interested"] || 0) + (counts.Closed || 0), color: C.rose },
+            {
+                label: "Lost",
+                value: (counts["Not Interested"] || 0) + (counts.Closed || 0),
+                color: C.rose,
+            },
         ];
         return {
             total: filteredEnq.length,
@@ -569,7 +911,7 @@ export default function ReportScreen({ navigation }) {
             counts,
             chartData,
         };
-    },[filteredEnq]);
+    }, [filteredEnq]);
 
     const staffPerf = useMemo(() => {
         if (isStaffUser) {
@@ -579,15 +921,23 @@ export default function ReportScreen({ navigation }) {
                     name: selfName,
                     enquiriesCreated: filteredEnq.length,
                     followupsDone: filteredFups.length,
-                    salesLeads: filteredEnq.filter((i) => i?.status === "Converted").length,
+                    salesLeads: filteredEnq.filter(
+                        (i) => i?.status === "Converted",
+                    ).length,
                 },
             ];
         }
 
-        const map={};
+        const map = {};
         const ensure = (name) => {
             const n = normalizeStaffLabel(name, adminName);
-            if (!map[n]) map[n] = { name: n, enquiriesCreated: 0, followupsDone: 0, salesLeads: 0 };
+            if (!map[n])
+                map[n] = {
+                    name: n,
+                    enquiriesCreated: 0,
+                    followupsDone: 0,
+                    salesLeads: 0,
+                };
             return map[n];
         };
 
@@ -597,7 +947,10 @@ export default function ReportScreen({ navigation }) {
             ensure(creator).enquiriesCreated += 1;
 
             // Sales Leads -> credited to assigned staff when converted, else creator/admin
-            const assigneeName = normalizeStaffLabel(i?.assignedTo?.name || i?.assignedToName || "", creator);
+            const assigneeName = normalizeStaffLabel(
+                i?.assignedTo?.name || i?.assignedToName || "",
+                creator,
+            );
             ensure(assigneeName); // ensure assignee row exists even if zero actions yet
             if (i?.status === "Converted") {
                 ensure(assigneeName).salesLeads += 1;
@@ -612,36 +965,53 @@ export default function ReportScreen({ navigation }) {
             );
             ensure(actor).followupsDone += 1;
         });
-        return Object.values(map).sort((a,b)=>{
-            if (b.salesLeads !== a.salesLeads) return b.salesLeads - a.salesLeads;
-            if (b.enquiriesCreated !== a.enquiriesCreated) return b.enquiriesCreated - a.enquiriesCreated;
+        return Object.values(map).sort((a, b) => {
+            if (b.salesLeads !== a.salesLeads)
+                return b.salesLeads - a.salesLeads;
+            if (b.enquiriesCreated !== a.enquiriesCreated)
+                return b.enquiriesCreated - a.enquiriesCreated;
             return b.followupsDone - a.followupsDone;
         });
-    },[adminName, filteredEnq, filteredFups]);
+    }, [adminName, filteredEnq, filteredFups]);
 
     const revenueM = useMemo(() => {
-        const convertedEnquiries = filteredEnq.filter(i => i?.status === "Converted");
-        const total = convertedEnquiries.reduce((s, i) => s + Number(i?.cost || 0), 0);
+        const convertedEnquiries = filteredEnq.filter(
+            (i) => i?.status === "Converted",
+        );
+        const total = convertedEnquiries.reduce(
+            (s, i) => s + Number(i?.cost || 0),
+            0,
+        );
         const anchorDate = safeDate(toDate) || safeDate(fromDate) || new Date();
         const month = reportData.enquiries
-            .filter(i => {
+            .filter((i) => {
                 const d = safeDate(getEnqDate(i));
-                return d
-                    && i?.status === "Converted"
-                    && matchesStaffFilter(i, staffFilter, adminName)
-                    && matchesStatusFilter(i, statusFilter)
-                    && d.getMonth() === anchorDate.getMonth()
-                    && d.getFullYear() === anchorDate.getFullYear();
+                return (
+                    d &&
+                    i?.status === "Converted" &&
+                    matchesStaffFilter(i, staffFilter, adminName) &&
+                    matchesStatusFilter(i, statusFilter) &&
+                    d.getMonth() === anchorDate.getMonth() &&
+                    d.getFullYear() === anchorDate.getFullYear()
+                );
             })
             .reduce((s, i) => s + Number(i?.cost || 0), 0);
         const today = reportData.enquiries
-            .filter(i => i?.status === "Converted")
-            .filter(i => matchesStaffFilter(i, staffFilter, adminName))
-            .filter(i => matchesStatusFilter(i, statusFilter))
-            .filter(i => inRange(getEnqDate(i), toDayRange(toDate)))
+            .filter((i) => i?.status === "Converted")
+            .filter((i) => matchesStaffFilter(i, staffFilter, adminName))
+            .filter((i) => matchesStatusFilter(i, statusFilter))
+            .filter((i) => inRange(getEnqDate(i), toDayRange(toDate)))
             .reduce((s, i) => s + Number(i?.cost || 0), 0);
         return { total, month, today };
-    }, [adminName, filteredEnq, reportData.enquiries, fromDate, toDate, staffFilter, statusFilter]);
+    }, [
+        adminName,
+        filteredEnq,
+        reportData.enquiries,
+        fromDate,
+        toDate,
+        staffFilter,
+        statusFilter,
+    ]);
 
     const exportReport = async () => {
         try {
@@ -658,31 +1028,56 @@ export default function ReportScreen({ navigation }) {
                 Date: formatShortDate(getEnqDate(item)),
                 Cost: Number(item?.cost || 0),
             }));
-            const csvEscape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+            const csvEscape = (value) =>
+                `"${String(value ?? "").replace(/"/g, '""')}"`;
             const csvText = [
-                ["Enquiry No", "Name", "Mobile", "Status", "Staff", "Product", "Source", "Date", "Cost"]
+                [
+                    "Enquiry No",
+                    "Name",
+                    "Mobile",
+                    "Status",
+                    "Staff",
+                    "Product",
+                    "Source",
+                    "Date",
+                    "Cost",
+                ]
                     .map(csvEscape)
                     .join(","),
-                ...leadRows.map((row) => [
-                    row.EnquiryNo,
-                    row.Name,
-                    row.Mobile,
-                    row.Status,
-                    row.Staff,
-                    row.Product,
-                    row.Source,
-                    row.Date,
-                    row.Cost,
-                ].map(csvEscape).join(",")),
+                ...leadRows.map((row) =>
+                    [
+                        row.EnquiryNo,
+                        row.Name,
+                        row.Mobile,
+                        row.Status,
+                        row.Staff,
+                        row.Product,
+                        row.Source,
+                        row.Date,
+                        row.Cost,
+                    ]
+                        .map(csvEscape)
+                        .join(","),
+                ),
             ].join("\n");
-            const fileName = `report-leads-${exportDate}.csv`;
-            const savedFile = await saveCsvToDevice({
-                fileName,
-                content: csvText,
-            });
+	            const fileName = `report-leads-${exportDate}.csv`;
+	            const savedFile = await saveCsvToDevice({
+	                fileName,
+	                content: csvText,
+	            });
 
-            if (savedFile.downloaded) {
-                Alert.alert("Download Complete", `${fileName} saved successfully.`);
+	            Promise.resolve(
+	                notificationService.showReportCsvReadyNotification?.({
+	                    uri: savedFile?.uri,
+	                    fileName,
+	                }),
+	            ).catch(() => {});
+
+	            if (savedFile.downloaded) {
+	                Alert.alert(
+	                    "Download Complete",
+                    `${fileName} saved successfully.`,
+                );
             } else if (available) {
                 await Sharing.shareAsync(savedFile.uri, {
                     mimeType: "text/csv",
@@ -692,9 +1087,12 @@ export default function ReportScreen({ navigation }) {
             } else {
                 Alert.alert("Export Ready", `CSV saved at:\n${savedFile.uri}`);
             }
-        } catch(e){
+        } catch (e) {
             console.error(e);
-            Alert.alert("Export Failed", e?.message || "Unable to export report");
+            Alert.alert(
+                "Export Failed",
+                e?.message || "Unable to export report",
+            );
         }
     };
 
@@ -711,7 +1109,8 @@ export default function ReportScreen({ navigation }) {
                 resolveImageUrl={(value) => value}
             />
 
-            <View style={[st.topHeader, { paddingTop: insets.top > 0 ? 8 : 14 }]}>
+            <View
+                style={[st.topHeader, { paddingTop: insets.top > 0 ? 8 : 14 }]}>
                 <TouchableOpacity
                     style={st.topHeaderBtn}
                     onPress={() => setMenuVisible(true)}
@@ -724,17 +1123,29 @@ export default function ReportScreen({ navigation }) {
                         style={st.exportHeaderBtn}
                         onPress={exportReport}
                         activeOpacity={0.85}>
-                        <Ionicons name="download-outline" size={15} color={C.gold} />
+                        <Ionicons
+                            name="download-outline"
+                            size={15}
+                            color={C.gold}
+                        />
                         <Text style={st.exportHeaderText}>Download CSV</Text>
                     </TouchableOpacity>
                 </View>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[st.scroll, {paddingTop: insets.top > 0 ? 4 : 12}]}>
-
+            <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={[
+                    st.scroll,
+                    { paddingTop: insets.top > 0 ? 4 : 12 },
+                ]}>
                 {/* â”€â”€ HERO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
                 <FadeIn delay={0}>
-                    <LinearGradient colors={["#FBF7F0","#EEE7D8","#E8DEC9"]} start={{x:0,y:0}} end={{x:1,y:1}} style={st.hero}>
+                    <LinearGradient
+                        colors={["#FBF7F0", "#EEE7D8", "#E8DEC9"]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={st.hero}>
                         {/* Decorative circles */}
                         <View style={st.decCircle1} />
                         <View style={st.decCircle2} />
@@ -743,27 +1154,72 @@ export default function ReportScreen({ navigation }) {
                             <View>
                                 <View style={st.heroPill}>
                                     <View style={st.heroPillDot} />
-                                    <Text style={st.heroPillText}>CRM Analytics</Text>
+                                    <Text style={st.heroPillText}>
+                                        CRM Analytics
+                                    </Text>
                                 </View>
                                 <Text style={st.heroTitle}>Reports</Text>
-                                <Text style={st.heroSub}>{rangeLabel} - {filteredEnq.length} leads</Text>
+                                <Text style={st.heroSub}>
+                                    {rangeLabel} - {filteredEnq.length} leads
+                                </Text>
                             </View>
                         </View>
 
                         {/* 4-KPI strip */}
                         <View style={st.heroKpis}>
                             {[
-                                {label:"Leads",      value:leadM.total,          color:C.gold,    icon:"people-outline"},
-                                {label:"Sales",      value:leadM.converted,      color:C.emerald, icon:"checkmark-circle-outline"},
-                                {label:"Interested", value:leadM.qualified,      color:C.sky,     icon:"sparkles-outline"},
-                                {label:"Revenue",    value:fmt(revenueM.total),  color:C.violet,  icon:"cash-outline"},
-                            ].map((k,i) => (
-                                <View key={i} style={[st.heroKpi, i<3 && st.heroKpiBorder]}>
-                                    <View style={[st.heroKpiIcon,{backgroundColor:`${k.color}20`}]}>
-                                        <Ionicons name={k.icon} size={12} color={k.color} />
+                                {
+                                    label: "Leads",
+                                    value: leadM.total,
+                                    color: C.gold,
+                                    icon: "people-outline",
+                                },
+                                {
+                                    label: "Sales",
+                                    value: leadM.converted,
+                                    color: C.emerald,
+                                    icon: "checkmark-circle-outline",
+                                },
+                                {
+                                    label: "Interested",
+                                    value: leadM.qualified,
+                                    color: C.sky,
+                                    icon: "sparkles-outline",
+                                },
+                                {
+                                    label: "Revenue",
+                                    value: fmt(revenueM.total),
+                                    color: C.violet,
+                                    icon: "cash-outline",
+                                },
+                            ].map((k, i) => (
+                                <View
+                                    key={i}
+                                    style={[
+                                        st.heroKpi,
+                                        i < 3 && st.heroKpiBorder,
+                                    ]}>
+                                    <View
+                                        style={[
+                                            st.heroKpiIcon,
+                                            { backgroundColor: `${k.color}20` },
+                                        ]}>
+                                        <Ionicons
+                                            name={k.icon}
+                                            size={12}
+                                            color={k.color}
+                                        />
                                     </View>
-                                    <Text style={[st.heroKpiVal,{color:k.color}]}>{k.value}</Text>
-                                    <Text style={st.heroKpiLabel}>{k.label}</Text>
+                                    <Text
+                                        style={[
+                                            st.heroKpiVal,
+                                            { color: k.color },
+                                        ]}>
+                                        {k.value}
+                                    </Text>
+                                    <Text style={st.heroKpiLabel}>
+                                        {k.label}
+                                    </Text>
                                 </View>
                             ))}
                         </View>
@@ -774,41 +1230,94 @@ export default function ReportScreen({ navigation }) {
                 <FadeIn delay={70}>
                     <Card>
                         <View style={st.filterCardTop}>
-                            <Ionicons name="calendar-outline" size={15} color={C.gold} />
-                            <Text style={st.filterCardTitle}>Report Filters</Text>
+                            <Ionicons
+                                name="calendar-outline"
+                                size={15}
+                                color={C.gold}
+                            />
+                            <Text style={st.filterCardTitle}>
+                                Report Filters
+                            </Text>
                         </View>
                         <View style={st.rangeSummary}>
                             <View style={st.rangeSummaryMain}>
-                                <Text style={st.rangeSummaryLabel}>Applied Range</Text>
-                                <Text style={st.rangeSummaryValue}>{rangeLabel}</Text>
+                                <Text style={st.rangeSummaryLabel}>
+                                    Applied Range
+                                </Text>
+                                <Text style={st.rangeSummaryValue}>
+                                    {rangeLabel}
+                                </Text>
                             </View>
                             {hasPendingDateChanges ? (
                                 <View style={st.pendingBadge}>
-                                    <Text style={st.pendingBadgeText}>Pending changes</Text>
+                                    <Text style={st.pendingBadgeText}>
+                                        Pending changes
+                                    </Text>
                                 </View>
                             ) : null}
                         </View>
                         <View style={st.dayActions}>
                             <TouchableOpacity
-                                style={[st.todayBtn, activeQuickRange === "today" && st.quickRangeBtnActive]}
+                                style={[
+                                    st.todayBtn,
+                                    activeQuickRange === "today" &&
+                                        st.quickRangeBtnActive,
+                                ]}
                                 onPress={() => {
                                     setQuickRange("today");
                                 }}
                                 activeOpacity={0.8}>
-                                <Ionicons name="flash-outline" size={14} color={activeQuickRange === "today" ? "#FFFFFF" : C.gold} />
-                                <Text style={[st.todayBtnText, activeQuickRange === "today" && st.quickRangeBtnTextActive]}>Today</Text>
+                                <Ionicons
+                                    name="flash-outline"
+                                    size={14}
+                                    color={
+                                        activeQuickRange === "today"
+                                            ? "#FFFFFF"
+                                            : C.gold
+                                    }
+                                />
+                                <Text
+                                    style={[
+                                        st.todayBtnText,
+                                        activeQuickRange === "today" &&
+                                            st.quickRangeBtnTextActive,
+                                    ]}>
+                                    Today
+                                </Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[st.quickRangeBtn, activeQuickRange === "week" && st.quickRangeBtnActive]}
+                                style={[
+                                    st.quickRangeBtn,
+                                    activeQuickRange === "week" &&
+                                        st.quickRangeBtnActive,
+                                ]}
                                 onPress={() => setQuickRange("week")}
                                 activeOpacity={0.8}>
-                                <Text style={[st.quickRangeBtnText, activeQuickRange === "week" && st.quickRangeBtnTextActive]}>Last 7 Days</Text>
+                                <Text
+                                    style={[
+                                        st.quickRangeBtnText,
+                                        activeQuickRange === "week" &&
+                                            st.quickRangeBtnTextActive,
+                                    ]}>
+                                    Last 7 Days
+                                </Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[st.quickRangeBtn, activeQuickRange === "month" && st.quickRangeBtnActive]}
+                                style={[
+                                    st.quickRangeBtn,
+                                    activeQuickRange === "month" &&
+                                        st.quickRangeBtnActive,
+                                ]}
                                 onPress={() => setQuickRange("month")}
                                 activeOpacity={0.8}>
-                                <Text style={[st.quickRangeBtnText, activeQuickRange === "month" && st.quickRangeBtnTextActive]}>This Month</Text>
+                                <Text
+                                    style={[
+                                        st.quickRangeBtnText,
+                                        activeQuickRange === "month" &&
+                                            st.quickRangeBtnTextActive,
+                                    ]}>
+                                    This Month
+                                </Text>
                             </TouchableOpacity>
                         </View>
                         <View style={st.filterGroup}>
@@ -823,7 +1332,9 @@ export default function ReportScreen({ navigation }) {
                                             setCalendarVisible(true);
                                         }}
                                         activeOpacity={0.85}>
-                                        <Text style={st.dateInputText}>{formatShortDate(draftFromDate)}</Text>
+                                        <Text style={st.dateInputText}>
+                                            {formatShortDate(draftFromDate)}
+                                        </Text>
                                     </TouchableOpacity>
                                 </View>
                                 <View style={st.dateWrap}>
@@ -836,7 +1347,9 @@ export default function ReportScreen({ navigation }) {
                                             setCalendarVisible(true);
                                         }}
                                         activeOpacity={0.85}>
-                                        <Text style={st.dateInputText}>{formatShortDate(draftToDate)}</Text>
+                                        <Text style={st.dateInputText}>
+                                            {formatShortDate(draftToDate)}
+                                        </Text>
                                     </TouchableOpacity>
                                 </View>
                             </View>
@@ -844,8 +1357,14 @@ export default function ReportScreen({ navigation }) {
                                 style={st.applyFilterBtn}
                                 onPress={applyDateRange}
                                 activeOpacity={0.85}>
-                                <Ionicons name="filter-outline" size={15} color="#FFFFFF" />
-                                <Text style={st.applyFilterText}>Apply Filter</Text>
+                                <Ionicons
+                                    name="filter-outline"
+                                    size={15}
+                                    color="#FFFFFF"
+                                />
+                                <Text style={st.applyFilterText}>
+                                    Apply Filter
+                                </Text>
                             </TouchableOpacity>
                         </View>
                         <View style={st.filterGrid}>
@@ -856,7 +1375,11 @@ export default function ReportScreen({ navigation }) {
                                     icon="person-outline"
                                     accent={C.sky}
                                     isOpen={openFilterMenu === "staff"}
-                                    onPress={() => setOpenFilterMenu((prev) => prev === "staff" ? null : "staff")}
+                                    onPress={() =>
+                                        setOpenFilterMenu((prev) =>
+                                            prev === "staff" ? null : "staff",
+                                        )
+                                    }
                                 />
                                 {openFilterMenu === "staff" ? (
                                     <FilterDropdownMenu
@@ -873,17 +1396,31 @@ export default function ReportScreen({ navigation }) {
                             <View style={st.filterGroup}>
                                 <FilterPill
                                     label="Status"
-                                    value={statusFilter === ALL_STATUS ? ALL_STATUS : displayStatusLabel(statusFilter)}
+                                    value={
+                                        statusFilter === ALL_STATUS
+                                            ? ALL_STATUS
+                                            : displayStatusLabel(statusFilter)
+                                    }
                                     icon="git-branch-outline"
                                     accent={C.emerald}
                                     isOpen={openFilterMenu === "status"}
-                                    onPress={() => setOpenFilterMenu((prev) => prev === "status" ? null : "status")}
+                                    onPress={() =>
+                                        setOpenFilterMenu((prev) =>
+                                            prev === "status" ? null : "status",
+                                        )
+                                    }
                                 />
                                 {openFilterMenu === "status" ? (
                                     <FilterDropdownMenu
                                         options={statusOptions}
                                         selectedValue={statusFilter}
-                                        getOptionLabel={(option) => option === ALL_STATUS ? ALL_STATUS : (option === "Contacted" ? "Connected" : displayStatusLabel(option))}
+                                        getOptionLabel={(option) =>
+                                            option === ALL_STATUS
+                                                ? ALL_STATUS
+                                                : option === "Contacted"
+                                                  ? "Connected"
+                                                  : displayStatusLabel(option)
+                                        }
                                         onSelect={(option) => {
                                             setStatusFilter(option);
                                             setOpenFilterMenu(null);
@@ -912,15 +1449,23 @@ export default function ReportScreen({ navigation }) {
                             <View style={st.calendarModalHeader}>
                                 <View>
                                     <Text style={st.calendarModalTitle}>
-                                        {calendarTarget === "from" ? "Select From Date" : "Select To Date"}
+                                        {calendarTarget === "from"
+                                            ? "Select From Date"
+                                            : "Select To Date"}
                                     </Text>
-                                    <Text style={st.calendarModalSub}>{formatDayLabel(selectedDate)}</Text>
+                                    <Text style={st.calendarModalSub}>
+                                        {formatDayLabel(selectedDate)}
+                                    </Text>
                                 </View>
                                 <TouchableOpacity
                                     style={st.calendarCloseBtn}
                                     onPress={() => setCalendarVisible(false)}
                                     activeOpacity={0.8}>
-                                    <Ionicons name="close" size={18} color={C.text} />
+                                    <Ionicons
+                                        name="close"
+                                        size={18}
+                                        color={C.text}
+                                    />
                                 </TouchableOpacity>
                             </View>
                             <Calendar
@@ -937,7 +1482,9 @@ export default function ReportScreen({ navigation }) {
                                     }
                                 }}
                                 markedDates={{
-                                    [calendarTarget === "from" ? draftFromDate : draftToDate]: {
+                                    [calendarTarget === "from"
+                                        ? draftFromDate
+                                        : draftToDate]: {
                                         selected: true,
                                         selectedColor: C.gold,
                                         selectedTextColor: "#FFFFFF",
@@ -968,13 +1515,22 @@ export default function ReportScreen({ navigation }) {
 
                 {isLoading ? (
                     <SkeletonPulse>
-                        <View style={{ paddingHorizontal: 16, paddingTop: 4, gap: 12 }}>
+                        <View
+                            style={{
+                                paddingHorizontal: 16,
+                                paddingTop: 4,
+                                gap: 12,
+                            }}>
                             <SkeletonCard style={{ borderRadius: 20 }}>
                                 <SkeletonLine width="46%" height={14} />
                                 <SkeletonSpacer h={14} />
                                 <SkeletonBox height={140} radius={18} />
                                 <SkeletonSpacer h={14} />
-                                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                                <View
+                                    style={{
+                                        flexDirection: "row",
+                                        justifyContent: "space-between",
+                                    }}>
                                     <SkeletonLine width="28%" height={10} />
                                     <SkeletonLine width="20%" height={10} />
                                     <SkeletonLine width="16%" height={10} />
@@ -990,116 +1546,334 @@ export default function ReportScreen({ navigation }) {
                 ) : (
                     <>
                         {/* â”€â”€ LEAD OVERVIEW â€” Donut + Legend + Bars â”€â”€ */}
-	                        <FadeIn delay={100}>
-	                            <Card>
-	                                <CardHeader title="Lead Overview" icon="people-outline" accent={C.sky} />
-	                                <Text style={st.subHeading}>Lead Status Overview</Text>
-	                                <View style={[st.donutRow, leadLayoutStacked && st.donutRowStacked]}>
-	                                    <View style={st.donutChartWrap}>
-	                                        <LeadPieChart size={162} data={leadM.chartData} />
-	                                    </View>
-	                                    <View style={[st.donutLegend, leadLayoutStacked && st.donutLegendStacked]}>
-	                                        {leadM.chartData.map(item => (
-	                                            <View
-	                                                key={item.label}
-	                                                style={[st.legendRow, { borderColor:`${item.color}20`, backgroundColor:`${item.color}08` }]}>
-	                                                <View style={[st.legendDot,{backgroundColor:item.color}]} />
-	                                                <Text
-	                                                    style={st.legendLabel}
-	                                                    numberOfLines={1}
-	                                                    ellipsizeMode="tail"
-	                                                >
-	                                                    {item.label}
-	                                                </Text>
-	                                                <Text style={[st.legendVal,{color:item.color}]}>{item.value}</Text>
-	                                            </View>
-	                                        ))}
-	                                    </View>
-	                                </View>
+                        <FadeIn delay={100}>
+                            <Card>
+                                <CardHeader
+                                    title="Lead Overview"
+                                    icon="people-outline"
+                                    accent={C.sky}
+                                />
+                                <Text style={st.subHeading}>
+                                    Lead Status Overview
+                                </Text>
+                                <View
+                                    style={[
+                                        st.donutRow,
+                                        leadLayoutStacked && st.donutRowStacked,
+                                    ]}>
+                                    <View style={st.donutChartWrap}>
+                                        <LeadPieChart
+                                            size={162}
+                                            data={leadM.chartData}
+                                        />
+                                    </View>
+                                    <View
+                                        style={[
+                                            st.donutLegend,
+                                            leadLayoutStacked &&
+                                                st.donutLegendStacked,
+                                        ]}>
+                                        {leadM.chartData.map((item) => (
+                                            <View
+                                                key={item.label}
+                                                style={[
+                                                    st.legendRow,
+                                                    {
+                                                        borderColor: `${item.color}20`,
+                                                        backgroundColor: `${item.color}08`,
+                                                    },
+                                                ]}>
+                                                <View
+                                                    style={[
+                                                        st.legendDot,
+                                                        {
+                                                            backgroundColor:
+                                                                item.color,
+                                                        },
+                                                    ]}
+                                                />
+                                                <Text
+                                                    style={st.legendLabel}
+                                                    numberOfLines={1}
+                                                    ellipsizeMode="tail">
+                                                    {item.label}
+                                                </Text>
+                                                <Text
+                                                    style={[
+                                                        st.legendVal,
+                                                        { color: item.color },
+                                                    ]}>
+                                                    {item.value}
+                                                </Text>
+                                            </View>
+                                        ))}
+                                    </View>
+                                </View>
                                 {/* Status breakdown bars */}
                                 <View style={st.divider} />
-                                <Text style={st.subHeading}>Status Breakdown</Text>
-                                {Object.entries(leadM.counts).map(([lbl,val],i)=>(
-                                    <View key={lbl} style={st.pRow}>
-                                        <View style={st.pLabelRow}>
-                                            <Text style={st.pLabel}>{displayStatusLabel(lbl)}</Text>
-                                            <Text style={[st.pValText,{color:statusColor(lbl)}]}>{val}</Text>
+                                <Text style={st.subHeading}>
+                                    Status Breakdown
+                                </Text>
+                                {Object.entries(leadM.counts).map(
+                                    ([lbl, val], i) => (
+                                        <View key={lbl} style={st.pRow}>
+                                            <View style={st.pLabelRow}>
+                                                <Text style={st.pLabel}>
+                                                    {displayStatusLabel(lbl)}
+                                                </Text>
+                                                <Text
+                                                    style={[
+                                                        st.pValText,
+                                                        {
+                                                            color: statusColor(
+                                                                lbl,
+                                                            ),
+                                                        },
+                                                    ]}>
+                                                    {val}
+                                                </Text>
+                                            </View>
+                                            <AnimProgressBar
+                                                value={val}
+                                                total={leadM.total || 1}
+                                                color={statusColor(lbl)}
+                                                delay={i * 80}
+                                            />
                                         </View>
-                                        <AnimProgressBar value={val} total={leadM.total||1} color={statusColor(lbl)} delay={i*80} />
-                                    </View>
-                                ))}
+                                    ),
+                                )}
                             </Card>
                         </FadeIn>
 
                         {/* â”€â”€ TEAM PERFORMANCE â€” colored table â”€â”€ */}
                         <FadeIn delay={140}>
                             <Card>
-                                <CardHeader title="Staff Performance Report" icon="podium-outline" accent={C.rose} />
+                                <CardHeader
+                                    title="Staff Performance Report"
+                                    icon="podium-outline"
+                                    accent={C.rose}
+                                />
                                 <View style={st.tableHead}>
-                                    {["Staff Name","Enquiries Created","Followups Done","Sales Leads"].map((h,i)=>(
-                                        <Text key={h} style={[st.thCell, i===0&&st.thNameCell]}>{h}</Text>
+                                    {[
+                                        "Staff Name",
+                                        "Enquiries Created",
+                                        "Followups Done",
+                                        "Sales Leads",
+                                    ].map((h, i) => (
+                                        <Text
+                                            key={h}
+                                            style={[
+                                                st.thCell,
+                                                i === 0 && st.thNameCell,
+                                            ]}>
+                                            {h}
+                                        </Text>
                                     ))}
                                 </View>
-                                {staffPerf.length===0
-                                    ? <Text style={st.emptyNote}>No performance data</Text>
-                                    : staffPerf.map((item,idx)=>(
-                                        <View key={item.name} style={[st.tableRow, idx%2===1&&{backgroundColor:`${C.gold}08`}]}>
-                                            <View style={[st.thNameCell,{flexDirection:"row",alignItems:"center",gap:8}]}>
-                                                <View style={[st.teamAvatar,{backgroundColor:`${CHART_COLORS[idx%CHART_COLORS.length]}22`}]}>
-                                                    <Text style={[st.teamAvatarText,{color:CHART_COLORS[idx%CHART_COLORS.length]}]}>
-                                                        {(item.name[0]||"?").toUpperCase()}
+                                {staffPerf.length === 0 ? (
+                                    <Text style={st.emptyNote}>
+                                        No performance data
+                                    </Text>
+                                ) : (
+                                    staffPerf.map((item, idx) => (
+                                        <View
+                                            key={item.name}
+                                            style={[
+                                                st.tableRow,
+                                                idx % 2 === 1 && {
+                                                    backgroundColor: `${C.gold}08`,
+                                                },
+                                            ]}>
+                                            <View
+                                                style={[
+                                                    st.thNameCell,
+                                                    {
+                                                        flexDirection: "row",
+                                                        alignItems: "center",
+                                                        gap: 8,
+                                                    },
+                                                ]}>
+                                                <View
+                                                    style={[
+                                                        st.teamAvatar,
+                                                        {
+                                                            backgroundColor: `${CHART_COLORS[idx % CHART_COLORS.length]}22`,
+                                                        },
+                                                    ]}>
+                                                    <Text
+                                                        style={[
+                                                            st.teamAvatarText,
+                                                            {
+                                                                color: CHART_COLORS[
+                                                                    idx %
+                                                                        CHART_COLORS.length
+                                                                ],
+                                                            },
+                                                        ]}>
+                                                        {(
+                                                            item.name[0] || "?"
+                                                        ).toUpperCase()}
                                                     </Text>
                                                 </View>
-                                                <Text style={st.tdName} numberOfLines={1}>{item.name}</Text>
+                                                <Text
+                                                    style={st.tdName}
+                                                    numberOfLines={1}>
+                                                    {item.name}
+                                                </Text>
                                             </View>
-                                            <Text style={st.tdCell}>{item.enquiriesCreated}</Text>
-                                            <Text style={st.tdCell}>{item.followupsDone}</Text>
-                                            <View style={[st.tdCell,{alignItems:"center"}]}>
-                                                <View style={[st.wonBadge,{backgroundColor:item.salesLeads>0?C.emeraldLight:C.border}]}>
-                                                    <Text style={[st.wonText,{color:item.salesLeads>0?C.emerald:C.textMuted}]}>{item.salesLeads}</Text>
+                                            <Text style={st.tdCell}>
+                                                {item.enquiriesCreated}
+                                            </Text>
+                                            <Text style={st.tdCell}>
+                                                {item.followupsDone}
+                                            </Text>
+                                            <View
+                                                style={[
+                                                    st.tdCell,
+                                                    { alignItems: "center" },
+                                                ]}>
+                                                <View
+                                                    style={[
+                                                        st.wonBadge,
+                                                        {
+                                                            backgroundColor:
+                                                                item.salesLeads >
+                                                                0
+                                                                    ? C.emeraldLight
+                                                                    : C.border,
+                                                        },
+                                                    ]}>
+                                                    <Text
+                                                        style={[
+                                                            st.wonText,
+                                                            {
+                                                                color:
+                                                                    item.salesLeads >
+                                                                    0
+                                                                        ? C.emerald
+                                                                        : C.textMuted,
+                                                            },
+                                                        ]}>
+                                                        {item.salesLeads}
+                                                    </Text>
                                                 </View>
                                             </View>
                                         </View>
                                     ))
-                                }
+                                )}
                             </Card>
                         </FadeIn>
 
                         {/* â”€â”€ REVENUE â€” gradient hero + 2 stat cards â”€â”€ */}
                         <FadeIn delay={180}>
                             <Card>
-                                <CardHeader title="Revenue" icon="cash-outline" accent={C.emerald} />
-                                <LinearGradient colors={["#EEF9F3","#E2F5EA"]} start={{x:0,y:0}} end={{x:1,y:1}} style={st.revHero}>
+                                <CardHeader
+                                    title="Revenue"
+                                    icon="cash-outline"
+                                    accent={C.emerald}
+                                />
+                                <LinearGradient
+                                    colors={["#EEF9F3", "#E2F5EA"]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={st.revHero}>
                                     <View style={st.revHeroInner}>
-                                        <Text style={st.revLabel}>Total Revenue</Text>
-                                        <Text style={st.revValue}>{fmt(revenueM.total)}</Text>
+                                        <Text style={st.revLabel}>
+                                            Total Revenue
+                                        </Text>
+                                        <Text style={st.revValue}>
+                                            {fmt(revenueM.total)}
+                                        </Text>
                                         <View style={st.revSubRow}>
-                                            <Ionicons name="arrow-up-outline" size={12} color={C.emerald} />
-                                            <Text style={[st.revSubText,{color:C.emerald}]}>This month: {fmt(revenueM.month)}</Text>
+                                            <Ionicons
+                                                name="arrow-up-outline"
+                                                size={12}
+                                                color={C.emerald}
+                                            />
+                                            <Text
+                                                style={[
+                                                    st.revSubText,
+                                                    { color: C.emerald },
+                                                ]}>
+                                                This month:{" "}
+                                                {fmt(revenueM.month)}
+                                            </Text>
                                         </View>
-                                        <Text style={st.revTodayText}>Selected day: {fmt(revenueM.today)}</Text>
+                                        <Text style={st.revTodayText}>
+                                            Selected day: {fmt(revenueM.today)}
+                                        </Text>
                                     </View>
                                 </LinearGradient>
                                 <View style={st.revStatRow}>
                                     {[
-                                        {label:"Sales Deals",  value:leadM.converted, color:C.emerald, icon:"checkmark-circle-outline", isNum:true},
-                                        {label:"Avg Deal Value",   value:leadM.converted>0?fmt(Math.round(revenueM.total/leadM.converted)):fmt(0), color:C.gold, icon:"trending-up-outline", isNum:false},
-                                    ].map((s,i)=>(
-                                        <View key={i} style={[st.revStat,{backgroundColor:`${s.color}0E`,borderColor:`${s.color}25`}]}>
-                                            <Ionicons name={s.icon} size={20} color={s.color} />
-                                            {s.isNum
-                                                ? <AnimCounter value={s.value} style={[st.revStatVal,{color:s.color}]} />
-                                                : <Text style={[st.revStatVal,{color:s.color}]}>{s.value}</Text>
-                                            }
-                                            <Text style={st.revStatLabel}>{s.label}</Text>
+                                        {
+                                            label: "Sales Deals",
+                                            value: leadM.converted,
+                                            color: C.emerald,
+                                            icon: "checkmark-circle-outline",
+                                            isNum: true,
+                                        },
+                                        {
+                                            label: "Avg Deal Value",
+                                            value:
+                                                leadM.converted > 0
+                                                    ? fmt(
+                                                          Math.round(
+                                                              revenueM.total /
+                                                                  leadM.converted,
+                                                          ),
+                                                      )
+                                                    : fmt(0),
+                                            color: C.gold,
+                                            icon: "trending-up-outline",
+                                            isNum: false,
+                                        },
+                                    ].map((s, i) => (
+                                        <View
+                                            key={i}
+                                            style={[
+                                                st.revStat,
+                                                {
+                                                    backgroundColor: `${s.color}0E`,
+                                                    borderColor: `${s.color}25`,
+                                                },
+                                            ]}>
+                                            <Ionicons
+                                                name={s.icon}
+                                                size={20}
+                                                color={s.color}
+                                            />
+                                            {s.isNum ? (
+                                                <AnimCounter
+                                                    value={s.value}
+                                                    style={[
+                                                        st.revStatVal,
+                                                        { color: s.color },
+                                                    ]}
+                                                />
+                                            ) : (
+                                                <Text
+                                                    style={[
+                                                        st.revStatVal,
+                                                        { color: s.color },
+                                                    ]}>
+                                                    {s.value}
+                                                </Text>
+                                            )}
+                                            <Text style={st.revStatLabel}>
+                                                {s.label}
+                                            </Text>
                                         </View>
                                     ))}
                                 </View>
-                                <Text style={st.helperNote}>* Based on cost values from converted enquiries in your CRM.</Text>
+                                <Text style={st.helperNote}>
+                                    * Based on cost values from converted
+                                    enquiries in your CRM.
+                                </Text>
                             </Card>
                         </FadeIn>
 
-                        <View style={{height:20}} />
+                        <View style={{ height: 20 }} />
                     </>
                 )}
             </ScrollView>
@@ -1108,8 +1882,8 @@ export default function ReportScreen({ navigation }) {
 }
 
 const st = StyleSheet.create({
-    container: { flex:1, backgroundColor:C.bg },
-    scroll: { paddingHorizontal:14, paddingBottom:40, gap:14 },
+    container: { flex: 1, backgroundColor: C.bg },
+    scroll: { paddingHorizontal: 14, paddingBottom: 40, gap: 14 },
     topHeader: {
         backgroundColor: C.surface,
         flexDirection: "row",
@@ -1194,25 +1968,96 @@ const st = StyleSheet.create({
     },
 
     // Hero
-    hero: { borderRadius:24, padding:20, gap:14, borderWidth:1, borderColor:C.border, overflow:"hidden", position:"relative" },
-    decCircle1: { position:"absolute", width:160, height:160, borderRadius:80, borderWidth:1.5, borderColor:`${C.gold}20`, right:-40, top:-40 },
-    decCircle2: { position:"absolute", width:90,  height:90,  borderRadius:45, borderWidth:1,   borderColor:`${C.gold}15`, right:10,  top:30  },
-    heroTop: { flexDirection:"row", justifyContent:"space-between", alignItems:"flex-start" },
-    heroPill: { flexDirection:"row", alignItems:"center", gap:5, marginBottom:5 },
-    heroPillDot: { width:6, height:6, borderRadius:3, backgroundColor:C.gold },
-    heroPillText: { fontSize:10, fontWeight:"700", color:C.gold, letterSpacing:1.3, textTransform:"uppercase" },
-    heroTitle: { fontSize:36, fontWeight:"800", color:C.text, letterSpacing:-0.8 },
-    heroSub: { fontSize:13, color:C.textSec, marginTop:2 },
-    heroKpis: { flexDirection:"row", backgroundColor:"rgba(255,255,255,0.75)", borderRadius:18, borderWidth:1, borderColor:C.border, overflow:"hidden" },
-    heroKpi: { flex:1, alignItems:"center", paddingVertical:11, gap:3 },
-    heroKpiBorder: { borderRightWidth:1, borderRightColor:C.border },
-    heroKpiIcon: { width:24, height:24, borderRadius:12, alignItems:"center", justifyContent:"center", marginBottom:1 },
-    heroKpiVal: { fontSize:13, fontWeight:"800" },
-    heroKpiLabel: { fontSize:9, color:C.textMuted, fontWeight:"600", textTransform:"uppercase", letterSpacing:0.4 },
+    hero: {
+        borderRadius: 24,
+        padding: 20,
+        gap: 14,
+        borderWidth: 1,
+        borderColor: C.border,
+        overflow: "hidden",
+        position: "relative",
+    },
+    decCircle1: {
+        position: "absolute",
+        width: 160,
+        height: 160,
+        borderRadius: 80,
+        borderWidth: 1.5,
+        borderColor: `${C.gold}20`,
+        right: -40,
+        top: -40,
+    },
+    decCircle2: {
+        position: "absolute",
+        width: 90,
+        height: 90,
+        borderRadius: 45,
+        borderWidth: 1,
+        borderColor: `${C.gold}15`,
+        right: 10,
+        top: 30,
+    },
+    heroTop: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "flex-start",
+    },
+    heroPill: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        marginBottom: 5,
+    },
+    heroPillDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: C.gold,
+    },
+    heroPillText: {
+        fontSize: 10,
+        fontWeight: "700",
+        color: C.gold,
+        letterSpacing: 1.3,
+        textTransform: "uppercase",
+    },
+    heroTitle: {
+        fontSize: 36,
+        fontWeight: "800",
+        color: C.text,
+        letterSpacing: -0.8,
+    },
+    heroSub: { fontSize: 13, color: C.textSec, marginTop: 2 },
+    heroKpis: {
+        flexDirection: "row",
+        backgroundColor: "rgba(255,255,255,0.75)",
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: C.border,
+        overflow: "hidden",
+    },
+    heroKpi: { flex: 1, alignItems: "center", paddingVertical: 11, gap: 3 },
+    heroKpiBorder: { borderRightWidth: 1, borderRightColor: C.border },
+    heroKpiIcon: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 1,
+    },
+    heroKpiVal: { fontSize: 13, fontWeight: "800" },
+    heroKpiLabel: {
+        fontSize: 9,
+        color: C.textMuted,
+        fontWeight: "600",
+        textTransform: "uppercase",
+        letterSpacing: 0.4,
+    },
 
     // Filters
-    filterCardTop: { flexDirection:"row", alignItems:"center", gap:8 },
-    filterCardTitle: { fontSize:16, fontWeight:"700", color:C.text },
+    filterCardTop: { flexDirection: "row", alignItems: "center", gap: 8 },
+    filterCardTitle: { fontSize: 16, fontWeight: "700", color: C.text },
     rangeSummary: {
         flexDirection: "row",
         alignItems: "center",
@@ -1226,8 +2071,19 @@ const st = StyleSheet.create({
         paddingVertical: 12,
     },
     rangeSummaryMain: { flex: 1 },
-    rangeSummaryLabel: { fontSize: 11, fontWeight: "700", color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.6 },
-    rangeSummaryValue: { fontSize: 15, fontWeight: "800", color: C.text, marginTop: 4 },
+    rangeSummaryLabel: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+    },
+    rangeSummaryValue: {
+        fontSize: 15,
+        fontWeight: "800",
+        color: C.text,
+        marginTop: 4,
+    },
     pendingBadge: {
         borderRadius: 999,
         backgroundColor: `${C.rose}12`,
@@ -1237,7 +2093,7 @@ const st = StyleSheet.create({
         paddingVertical: 6,
     },
     pendingBadgeText: { fontSize: 11, fontWeight: "700", color: C.rose },
-    dayNav: { flexDirection:"row", alignItems:"center", gap:12 },
+    dayNav: { flexDirection: "row", alignItems: "center", gap: 12 },
     dayNavBtn: {
         width: 40,
         height: 40,
@@ -1248,9 +2104,20 @@ const st = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
-    dayNavCenter: { flex:1, alignItems:"center", justifyContent:"center" },
-    dayNavLabel: { fontSize:11, fontWeight:"700", color:C.textMuted, textTransform:"uppercase", letterSpacing:0.6 },
-    dayNavValue: { fontSize:15, fontWeight:"800", color:C.text, marginTop:4 },
+    dayNavCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
+    dayNavLabel: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+    },
+    dayNavValue: {
+        fontSize: 15,
+        fontWeight: "800",
+        color: C.text,
+        marginTop: 4,
+    },
     calendarTrigger: {
         flexDirection: "row",
         alignItems: "center",
@@ -1263,7 +2130,7 @@ const st = StyleSheet.create({
         paddingHorizontal: 14,
         paddingVertical: 12,
     },
-    calendarTriggerText: { fontSize:13, fontWeight:"700", color:C.gold },
+    calendarTriggerText: { fontSize: 13, fontWeight: "700", color: C.gold },
     calendarWrap: {
         borderRadius: 18,
         overflow: "hidden",
@@ -1298,8 +2165,8 @@ const st = StyleSheet.create({
         alignItems: "center",
         justifyContent: "space-between",
     },
-    calendarModalTitle: { fontSize:17, fontWeight:"800", color:C.text },
-    calendarModalSub: { fontSize:12, color:C.textSec, marginTop:4 },
+    calendarModalTitle: { fontSize: 17, fontWeight: "800", color: C.text },
+    calendarModalSub: { fontSize: 12, color: C.textSec, marginTop: 4 },
     calendarCloseBtn: {
         width: 36,
         height: 36,
@@ -1310,11 +2177,16 @@ const st = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
-    dayActions: { flexDirection:"row", alignItems:"center", gap:10, flexWrap:"wrap" },
+    dayActions: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        flexWrap: "wrap",
+    },
     todayBtn: {
-        flexDirection:"row",
-        alignItems:"center",
-        gap:6,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: `${C.gold}35`,
@@ -1331,25 +2203,64 @@ const st = StyleSheet.create({
         paddingVertical: 10,
     },
     quickRangeBtnText: { fontSize: 12, fontWeight: "700", color: C.sky },
-    todayBtnText: { fontSize:13, fontWeight:"700", color:C.gold },
+    todayBtnText: { fontSize: 13, fontWeight: "700", color: C.gold },
     quickRangeBtnActive: {
         backgroundColor: C.sky,
         borderColor: C.sky,
     },
     quickRangeBtnTextActive: { color: "#FFFFFF" },
-    filterGrid: { gap:10 },
-    filterGroup: { gap:6 },
-    filterPill: { flexDirection:"row", alignItems:"center", gap:10, borderRadius:14, borderWidth:1, paddingHorizontal:12, paddingVertical:10 },
-    filterPillLabel: { fontSize:10, fontWeight:"700", color:C.textMuted, textTransform:"uppercase", letterSpacing:0.6 },
-    filterPillValue: { fontSize:14, fontWeight:"700", marginTop:1 },
-    filterMenu: { borderRadius:12, borderWidth:1, backgroundColor:C.surfaceWarm, overflow:"hidden" },
-    filterMenuItem: { flexDirection:"row", alignItems:"center", justifyContent:"space-between", paddingHorizontal:12, paddingVertical:10, borderBottomWidth:1, borderBottomColor:C.border },
-    filterMenuText: { fontSize:13, color:C.textSec, fontWeight:"600" },
-    dateRow: { flexDirection:"row", gap:10 },
-    dateWrap: { flex:1, gap:4 },
-    dateLabel: { fontSize:11, fontWeight:"700", color:C.textMuted, textTransform:"uppercase" },
-    dateInput: { backgroundColor:C.bg, borderRadius:12, borderWidth:1, borderColor:C.border, paddingHorizontal:12, paddingVertical:10 },
-    dateInputText: { color:C.text, fontSize:14, fontWeight:"700" },
+    filterGrid: { gap: 10 },
+    filterGroup: { gap: 6 },
+    filterPill: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        borderRadius: 14,
+        borderWidth: 1,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+    },
+    filterPillLabel: {
+        fontSize: 10,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+    },
+    filterPillValue: { fontSize: 14, fontWeight: "700", marginTop: 1 },
+    filterMenu: {
+        borderRadius: 12,
+        borderWidth: 1,
+        backgroundColor: C.surfaceWarm,
+        overflow: "hidden",
+    },
+    filterMenuItem: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: C.border,
+    },
+    filterMenuText: { fontSize: 13, color: C.textSec, fontWeight: "600" },
+    dateRow: { flexDirection: "row", gap: 10 },
+    dateWrap: { flex: 1, gap: 4 },
+    dateLabel: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+    },
+    dateInput: {
+        backgroundColor: C.bg,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: C.border,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+    },
+    dateInputText: { color: C.text, fontSize: 14, fontWeight: "700" },
     applyFilterBtn: {
         marginTop: 10,
         flexDirection: "row",
@@ -1364,18 +2275,47 @@ const st = StyleSheet.create({
     applyFilterText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
 
     // Card base
-    card: { backgroundColor:C.surface, borderRadius:22, borderWidth:1, borderColor:C.border, padding:16, gap:14, shadowColor:"#A09070", shadowOffset:{width:0,height:3}, shadowOpacity:0.07, shadowRadius:10, elevation:2 },
-    cardHeader: { flexDirection:"row", alignItems:"center", gap:10 },
-    cardIconBg: { width:32, height:32, borderRadius:11, alignItems:"center", justifyContent:"center" },
-    cardTitle: { fontSize:17, fontWeight:"800", color:C.text, flex:1 },
-    divider: { height:1, backgroundColor:C.border },
-    subHeading: { fontSize:11, fontWeight:"700", color:C.textMuted, textTransform:"uppercase", letterSpacing:0.8 },
+    card: {
+        backgroundColor: C.surface,
+        borderRadius: 22,
+        borderWidth: 1,
+        borderColor: C.border,
+        padding: 16,
+        gap: 14,
+        shadowColor: "#A09070",
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.07,
+        shadowRadius: 10,
+        elevation: 2,
+    },
+    cardHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+    cardIconBg: {
+        width: 32,
+        height: 32,
+        borderRadius: 11,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    cardTitle: { fontSize: 17, fontWeight: "800", color: C.text, flex: 1 },
+    divider: { height: 1, backgroundColor: C.border },
+    subHeading: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+        letterSpacing: 0.8,
+    },
 
     // Lead overview
-    donutRow: { flexDirection:"row", alignItems:"center", gap:18, paddingVertical:4 },
-    donutRowStacked: { flexDirection:"column", alignItems:"stretch" },
+    donutRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 18,
+        paddingVertical: 4,
+    },
+    donutRowStacked: { flexDirection: "column", alignItems: "stretch" },
     donutChartWrap: { alignSelf: "center" },
-    donutLegend: { flex:1, gap:10 },
+    donutLegend: { flex: 1, gap: 10 },
     donutLegendStacked: { width: "100%" },
     pieCenterLabel: {
         position: "absolute",
@@ -1397,88 +2337,224 @@ const st = StyleSheet.create({
         marginTop: 2,
     },
     legendRow: {
-        flexDirection:"row",
-        alignItems:"center",
-        gap:8,
-        borderRadius:14,
-        borderWidth:1,
-        paddingHorizontal:12,
-        paddingVertical:10,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        borderRadius: 14,
+        borderWidth: 1,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
     },
-    legendDot: { width:9, height:9, borderRadius:5 },
-    legendLabel: { flex:1, flexShrink: 1, fontSize:13, color:C.textSec, fontWeight:"600" },
-    legendVal: { fontSize:14, fontWeight:"800" },
+    legendDot: { width: 9, height: 9, borderRadius: 5 },
+    legendLabel: {
+        flex: 1,
+        flexShrink: 1,
+        fontSize: 13,
+        color: C.textSec,
+        fontWeight: "600",
+    },
+    legendVal: { fontSize: 14, fontWeight: "800" },
 
     // Progress rows
-    pRow: { gap:6 },
-    pLabelRow: { flexDirection:"row", justifyContent:"space-between" },
-    pLabel: { fontSize:13, color:C.textSec, fontWeight:"500" },
-    pValText: { fontSize:13, fontWeight:"700" },
-    progressTrack: { height:7, borderRadius:999, backgroundColor:C.bg, overflow:"hidden" },
-    progressFill: { height:"100%", borderRadius:999 },
+    pRow: { gap: 6 },
+    pLabelRow: { flexDirection: "row", justifyContent: "space-between" },
+    pLabel: { fontSize: 13, color: C.textSec, fontWeight: "500" },
+    pValText: { fontSize: 13, fontWeight: "700" },
+    progressTrack: {
+        height: 7,
+        borderRadius: 999,
+        backgroundColor: C.bg,
+        overflow: "hidden",
+    },
+    progressFill: { height: "100%", borderRadius: 999 },
 
     // 2Ã—2 Tiles
-    tileGrid: { flexDirection:"row", flexWrap:"wrap", gap:10 },
-    tile: { minWidth:"47%", flex:1, borderRadius:18, borderWidth:1, padding:14, gap:6 },
-    tileIcon: { width:32, height:32, borderRadius:12, alignItems:"center", justifyContent:"center", marginBottom:2 },
-    tileValue: { fontSize:28, fontWeight:"800" },
-    tileLabel: { fontSize:11, fontWeight:"600", color:C.textSec, textTransform:"uppercase", letterSpacing:0.5 },
-    completionWrap: { borderRadius:14, padding:12, gap:8 },
-    completionLabel: { fontSize:13, fontWeight:"600", color:C.textSec },
+    tileGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+    tile: {
+        minWidth: "47%",
+        flex: 1,
+        borderRadius: 18,
+        borderWidth: 1,
+        padding: 14,
+        gap: 6,
+    },
+    tileIcon: {
+        width: 32,
+        height: 32,
+        borderRadius: 12,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 2,
+    },
+    tileValue: { fontSize: 28, fontWeight: "800" },
+    tileLabel: {
+        fontSize: 11,
+        fontWeight: "600",
+        color: C.textSec,
+        textTransform: "uppercase",
+        letterSpacing: 0.5,
+    },
+    completionWrap: { borderRadius: 14, padding: 12, gap: 8 },
+    completionLabel: { fontSize: 13, fontWeight: "600", color: C.textSec },
 
     // Conversion funnel
-    rateBadge: { paddingHorizontal:10, paddingVertical:5, borderRadius:999 },
-    rateBadgeText: { fontSize:12, fontWeight:"800" },
-    funnelOuter: { alignItems:"center" },
-    funnelBar: { flexDirection:"row", alignItems:"center", justifyContent:"center", gap:8, paddingVertical:12, paddingHorizontal:16, borderRadius:16, borderWidth:1 },
-    funnelBarLabel: { fontSize:13, fontWeight:"700", flex:1 },
-    funnelBarVal: { fontSize:18, fontWeight:"800" },
+    rateBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
+    rateBadgeText: { fontSize: 12, fontWeight: "800" },
+    funnelOuter: { alignItems: "center" },
+    funnelBar: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 16,
+        borderWidth: 1,
+    },
+    funnelBarLabel: { fontSize: 13, fontWeight: "700", flex: 1 },
+    funnelBarVal: { fontSize: 18, fontWeight: "800" },
 
     // Call stats
-    callStatRow: { flexDirection:"row", gap:8 },
-    callStat: { flex:1, borderRadius:16, borderWidth:1, padding:12, alignItems:"center", gap:4 },
-    callStatIcon: { width:30, height:30, borderRadius:15, alignItems:"center", justifyContent:"center", marginBottom:2 },
-    callStatVal: { fontSize:22, fontWeight:"800" },
-    callStatLabel: { fontSize:10, fontWeight:"600", color:C.textMuted, textTransform:"uppercase" },
-    avgDurBadge: { flexDirection:"row", alignItems:"center", gap:6, padding:10, borderRadius:12 },
-    avgDurText: { fontSize:13, fontWeight:"700" },
+    callStatRow: { flexDirection: "row", gap: 8 },
+    callStat: {
+        flex: 1,
+        borderRadius: 16,
+        borderWidth: 1,
+        padding: 12,
+        alignItems: "center",
+        gap: 4,
+    },
+    callStatIcon: {
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 2,
+    },
+    callStatVal: { fontSize: 22, fontWeight: "800" },
+    callStatLabel: {
+        fontSize: 10,
+        fontWeight: "600",
+        color: C.textMuted,
+        textTransform: "uppercase",
+    },
+    avgDurBadge: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        padding: 10,
+        borderRadius: 12,
+    },
+    avgDurText: { fontSize: 13, fontWeight: "700" },
 
     // Lead Sources
-    sourceRow: { flexDirection:"row", alignItems:"center", gap:10 },
-    sourceRank: { width:26, height:26, borderRadius:13, alignItems:"center", justifyContent:"center" },
-    sourceRankText: { fontSize:11, fontWeight:"800" },
-    sourceLabelRow: { flexDirection:"row", justifyContent:"space-between" },
-    sourceLabel: { fontSize:13, color:C.textSec, fontWeight:"500" },
-    sourceVal: { fontSize:13, fontWeight:"800" },
+    sourceRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+    sourceRank: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    sourceRankText: { fontSize: 11, fontWeight: "800" },
+    sourceLabelRow: { flexDirection: "row", justifyContent: "space-between" },
+    sourceLabel: { fontSize: 13, color: C.textSec, fontWeight: "500" },
+    sourceVal: { fontSize: 13, fontWeight: "800" },
 
     // Team table
-    tableHead: { flexDirection:"row", paddingBottom:10, borderBottomWidth:1, borderBottomColor:C.border },
-    thCell: { flex:1, fontSize:10, fontWeight:"700", color:C.textMuted, textTransform:"uppercase", textAlign:"center", letterSpacing:0.5 },
-    thNameCell: { flex:2, textAlign:"left" },
-    tableRow: { flexDirection:"row", paddingVertical:10, alignItems:"center", borderRadius:10 },
-    tdCell: { flex:1, fontSize:13, color:C.textSec, fontWeight:"600", textAlign:"center" },
-    tdName: { fontSize:13, fontWeight:"700", color:C.text, flex:1 },
-    teamAvatar: { width:28, height:28, borderRadius:14, alignItems:"center", justifyContent:"center" },
-    teamAvatarText: { fontSize:12, fontWeight:"800" },
-    wonBadge: { paddingHorizontal:10, paddingVertical:4, borderRadius:999 },
-    wonText: { fontSize:12, fontWeight:"800" },
+    tableHead: {
+        flexDirection: "row",
+        paddingBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: C.border,
+    },
+    thCell: {
+        flex: 1,
+        fontSize: 10,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+        textAlign: "center",
+        letterSpacing: 0.5,
+    },
+    thNameCell: { flex: 2, textAlign: "left" },
+    tableRow: {
+        flexDirection: "row",
+        paddingVertical: 10,
+        alignItems: "center",
+        borderRadius: 10,
+    },
+    tdCell: {
+        flex: 1,
+        fontSize: 13,
+        color: C.textSec,
+        fontWeight: "600",
+        textAlign: "center",
+    },
+    tdName: { fontSize: 13, fontWeight: "700", color: C.text, flex: 1 },
+    teamAvatar: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    teamAvatarText: { fontSize: 12, fontWeight: "800" },
+    wonBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+    wonText: { fontSize: 12, fontWeight: "800" },
 
     // Revenue
-    revHero: { borderRadius:18, padding:16, borderWidth:1, borderColor:`${C.emerald}25`, flexDirection:"row", alignItems:"center" },
-    revHeroInner: { flex:1, gap:3 },
-    revLabel: { fontSize:11, fontWeight:"700", color:C.teal, textTransform:"uppercase", letterSpacing:0.8 },
-    revValue: { fontSize:32, fontWeight:"800", color:C.emerald },
-    revSubRow: { flexDirection:"row", alignItems:"center", gap:4 },
-    revSubText: { fontSize:13, fontWeight:"600" },
-    revTodayText: { fontSize:12, fontWeight:"700", color:C.textSec, marginTop:4 },
-    revStatRow: { flexDirection:"row", gap:10 },
-    revStat: { flex:1, borderRadius:16, borderWidth:1, padding:14, alignItems:"center", gap:6 },
-    revStatVal: { fontSize:18, fontWeight:"800" },
-    revStatLabel: { fontSize:11, fontWeight:"600", color:C.textSec, textAlign:"center" },
-    helperNote: { fontSize:11, color:C.textMuted, lineHeight:16 },
+    revHero: {
+        borderRadius: 18,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: `${C.emerald}25`,
+        flexDirection: "row",
+        alignItems: "center",
+    },
+    revHeroInner: { flex: 1, gap: 3 },
+    revLabel: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.teal,
+        textTransform: "uppercase",
+        letterSpacing: 0.8,
+    },
+    revValue: { fontSize: 32, fontWeight: "800", color: C.emerald },
+    revSubRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+    revSubText: { fontSize: 13, fontWeight: "600" },
+    revTodayText: {
+        fontSize: 12,
+        fontWeight: "700",
+        color: C.textSec,
+        marginTop: 4,
+    },
+    revStatRow: { flexDirection: "row", gap: 10 },
+    revStat: {
+        flex: 1,
+        borderRadius: 16,
+        borderWidth: 1,
+        padding: 14,
+        alignItems: "center",
+        gap: 6,
+    },
+    revStatVal: { fontSize: 18, fontWeight: "800" },
+    revStatLabel: {
+        fontSize: 11,
+        fontWeight: "600",
+        color: C.textSec,
+        textAlign: "center",
+    },
+    helperNote: { fontSize: 11, color: C.textMuted, lineHeight: 16 },
 
     // Loading / empty
-    loadingWrap: { paddingVertical:80, alignItems:"center", gap:12 },
-    loadingText: { fontSize:14, color:C.textMuted, fontWeight:"600" },
-    emptyNote: { fontSize:13, color:C.textMuted, textAlign:"center", paddingVertical:10 },
+    loadingWrap: { paddingVertical: 80, alignItems: "center", gap: 12 },
+    loadingText: { fontSize: 14, color: C.textMuted, fontWeight: "600" },
+    emptyNote: {
+        fontSize: 13,
+        color: C.textMuted,
+        textAlign: "center",
+        paddingVertical: 10,
+    },
 });

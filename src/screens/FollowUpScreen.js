@@ -960,13 +960,14 @@ const statusCfg = (s) => {
   }
 };
 const normalizeStatus = (s) => {
-  const r = String(s || "")
-    .trim()
-    .toLowerCase();
-  if (r === "in progress" || r === "contacted") return "Contacted";
-  if (r === "dropped" || r === "drop" || r === "not interested")
-    return "Not Interested";
-  if (r === "new") return "New";
+	  const r = String(s || "")
+	    .trim()
+	    .toLowerCase();
+	  if (r === "missed") return "Missed";
+	  if (r === "in progress" || r === "contacted") return "Contacted";
+	  if (r === "dropped" || r === "drop" || r === "not interested")
+	    return "Not Interested";
+	  if (r === "new") return "New";
   if (r === "interested") return "Interested";
   if (r === "converted") return "Converted";
   if (r === "closed") return "Closed";
@@ -1110,19 +1111,20 @@ const mapEnquiryToFollowUpCard = (item = {}) => ({
   isVirtualNew: true,
 });
 const getHistoryEditStatus = (item = {}) => {
-  const explicit = normalizeStatus(item?.enquiryStatus || item?.status || "");
-  if (
-    [
-      "New",
-      "Contacted",
-      "Interested",
-      "Not Interested",
-      "Converted",
-      "Closed",
-    ].includes(explicit)
-  ) {
-    return explicit;
-  }
+	  const explicit = normalizeStatus(item?.enquiryStatus || item?.status || "");
+	  if (
+	    [
+	      "New",
+	      "Contacted",
+	      "Interested",
+	      "Not Interested",
+	      "Missed",
+	      "Converted",
+	      "Closed",
+	    ].includes(explicit)
+	  ) {
+	    return explicit;
+	  }
   const nextAction = String(item?.nextAction || "")
     .trim()
     .toLowerCase();
@@ -1132,12 +1134,13 @@ const getHistoryEditStatus = (item = {}) => {
   return "Contacted";
 };
 const getCalendarSummaryBucket = (item = {}) => {
-  const status = getHistoryEditStatus(item);
-  if (["New", "Contacted", "Interested"].includes(status)) return "followup";
-  if (status === "Converted") return "sales";
-  if (status === "Closed") return "drop";
-  if (status === "Not Interested") return "notInterested";
-  return "followup";
+	  const status = getHistoryEditStatus(item);
+	  if (status === "Missed") return "missed";
+	  if (["New", "Contacted", "Interested"].includes(status)) return "followup";
+	  if (status === "Converted") return "sales";
+	  if (status === "Closed") return "drop";
+	  if (status === "Not Interested") return "notInterested";
+	  return "followup";
 };
 const toTs = (value) => {
   if (!value) return 0;
@@ -4014,22 +4017,23 @@ export default function FollowUpScreen({ navigation, route }) {
       try {
         const allRes = await followupService.getFollowUps("All", 1, 500, "");
         if (!active) return;
-        const allItems = Array.isArray(allRes?.data) ? allRes.data : [];
-        const summary = {};
-        allItems.forEach((item) => {
-          const iso = getFollowUpCalendarDate(item);
-          if (!iso || toMonthKey(iso) !== calendarMonth) return;
-          if (!summary[iso]) {
-            summary[iso] = {
-              followup: 0,
-              sales: 0,
-              drop: 0,
-              notInterested: 0,
-            };
-          }
-          const bucket = getCalendarSummaryBucket(item);
-          summary[iso][bucket] += 1;
-        });
+	        const allItems = Array.isArray(allRes?.data) ? allRes.data : [];
+	        const summary = {};
+	        allItems.forEach((item) => {
+	          const iso = getFollowUpCalendarDate(item);
+	          if (!iso || toMonthKey(iso) !== calendarMonth) return;
+	          if (!summary[iso]) {
+	            summary[iso] = {
+	              followup: 0,
+	              missed: 0,
+	              sales: 0,
+	              drop: 0,
+	              notInterested: 0,
+	            };
+	          }
+	          const bucket = getCalendarSummaryBucket(item);
+	          summary[iso][bucket] += 1;
+	        });
         setCalendarDateSummary(summary);
       } catch (_error) {
         if (active) setCalendarDateSummary({});
@@ -4752,14 +4756,15 @@ export default function FollowUpScreen({ navigation, route }) {
               }}
               enableSwipeMonths
               hideExtraDays
-              dayComponent={({ date, state }) => {
-                const iso = date?.dateString || "";
-                const summary = calendarDateSummary[iso] || {
-                  followup: 0,
-                  sales: 0,
-                  drop: 0,
-                  notInterested: 0,
-                };
+	              dayComponent={({ date, state }) => {
+	                const iso = date?.dateString || "";
+	                const summary = calendarDateSummary[iso] || {
+	                  followup: 0,
+	                  missed: 0,
+	                  sales: 0,
+	                  drop: 0,
+	                  notInterested: 0,
+	                };
                 const target =
                   datePickerTarget === "filter"
                     ? selectedDate
@@ -4786,31 +4791,48 @@ export default function FollowUpScreen({ navigation, route }) {
                     >
                       {date?.day}
                     </Text>
-                    <View style={MS.calCountRow}>
-                      {summary.followup > 0 ? (
-                        <View
-                          style={[
-                            MS.calCountBadge,
-                            isSelected && MS.calCountBadgeSelected,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              MS.calCountBadgeText,
-                              isSelected && MS.calCountBadgeTextSelected,
-                            ]}
-                          >
-                            F+{summary.followup}
-                          </Text>
-                        </View>
-                      ) : null}
-                      {summary.sales > 0 ? (
-                        <View
-                          style={[
-                            MS.calSalesBadge,
-                            isSelected && MS.calStatusBadgeSelected,
-                          ]}
-                        >
+	                    <View style={MS.calCountRow}>
+	                      {summary.followup > 0 ? (
+	                        <View
+	                          style={[
+	                            MS.calCountBadge,
+	                            isSelected && MS.calCountBadgeSelected,
+	                          ]}
+	                        >
+	                          <Text
+	                            style={[
+	                              MS.calCountBadgeText,
+	                              isSelected && MS.calCountBadgeTextSelected,
+	                            ]}
+	                          >
+	                            F+{summary.followup}
+	                          </Text>
+	                        </View>
+	                      ) : null}
+	                      {summary.missed > 0 ? (
+	                        <View
+	                          style={[
+	                            MS.calMissedBadge,
+	                            isSelected && MS.calStatusBadgeSelected,
+	                          ]}
+	                        >
+	                          <Text
+	                            style={[
+	                              MS.calMissedBadgeText,
+	                              isSelected && MS.calStatusBadgeTextSelected,
+	                            ]}
+	                          >
+	                            M+{summary.missed}
+	                          </Text>
+	                        </View>
+	                      ) : null}
+	                      {summary.sales > 0 ? (
+	                        <View
+	                          style={[
+	                            MS.calSalesBadge,
+	                            isSelected && MS.calStatusBadgeSelected,
+	                          ]}
+	                        >
                           <Text
                             style={[
                               MS.calSalesBadgeText,
@@ -5215,21 +5237,32 @@ const MS = StyleSheet.create({
     fontWeight: "800",
     color: C.primaryDark,
   },
-  calCountBadgeTextSelected: {
-    color: "#fff",
-  },
-  calStatusBadgeSelected: {
-    backgroundColor: "rgba(255,255,255,0.22)",
-  },
-  calStatusBadgeTextSelected: {
-    color: "#fff",
-  },
-  calSalesBadge: {
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 999,
-    backgroundColor: "#DCFCE7",
-  },
+	  calCountBadgeTextSelected: {
+	    color: "#fff",
+	  },
+	  calStatusBadgeSelected: {
+	    backgroundColor: "rgba(255,255,255,0.22)",
+	  },
+	  calStatusBadgeTextSelected: {
+	    color: "#fff",
+	  },
+	  calMissedBadge: {
+	    paddingHorizontal: 4,
+	    paddingVertical: 1,
+	    borderRadius: 999,
+	    backgroundColor: "#FEE2E2",
+	  },
+	  calMissedBadgeText: {
+	    fontSize: 8,
+	    fontWeight: "800",
+	    color: C.danger,
+	  },
+	  calSalesBadge: {
+	    paddingHorizontal: 4,
+	    paddingVertical: 1,
+	    borderRadius: 999,
+	    backgroundColor: "#DCFCE7",
+	  },
   calSalesBadgeText: {
     fontSize: 8,
     fontWeight: "800",
