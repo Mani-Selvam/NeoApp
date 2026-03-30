@@ -135,7 +135,20 @@ const inRange = (v, r) => { if (!r) return true; const p=safeDate(v); if (!p) re
 const getEnqDate  = (i) => i?.enquiryDateTime||i?.date||i?.createdAt||null;
 const getFupDate  = (i) => i?.nextFollowUpDate||i?.followUpDate||i?.date||i?.createdAt||null;
 const getCallDate = (i) => i?.callTime||i?.createdAt||null;
-const getStaffName = (item) => item?.assignedTo?.name || item?.staffName || item?.assignedToName || "Unassigned";
+const normalizeStaffLabel = (name, adminName = "Admin") => {
+    const v = String(name || "").trim();
+    if (!v || v === "Unassigned") return adminName;
+    return v;
+};
+const getStaffName = (item, adminName = "Admin") =>
+    normalizeStaffLabel(
+        item?.staffName ||
+        item?.assignedTo?.name ||
+        item?.assignedToName ||
+        item?.enqBy ||
+        "Unassigned",
+        adminName,
+    );
 const normalizeStatusValue = (status) => {
     if (!status) return "";
     if (status === "Sales") return "Converted";
@@ -168,8 +181,8 @@ const getStaffId = (item) =>
         item?.enquiryId?.assignedTo?._id ||
         item?.enquiryId?.assignedTo
     );
-const matchesStaffFilter = (item, staffFilter) => (
-    staffFilter === ALL_STAFF || getStaffName(item) === staffFilter
+const matchesStaffFilter = (item, staffFilter, adminName) => (
+    staffFilter === ALL_STAFF || getStaffName(item, adminName) === staffFilter
 );
 const matchesStatusFilter = (item, statusFilter) => (
     statusFilter === ALL_STATUS || getItemStatus(item) === statusFilter
@@ -384,6 +397,10 @@ export default function ReportScreen({ navigation }) {
     const { user, logout } = useAuth();
     const selfId = useMemo(() => normalizeId(user?.id || user?._id), [user?.id, user?._id]);
     const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
+    const adminName = useMemo(
+        () => (isStaffUser ? "Admin" : (user?.name || "Admin")),
+        [isStaffUser, user?.name],
+    );
     const todayIso = useMemo(() => toIsoDate(new Date()), []);
     const { width: windowWidth } = useWindowDimensions();
     const leadLayoutStacked = windowWidth < 360;
@@ -447,23 +464,23 @@ export default function ReportScreen({ navigation }) {
     const staffOptions = useMemo(() => {
         const uniqueStaff = Array.from(new Set(
             [...reportData.enquiries, ...reportData.followups, ...reportData.callLogs]
-                .map((item) => getStaffName(item))
+                .map((item) => getStaffName(item, adminName))
                 .filter(Boolean)
         )).sort((a, b) => a.localeCompare(b));
         if (user?.role === "Staff") {
-            return [user?.name || uniqueStaff[0] || "Unassigned"];
+            return [user?.name || uniqueStaff[0] || adminName];
         }
         return [ALL_STAFF, ...uniqueStaff];
-    }, [reportData.callLogs, reportData.enquiries, reportData.followups, user?.name, user?.role]);
+    }, [adminName, reportData.callLogs, reportData.enquiries, reportData.followups, user?.name, user?.role]);
     const statusOptions = useMemo(() => [
         ALL_STATUS,
         ...REPORT_STATUS_OPTIONS,
     ], []);
     useEffect(() => {
         if (user?.role === "Staff") {
-            setStaffFilter(user?.name || "Unassigned");
+            setStaffFilter(user?.name || adminName);
         }
-    }, [user?.name, user?.role]);
+    }, [adminName, user?.name, user?.role]);
     const applyDateRange = useCallback(() => {
         const fromValue = safeDate(draftFromDate) || safeDate(todayIso) || new Date();
         const toValue = safeDate(draftToDate) || fromValue;
@@ -510,27 +527,27 @@ export default function ReportScreen({ navigation }) {
     const filteredEnq   = useMemo(() => reportData.enquiries.filter(item => {
         if (isStaffUser && getStaffId(item) !== selfId) return false;
         if (!inRange(getEnqDate(item),filterRange)) return false;
-        if (!matchesStaffFilter(item, staffFilter)) return false;
+        if (!matchesStaffFilter(item, staffFilter, adminName)) return false;
         if (!matchesStatusFilter(item, statusFilter)) return false;
         return true;
-    }), [filterRange, isStaffUser, reportData.enquiries, selfId, staffFilter, statusFilter]);
+    }), [adminName, filterRange, isStaffUser, reportData.enquiries, selfId, staffFilter, statusFilter]);
 
     const filteredFups  = useMemo(() => reportData.followups.filter(item => {
         if (isStaffUser && getStaffId(item) !== selfId) return false;
         if (!inRange(getFupDate(item),filterRange)) return false;
-        if (!matchesStaffFilter(item, staffFilter)) return false;
+        if (!matchesStaffFilter(item, staffFilter, adminName)) return false;
         if (!matchesStatusFilter(item, statusFilter)) return false;
         return true;
-    }), [filterRange, isStaffUser, reportData.followups, selfId, staffFilter, statusFilter]);
+    }), [adminName, filterRange, isStaffUser, reportData.followups, selfId, staffFilter, statusFilter]);
 
     const filteredCalls = useMemo(() => reportData.callLogs.filter((item) => {
         if (isStaffUser && getStaffId(item) !== selfId) return false;
         if (!inRange(getCallDate(item), filterRange)) return false;
-        if (!matchesStaffFilter(item, staffFilter)) return false;
+        if (!matchesStaffFilter(item, staffFilter, adminName)) return false;
         const itemStatus = getItemStatus(item);
         if (statusFilter !== ALL_STATUS && itemStatus && itemStatus !== statusFilter) return false;
         return true;
-    }), [filterRange, isStaffUser, reportData.callLogs, selfId, staffFilter, statusFilter]);
+    }), [adminName, filterRange, isStaffUser, reportData.callLogs, selfId, staffFilter, statusFilter]);
 
     const leadM = useMemo(() => {
         const counts = filteredEnq.reduce((a,i)=>{const k=i?.status||"New";a[k]=(a[k]||0)+1;return a;},{});
@@ -556,23 +573,38 @@ export default function ReportScreen({ navigation }) {
 
     const staffPerf = useMemo(() => {
         const map={};
-        filteredEnq.forEach(i=>{
-            const n=getStaffName(i);
-            if(!map[n]) map[n]={name:n,enquiriesCreated:0,followupsDone:0,salesLeads:0};
-            map[n].enquiriesCreated++;
-            if (i?.status === "Converted") map[n].salesLeads++;
+        const ensure = (name) => {
+            const n = normalizeStaffLabel(name, adminName);
+            if (!map[n]) map[n] = { name: n, enquiriesCreated: 0, followupsDone: 0, salesLeads: 0 };
+            return map[n];
+        };
+
+        // Enquiries Created -> credited to enquiry creator (adminName when admin created)
+        filteredEnq.forEach((i) => {
+            const creator = normalizeStaffLabel(i?.enqBy || "", adminName);
+            ensure(creator).enquiriesCreated += 1;
+
+            // Sales Leads -> credited to assigned staff when converted, else creator/admin
+            if (i?.status === "Converted") {
+                const assignee = normalizeStaffLabel(i?.assignedTo?.name || i?.assignedToName || "", creator);
+                ensure(assignee).salesLeads += 1;
+            }
         });
-        filteredFups.forEach(i=>{
-            const n=getStaffName(i);
-            if(!map[n]) map[n]={name:n,enquiriesCreated:0,followupsDone:0,salesLeads:0};
-            map[n].followupsDone++;
+
+        // Followups Done -> credited to followup creator (staffName first)
+        filteredFups.forEach((i) => {
+            const actor = normalizeStaffLabel(
+                i?.staffName || i?.assignedTo?.name || i?.assignedToName || "",
+                adminName,
+            );
+            ensure(actor).followupsDone += 1;
         });
         return Object.values(map).sort((a,b)=>{
             if (b.salesLeads !== a.salesLeads) return b.salesLeads - a.salesLeads;
             if (b.enquiriesCreated !== a.enquiriesCreated) return b.enquiriesCreated - a.enquiriesCreated;
             return b.followupsDone - a.followupsDone;
         });
-    },[filteredEnq,filteredFups]);
+    },[adminName, filteredEnq, filteredFups]);
 
     const revenueM = useMemo(() => {
         const convertedEnquiries = filteredEnq.filter(i => i?.status === "Converted");
@@ -583,7 +615,7 @@ export default function ReportScreen({ navigation }) {
                 const d = safeDate(getEnqDate(i));
                 return d
                     && i?.status === "Converted"
-                    && matchesStaffFilter(i, staffFilter)
+                    && matchesStaffFilter(i, staffFilter, adminName)
                     && matchesStatusFilter(i, statusFilter)
                     && d.getMonth() === anchorDate.getMonth()
                     && d.getFullYear() === anchorDate.getFullYear();
@@ -591,12 +623,12 @@ export default function ReportScreen({ navigation }) {
             .reduce((s, i) => s + Number(i?.cost || 0), 0);
         const today = reportData.enquiries
             .filter(i => i?.status === "Converted")
-            .filter(i => matchesStaffFilter(i, staffFilter))
+            .filter(i => matchesStaffFilter(i, staffFilter, adminName))
             .filter(i => matchesStatusFilter(i, statusFilter))
             .filter(i => inRange(getEnqDate(i), toDayRange(toDate)))
             .reduce((s, i) => s + Number(i?.cost || 0), 0);
         return { total, month, today };
-    }, [filteredEnq, reportData.enquiries, fromDate, toDate, staffFilter, statusFilter]);
+    }, [adminName, filteredEnq, reportData.enquiries, fromDate, toDate, staffFilter, statusFilter]);
 
     const exportReport = async () => {
         try {
@@ -607,7 +639,7 @@ export default function ReportScreen({ navigation }) {
                 Name: item?.name || "-",
                 Mobile: item?.mobile || "-",
                 Status: displayStatusLabel(item?.status || "New"),
-                Staff: getStaffName(item),
+                Staff: getStaffName(item, adminName),
                 Product: item?.product || "-",
                 Source: item?.source || "-",
                 Date: formatShortDate(getEnqDate(item)),

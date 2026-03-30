@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Calendar } from "react-native-calendars";
 import {
   Animated,
   DeviceEventEmitter,
@@ -47,7 +48,6 @@ import { useAuth } from "../contexts/AuthContext";
 import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import { getImageUrl } from "../services/apiConfig";
 import * as dashboardService from "../services/dashboardService";
-import { getFollowUps } from "../services/followupService";
 import { getBillingCoupons } from "../services/userService";
 
 // -----------------------------------------------------------------------------
@@ -77,6 +77,58 @@ const toLocalIsoDate = (value = new Date()) => {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+};
+
+const isoToDate = (iso) => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const getRangeBounds = (range = "day", anchorIso = toLocalIsoDate(new Date())) => {
+  const dt = isoToDate(anchorIso) || new Date();
+  const r = String(range || "day").trim().toLowerCase();
+
+  if (r === "year") {
+    const from = new Date(dt.getFullYear(), 0, 1);
+    const to = new Date(dt.getFullYear(), 11, 31);
+    return { rangeFrom: toLocalIsoDate(from), rangeTo: toLocalIsoDate(to) };
+  }
+  if (r === "month") {
+    const from = new Date(dt.getFullYear(), dt.getMonth(), 1);
+    const to = new Date(dt.getFullYear(), dt.getMonth() + 1, 0);
+    return { rangeFrom: toLocalIsoDate(from), rangeTo: toLocalIsoDate(to) };
+  }
+  if (r === "week") {
+    const day = dt.getDay(); // 0 Sun .. 6 Sat
+    const diffToMonday = (day + 6) % 7;
+    const from = new Date(dt);
+    from.setDate(dt.getDate() - diffToMonday);
+    const to = new Date(from);
+    to.setDate(from.getDate() + 6);
+    return { rangeFrom: toLocalIsoDate(from), rangeTo: toLocalIsoDate(to) };
+  }
+
+  const iso = toLocalIsoDate(dt);
+  return { rangeFrom: iso, rangeTo: iso };
+};
+
+const fmtShortDate = (iso) => {
+  const dt = isoToDate(iso);
+  if (!dt) return String(iso || "");
+  return dt.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
+};
+
+const fmtMonthYear = (iso) => {
+  const dt = isoToDate(iso);
+  if (!dt) return String(iso || "");
+  return dt.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+};
+
+const fmtWeekday3 = (iso) => {
+  const dt = isoToDate(iso);
+  if (!dt) return "";
+  return dt.toLocaleDateString(undefined, { weekday: "short" }); // Mon, Tue...
 };
 
 // Hook: returns { bp, w, h, isTablet, isDesktop, isSmallPhone }
@@ -135,7 +187,7 @@ const C = {
 // -----------------------------------------------------------------------------
 // ANIMATED BAR CHART (Hero - white bars)
 // -----------------------------------------------------------------------------
-const HeroBarChart = ({ data = [], h = 52 }) => {
+const HeroBarChart = ({ data = [], h = 52, highlightIndex = null }) => {
   const anims = useRef(data.map(() => new Animated.Value(0))).current;
   useEffect(() => {
     Animated.stagger(
@@ -162,7 +214,10 @@ const HeroBarChart = ({ data = [], h = 52 }) => {
       }}
     >
       {data.map((d, i) => {
-        const isLast = i === data.length - 1;
+        const isHighlighted =
+          typeof highlightIndex === "number" && highlightIndex >= 0
+            ? i === highlightIndex
+            : i === data.length - 1;
         const barH = anims[i].interpolate({
           inputRange: [0, 1],
           outputRange: [0, Math.max(4, (d.value / max) * h)],
@@ -184,7 +239,7 @@ const HeroBarChart = ({ data = [], h = 52 }) => {
                 justifyContent: "flex-end",
               }}
             >
-              {isLast && d.value > 0 && (
+              {isHighlighted && d.value > 0 && (
                 <Text
                   style={{
                     fontSize: 8,
@@ -203,7 +258,7 @@ const HeroBarChart = ({ data = [], h = 52 }) => {
                   height: barH,
                   width: "100%",
                   borderRadius: 5,
-                  backgroundColor: isLast
+                  backgroundColor: isHighlighted
                     ? "rgba(255,255,255,0.95)"
                     : "rgba(255,255,255,0.3)",
                 }}
@@ -229,7 +284,7 @@ const HeroBarChart = ({ data = [], h = 52 }) => {
 // -----------------------------------------------------------------------------
 // LIGHT BAR CHART (Sales - colored bars)
 // -----------------------------------------------------------------------------
-const LightBarChart = ({ data = [], h = 84 }) => {
+const LightBarChart = ({ data = [], h = 84, highlightIndex = null }) => {
   const anims = useRef(data.map(() => new Animated.Value(0))).current;
   useEffect(() => {
     Animated.stagger(
@@ -256,7 +311,10 @@ const LightBarChart = ({ data = [], h = 84 }) => {
       }}
     >
       {data.map((d, i) => {
-        const isLast = i === data.length - 1;
+        const isHighlighted =
+          typeof highlightIndex === "number" && highlightIndex >= 0
+            ? i === highlightIndex
+            : i === data.length - 1;
         const barH = anims[i].interpolate({
           inputRange: [0, 1],
           outputRange: [0, Math.max(5, (d.value / max) * h)],
@@ -279,7 +337,7 @@ const LightBarChart = ({ data = [], h = 84 }) => {
                 justifyContent: "flex-end",
               }}
             >
-              {isLast && d.value > 0 && (
+              {isHighlighted && d.value > 0 && (
                 <Text
                   style={{
                     fontSize: 9,
@@ -297,7 +355,7 @@ const LightBarChart = ({ data = [], h = 84 }) => {
                   height: barH,
                   width: "100%",
                   borderRadius: 6,
-                  backgroundColor: isLast ? color : color + "4A",
+                  backgroundColor: isHighlighted ? color : color + "2E",
                 }}
               />
             </View>
@@ -911,14 +969,23 @@ export default function HomeScreen({ navigation }) {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [rangeType, setRangeType] = useState("day"); // day | week | month | year
+  const [rangeAnchor, setRangeAnchor] = useState(() => toLocalIsoDate(new Date()));
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [draftRangeType, setDraftRangeType] = useState("day");
+  const [draftRangeAnchor, setDraftRangeAnchor] = useState(() =>
+    toLocalIsoDate(new Date()),
+  );
   const [stats, setStats] = useState({
     totalEnquiry: 0,
-    todayEnquiry: 0,
     todayFollowup: 0,
     missedFollowup: 0,
     salesMonthly: 0,
     monthlyRevenue: 0,
     overallSalesAmount: 0,
+    prevRevenue: 0,
+    revenueChangePct: null,
+    weekSales: [],
     drops: 0,
     new: 0,
     ip: 0,
@@ -962,35 +1029,59 @@ export default function HomeScreen({ navigation }) {
     await logout();
   };
 
-  const fetchData = async () => {
+  const { rangeFrom, rangeTo } = getRangeBounds(rangeType, rangeAnchor);
+  const rangeLabel =
+    rangeType === "day"
+      ? fmtShortDate(rangeAnchor)
+      : rangeType === "week"
+        ? `${fmtShortDate(rangeFrom)} - ${fmtShortDate(rangeTo)}`
+        : rangeType === "month"
+          ? fmtMonthYear(rangeAnchor)
+          : String((isoToDate(rangeAnchor) || new Date()).getFullYear());
+
+  const prevLabel =
+    rangeType === "day"
+      ? "yesterday"
+      : rangeType === "week"
+        ? "last week"
+        : rangeType === "month"
+          ? "last month"
+          : "last year";
+
+  const revenueDeltaLabel = (() => {
+    const now = Number(stats.overallSalesAmount || 0);
+    const prev = Number(stats.prevRevenue || 0);
+    if (prev === 0 && now > 0) return "+∞%";
+    if (prev === 0 && now === 0) return "0%";
+    if (stats.revenueChangePct == null) return "0%";
+    const pct = Number(stats.revenueChangePct || 0);
+    return `${pct > 0 ? "+" : ""}${pct}%`;
+  })();
+
+  const fetchData = useCallback(async () => {
     try {
-      if (stats.totalEnquiry === 0) setLoading(true);
-      const referenceDate = toLocalIsoDate(new Date());
-      const [data, couponData, todayFollowUpsRes, missedFollowUpsRes] = await Promise.all([
-        dashboardService.getDashboardSummary(),
+      setLoading(true);
+      const [data, couponData] = await Promise.all([
+        dashboardService.getDashboardSummary({
+          range: rangeType,
+          date: rangeAnchor,
+        }),
         getBillingCoupons().catch(() => ({ coupons: [] })),
-        getFollowUps("Today", 1, 1, referenceDate).catch(() => null),
-        getFollowUps("Missed", 1, 1, referenceDate).catch(() => null),
       ]);
-      const todayFollowUpTotal = Number(
-        todayFollowUpsRes?.pagination?.total ??
-          data?.todayFollowUps ??
-          0,
-      );
-      const missedFollowUpTotal = Number(
-        missedFollowUpsRes?.pagination?.total ??
-          data?.missedFollowUps ??
-          0,
-      );
       if (data) {
         setStats({
           totalEnquiry: data.totalEnquiry || 0,
-          todayEnquiry: data.todayEnquiry || 0,
-          todayFollowup: todayFollowUpTotal,
-          missedFollowup: missedFollowUpTotal,
+          todayFollowup: Number(data.todayFollowUps || 0),
+          missedFollowup: Number(data.missedFollowUps || 0),
           salesMonthly: data.salesMonthly || 0,
           monthlyRevenue: data.monthlyRevenue || 0,
           overallSalesAmount: data.overallSalesAmount || 0,
+          prevRevenue: Number(data.prevRevenue || 0),
+          revenueChangePct:
+            data.revenueChangePct === null || data.revenueChangePct === undefined
+              ? null
+              : Number(data.revenueChangePct),
+          weekSales: Array.isArray(data.weekSales) ? data.weekSales : [],
           drops: data.counts?.dropped || 0,
           new: data.counts?.new || 0,
           ip: data.counts?.inProgress || 0,
@@ -1022,7 +1113,7 @@ export default function HomeScreen({ navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [rangeType, rangeAnchor]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -1037,7 +1128,7 @@ export default function HomeScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       fetchData();
-    }, []),
+    }, [fetchData]),
   );
 
   useEffect(() => {
@@ -1131,48 +1222,40 @@ export default function HomeScreen({ navigation }) {
   const todayActivityCount = Number(stats.todayFollowup || todayTasks.length || 0);
   const missedActivityCount = Number(stats.missedFollowup || missedTasks.length || 0);
 
-  const weekBarData = [
-    { value: Math.round(stats.conv * 0.3), label: "M" },
-    { value: Math.round(stats.conv * 0.48), label: "T" },
-    { value: Math.round(stats.conv * 0.62), label: "W" },
-    { value: Math.round(stats.conv * 0.52), label: "T" },
-    { value: Math.round(stats.conv * 0.76), label: "F" },
-    { value: Math.round(stats.conv * 0.88), label: "S" },
-    { value: stats.conv, label: "S" },
-  ];
-  const salesBarData = [
-    {
-      value: Math.round(stats.salesMonthly * 0.28),
-      label: "M",
-      color: C.emerald,
-    },
-    {
-      value: Math.round(stats.salesMonthly * 0.44),
-      label: "T",
-      color: C.emerald,
-    },
-    {
-      value: Math.round(stats.salesMonthly * 0.68),
-      label: "W",
-      color: C.emerald,
-    },
-    {
-      value: Math.round(stats.salesMonthly * 0.5),
-      label: "T",
-      color: C.emerald,
-    },
-    {
-      value: Math.round(stats.salesMonthly * 0.78),
-      label: "F",
-      color: C.emerald,
-    },
-    {
-      value: Math.round(stats.salesMonthly * 0.9),
-      label: "S",
-      color: C.emerald,
-    },
-    { value: stats.salesMonthly, label: "S", color: C.emerald },
-  ];
+  const weekSeries = Array.isArray(stats.weekSales) ? stats.weekSales : [];
+  const highlightIdx = weekSeries.length
+    ? weekSeries.findIndex((d) => String(d?.date || "") === String(rangeAnchor))
+    : -1;
+  const chartHighlightIndex = highlightIdx >= 0 ? highlightIdx : null;
+  const weekBarData = weekSeries.length
+    ? weekSeries.map((d) => ({
+        value: Number(d?.convertedCount || 0),
+        label: fmtWeekday3(d?.date) || "",
+      }))
+    : [
+        { value: 0, label: "Mon" },
+        { value: 0, label: "Tue" },
+        { value: 0, label: "Wed" },
+        { value: 0, label: "Thu" },
+        { value: 0, label: "Fri" },
+        { value: 0, label: "Sat" },
+        { value: 0, label: "Sun" },
+      ];
+  const salesBarData = weekSeries.length
+    ? weekSeries.map((d) => ({
+        value: Number(d?.convertedCount || 0),
+        label: fmtWeekday3(d?.date) || "",
+        color: C.emerald,
+      }))
+    : [
+        { value: 0, label: "Mon", color: C.emerald },
+        { value: 0, label: "Tue", color: C.emerald },
+        { value: 0, label: "Wed", color: C.emerald },
+        { value: 0, label: "Thu", color: C.emerald },
+        { value: 0, label: "Fri", color: C.emerald },
+        { value: 0, label: "Sat", color: C.emerald },
+        { value: 0, label: "Sun", color: C.emerald },
+      ];
 
   // -----------------------------------------------------------------------------
   // RENDER
@@ -1236,6 +1319,27 @@ export default function HomeScreen({ navigation }) {
             </Text>
           </View>
           <TouchableOpacity
+            style={S.filterBtn}
+            activeOpacity={0.85}
+            onPress={() => {
+              setDraftRangeType(rangeType);
+              setDraftRangeAnchor(rangeAnchor);
+              setFilterOpen(true);
+            }}
+          >
+            <Ionicons name="calendar-outline" size={18} color={C.textSub} />
+            <Text style={S.filterBtnText} numberOfLines={1}>
+              {rangeType === "day"
+                ? "Day"
+                : rangeType === "week"
+                  ? "Week"
+                  : rangeType === "month"
+                    ? "Month"
+                    : "Year"}{" "}
+              • {rangeLabel}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={S.avatarBtn}
             activeOpacity={0.85}
             onPress={() => navigation.navigate("ProfileScreen")}
@@ -1277,6 +1381,121 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </SafeAreaView>
+
+      <Modal
+        visible={filterOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFilterOpen(false)}
+      >
+        <TouchableOpacity
+          style={S.filterOverlay}
+          activeOpacity={1}
+          onPress={() => setFilterOpen(false)}
+        >
+          <TouchableOpacity
+            style={S.filterCard}
+            activeOpacity={1}
+            onPress={() => {}}
+          >
+            <View style={S.filterHeaderRow}>
+              <Text style={S.filterTitle}>Date Filter</Text>
+              <TouchableOpacity
+                onPress={() => setFilterOpen(false)}
+                style={S.filterCloseBtn}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="close" size={18} color={C.textSub} />
+              </TouchableOpacity>
+            </View>
+            <View style={S.rangeRow}>
+              {[
+                { k: "day", label: "Day" },
+                { k: "week", label: "Week" },
+                { k: "month", label: "Month" },
+                { k: "year", label: "Year" },
+              ].map((opt) => {
+                const active = draftRangeType === opt.k;
+                return (
+                  <TouchableOpacity
+                    key={opt.k}
+                    onPress={() => setDraftRangeType(opt.k)}
+                    style={[S.rangePill, active && S.rangePillActive]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[S.rangePillText, active && S.rangePillTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={S.rangeMetaRow}>
+              {(() => {
+                const b = getRangeBounds(draftRangeType, draftRangeAnchor);
+                const title =
+                  draftRangeType === "day"
+                    ? fmtShortDate(draftRangeAnchor)
+                    : draftRangeType === "week"
+                      ? `${fmtShortDate(b.rangeFrom)} - ${fmtShortDate(b.rangeTo)}`
+                      : draftRangeType === "month"
+                        ? fmtMonthYear(draftRangeAnchor)
+                        : String((isoToDate(draftRangeAnchor) || new Date()).getFullYear());
+                return <Text style={S.rangeMetaText}>Selected: {title}</Text>;
+              })()}
+            </View>
+            <Calendar
+              current={draftRangeAnchor}
+              markedDates={{
+                [draftRangeAnchor]: {
+                  selected: true,
+                  selectedColor: C.blue,
+                  selectedTextColor: "#fff",
+                },
+              }}
+              onDayPress={(d) => setDraftRangeAnchor(d.dateString)}
+              firstDay={1}
+              enableSwipeMonths
+              style={S.calendar}
+              theme={{
+                backgroundColor: "#fff",
+                calendarBackground: "#fff",
+                textSectionTitleColor: C.textDim,
+                selectedDayBackgroundColor: C.blue,
+                selectedDayTextColor: "#FFFFFF",
+                todayTextColor: C.blue,
+                dayTextColor: C.ink,
+                textDisabledColor: C.textMuted,
+                monthTextColor: C.ink,
+                arrowColor: C.blue,
+                textDayFontWeight: "600",
+                textMonthFontWeight: "800",
+                textDayHeaderFontWeight: "700",
+              }}
+            />
+            <View style={S.filterActionsRow}>
+              <TouchableOpacity
+                style={S.filterGhostBtn}
+                onPress={() => setFilterOpen(false)}
+                activeOpacity={0.85}
+              >
+                <Text style={S.filterGhostText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={S.filterApplyBtn}
+                onPress={() => {
+                  setFilterOpen(false);
+                  setRangeType(draftRangeType);
+                  setRangeAnchor(draftRangeAnchor);
+                }}
+                activeOpacity={0.9}
+              >
+                <Text style={S.filterApplyText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* MAIN SCROLL */}
       <ScrollView
@@ -1454,7 +1673,7 @@ export default function HomeScreen({ navigation }) {
             <SH
               title="Follow-up Activity"
               titleSize={sectionTitleSize}
-              sub="Today and missed counts"
+              sub={`For ${fmtShortDate(rangeAnchor)} and overdue`}
             />
             <View style={S.activityCard}>
               <View style={S.countRow}>
@@ -1465,6 +1684,7 @@ export default function HomeScreen({ navigation }) {
                     navigation.navigate("FollowUp", {
                       focusKey: `today-followup-count-${todayActivityCount}`,
                       focusTab: "Today",
+                      focusDate: rangeAnchor,
                     })
                   }
                 >
@@ -1483,8 +1703,8 @@ export default function HomeScreen({ navigation }) {
                   <Text style={[S.countValue, { color: C.violet }]}>
                     {todayActivityCount}
                   </Text>
-                  <Text style={S.countLabel}>Today Follow-ups</Text>
-                  <Text style={S.countHint}>Due today</Text>
+                  <Text style={S.countLabel}>Follow-ups</Text>
+                  <Text style={S.countHint}>Due on selected day</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1495,6 +1715,7 @@ export default function HomeScreen({ navigation }) {
                       focusKey: `missed-followup-count-${missedActivityCount}`,
                       focusTab: "Missed",
                       openMissedModal: true,
+                      focusDate: rangeAnchor,
                     })
                   }
                 >
@@ -1514,14 +1735,14 @@ export default function HomeScreen({ navigation }) {
                     {missedActivityCount}
                   </Text>
                   <Text style={S.countLabel}>Missed</Text>
-                  <Text style={S.countHint}>Needs attention</Text>
+                  <Text style={S.countHint}>Before selected day</Text>
                 </TouchableOpacity>
               </View>
             </View>
           </MotiView>
           <SH
             title="Revenue & Conversion"
-            sub="Live overall revenue and conversion rate"
+            sub={`Filtered: ${rangeType} • ${rangeLabel}`}
             titleSize={sectionTitleSize}
           />
           <MotiView
@@ -1580,16 +1801,16 @@ export default function HomeScreen({ navigation }) {
                     }}
                   >
                     <PulseDot color={C.teal} size={7} />
-                    <Text
-                      style={{
-                        fontSize: 10,
-                        color: "rgba(255,255,255,0.6)",
+                  <Text
+                    style={{
+                      fontSize: 10,
+                      color: "rgba(255,255,255,0.6)",
                         fontWeight: "700",
                         letterSpacing: 1,
                         textTransform: "uppercase",
                       }}
                     >
-                      Live Overall Revenue
+                      Revenue
                     </Text>
                   </View>
                   <Text style={[S.heroRevValue, { fontSize: heroRevFontSize }]}>
@@ -1597,7 +1818,16 @@ export default function HomeScreen({ navigation }) {
                   </Text>
                   <View style={S.heroGrowthChip}>
                     <MaterialCommunityIcons
-                      name="trending-up"
+                      name={
+                        Number(stats.prevRevenue || 0) === 0 &&
+                        Number(stats.overallSalesAmount || 0) > 0
+                          ? "trending-up"
+                          : stats.revenueChangePct == null
+                            ? "trending-neutral"
+                            : stats.revenueChangePct >= 0
+                            ? "trending-up"
+                            : "trending-down"
+                      }
                       size={12}
                       color="#fff"
                     />
@@ -1608,7 +1838,7 @@ export default function HomeScreen({ navigation }) {
                         fontWeight: "700",
                       }}
                     >
-                      +12% vs last month
+                      {revenueDeltaLabel} vs {prevLabel}
                     </Text>
                   </View>
                 </View>
@@ -1633,6 +1863,7 @@ export default function HomeScreen({ navigation }) {
                   <HeroBarChart
                     data={weekBarData}
                     h={isTablet || isDesktop ? 60 : 52}
+                    highlightIndex={chartHighlightIndex}
                   />
                 </View>
               )}
@@ -1653,13 +1884,16 @@ export default function HomeScreen({ navigation }) {
               >
                 {[
                   {
-                    label: "MTD Revenue",
+                    label: "Revenue",
                     val: fmtInr(stats.monthlyRevenue || 0),
                   },
                   { label: "Conversions", val: stats.conv },
                   {
-                    label: "Today Leads",
-                    val: stats.todayEnquiry,
+                    label:
+                      rangeType === "day"
+                        ? `Leads (${fmtShortDate(rangeAnchor)})`
+                        : `Leads (${rangeType})`,
+                    val: stats.totalEnquiry,
                   },
                 ].map((s, i) => (
                   <View key={i} style={{ alignItems: "center" }}>
@@ -1697,8 +1931,8 @@ export default function HomeScreen({ navigation }) {
           {/* KEY METRICS - responsive grid */}
           <View style={S.section}>
             <SH
-              title="FollowUp Overview"
-              sub="Lead, follow-up and conversion summary"
+              title="Lead Overview"
+              sub="Lead status and conversion summary"
               titleSize={sectionTitleSize}
               right={<PulseDot color={C.emerald} size={7} />}
             />
@@ -1721,18 +1955,18 @@ export default function HomeScreen({ navigation }) {
               />
               <MetricTile
                 icon="flash"
-                label="New Today"
-                value={stats.todayEnquiry}
+                label="New"
+                value={stats.new}
                 color={C.sky}
                 tileWidth={tileWidth}
               />
               <MetricTile
-                icon="calendar"
-                label="Follow-ups"
-                value={stats.todayFollowup}
-                color={C.violet}
+                icon="checkmark-circle"
+                label="Sales"
+                value={stats.conv}
+                color={C.emerald}
                 tileWidth={tileWidth}
-                onPress={() => navigation.navigate("FollowUp")}
+                onPress={() => navigation.navigate("Report")}
               />
               <MetricTile
                 icon="close-circle"
@@ -1744,13 +1978,6 @@ export default function HomeScreen({ navigation }) {
               {/* Extra tiles on tablet/desktop */}
               {(isTablet || isDesktop) && (
                 <>
-                  <MetricTile
-                    icon="checkmark-circle"
-                    label="Sales"
-                    value={stats.conv}
-                    color={C.emerald}
-                    tileWidth={tileWidth}
-                  />
                   <MetricTile
                     icon="trending-up"
                     label="In Progress"
@@ -1789,7 +2016,7 @@ export default function HomeScreen({ navigation }) {
             style={S.section}
           >
             <SH
-              title="FollowUp Pipeline"
+              title="Lead Pipeline"
               sub="Current lead stage distribution"
               titleSize={sectionTitleSize}
             />
@@ -1926,7 +2153,7 @@ export default function HomeScreen({ navigation }) {
                       marginBottom: 4,
                     }}
                   >
-                    Monthly Revenue
+                    Revenue
                   </Text>
                   <Text
                     style={{
@@ -1951,7 +2178,16 @@ export default function HomeScreen({ navigation }) {
                   }}
                 >
                   <MaterialCommunityIcons
-                    name="trending-up"
+                    name={
+                      Number(stats.prevRevenue || 0) === 0 &&
+                      Number(stats.overallSalesAmount || 0) > 0
+                        ? "trending-up"
+                        : stats.revenueChangePct == null
+                          ? "trending-neutral"
+                          : stats.revenueChangePct >= 0
+                          ? "trending-up"
+                          : "trending-down"
+                    }
                     size={13}
                     color={C.emerald}
                   />
@@ -1962,13 +2198,14 @@ export default function HomeScreen({ navigation }) {
                       fontWeight: "800",
                     }}
                   >
-                    +12%
+                    {revenueDeltaLabel}
                   </Text>
                 </View>
               </View>
               <LightBarChart
                 data={salesBarData}
                 h={isTablet || isDesktop ? 100 : 88}
+                highlightIndex={chartHighlightIndex}
               />
               <View
                 style={{
@@ -2082,6 +2319,24 @@ const S = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  filterBtn: {
+    maxWidth: 170,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: C.bg,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    marginRight: 10,
+  },
+  filterBtnText: {
+    fontSize: 11,
+    color: C.textSub,
+    fontWeight: "800",
+  },
   menuBtn: {
     width: 44,
     height: 44,
@@ -2101,6 +2356,86 @@ const S = StyleSheet.create({
     borderWidth: 2,
     borderColor: "rgba(255,255,255,0.9)",
   },
+  filterOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  filterCard: {
+    backgroundColor: C.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+  },
+  filterHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  filterTitle: {
+    fontSize: 15,
+    fontWeight: "900",
+    color: C.ink,
+  },
+  filterCloseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  rangeRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  rangePill: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.bg,
+  },
+  rangePillActive: { backgroundColor: C.blue, borderColor: C.blue },
+  rangePillText: { fontSize: 12, fontWeight: "800", color: C.textSub },
+  rangePillTextActive: { color: "#fff" },
+  rangeMetaRow: { marginBottom: 10 },
+  rangeMetaText: { fontSize: 12, color: C.textDim, fontWeight: "700" },
+  calendar: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    overflow: "hidden",
+  },
+  filterActionsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  filterGhostBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  filterGhostText: { fontSize: 13, fontWeight: "800", color: C.textSub },
+  filterApplyBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: C.blue,
+  },
+  filterApplyText: { fontSize: 13, fontWeight: "900", color: "#fff" },
   heroCard: {
     borderRadius: 24,
     padding: 22,

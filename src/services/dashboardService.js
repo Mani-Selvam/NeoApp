@@ -13,10 +13,10 @@ const shouldSuppressAuthLog = (error) => {
 };
 
 // GET DASHBOARD SUMMARY
-export const getDashboardSummary = async () => {
+export const getDashboardSummary = async (params = {}) => {
     try {
         const client = await getApiClient();
-        const response = await client.get("/dashboard/summary");
+        const response = await client.get("/dashboard/summary", { params });
         return response.data;
     } catch (error) {
         if (!shouldSuppressAuthLog(error)) {
