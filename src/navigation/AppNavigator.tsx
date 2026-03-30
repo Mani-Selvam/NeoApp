@@ -649,7 +649,18 @@ export default function AppNavigator() {
     );
     const followUpChangedSub = DeviceEventEmitter.addListener(
       "FOLLOWUP_CHANGED",
-      () => {
+      (payload) => {
+        const item = payload?.item || payload || {};
+        const status = String(item?.status || "").toLowerCase();
+        // Cancel the "add next follow-up" prompt only when a new schedule is created (not when marking Completed).
+        if (status === "scheduled") {
+          Promise.resolve(
+            notificationService.cancelNextFollowUpPromptForEnquiry?.({
+              enqId: item?.enqId,
+              enqNo: item?.enqNo,
+            }),
+          ).catch(() => {});
+        }
         // Reschedule follow-up reminders immediately when new follow-ups are created/updated.
         syncHourlyFollowUps();
       },

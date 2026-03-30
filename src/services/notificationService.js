@@ -11,6 +11,7 @@ const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule"; // JSON: { dateKe
 const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule"; // JSON: { dateKey, ids: [] }
 const MISSED_FOLLOWUP_ALERT_STATE_KEY = "missedFollowupAlertState"; // JSON: { dateKey, count }
 const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
+const NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY = "nextFollowupPromptSchedule"; // JSON: { idsByKey: { [enqKey]: id } }
 const DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES = 60;
 const DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES = 5;
 const DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES = 60;
@@ -34,6 +35,7 @@ const CHANNEL_IDS = {
 };
 const CATEGORY_IDS = {
     followups: "FOLLOWUP_ACTIONS",
+    next_followup: "NEXT_FOLLOWUP_PROMPT",
 };
 const NOTIFICATION_CHANNELS = {
     followups: {
@@ -333,6 +335,30 @@ export const initializeNotifications = async () => {
                 ],
                 {
                     previewPlaceholder: "Update follow-up",
+                },
+            );
+        } catch (_categoryError) {
+            // ignore category errors
+        }
+
+        // Actions (Yes / No) prompt to add next follow-up.
+        try {
+            await Notifications.setNotificationCategoryAsync(
+                CATEGORY_IDS.next_followup,
+                [
+                    {
+                        identifier: "NEXT_FOLLOWUP_YES",
+                        buttonTitle: "Yes",
+                        options: { opensAppToForeground: true },
+                    },
+                    {
+                        identifier: "NEXT_FOLLOWUP_NO",
+                        buttonTitle: "No",
+                        options: { opensAppToForeground: false },
+                    },
+                ],
+                {
+                    previewPlaceholder: "Add next follow-up",
                 },
             );
         } catch (_categoryError) {
@@ -1672,6 +1698,17 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                             enqNo: data?.enqNo,
                         }),
                     ).catch(() => {});
+                    // If user doesn't add next follow-up, prompt them shortly.
+                    Promise.resolve(
+                        scheduleNextFollowUpPromptForEnquiry?.({
+                            enqId: data?.enqId,
+                            enqNo: data?.enqNo,
+                            name: data?.name,
+                            mobile: data?.mobile,
+                            product: data?.product,
+                            delayMinutes: 2,
+                        }),
+                    ).catch(() => {});
                 }
 
                 // Acknowledge hourly reminders only when user actually opens/acts.
@@ -1700,6 +1737,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                               enquiry,
                               focusTab: "Today",
                               focusSearch: data?.name || "",
+                              autoOpenForm: true,
                           }
                         : data.type === "followup-missed"
                           ? {
@@ -1708,8 +1746,39 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                                 enquiry,
                                 focusTab: "Missed",
                                 openMissedModal: true,
+                                autoOpenForm: true,
                             }
                           : { focusTab: "Today" },
+                });
+            } else if (data.type === "next-followup-prompt") {
+                if (actionId === "NEXT_FOLLOWUP_NO") {
+                    Promise.resolve(
+                        cancelNextFollowUpPromptForEnquiry?.({
+                            enqId: data?.enqId,
+                            enqNo: data?.enqNo,
+                        }),
+                    ).catch(() => {});
+                    return;
+                }
+                // YES or tap => open composer directly.
+                const enquiry = {
+                    enqId: data?.enqId || null,
+                    _id: data?.enqId || null,
+                    enqNo: data?.enqNo || "",
+                    name: data?.name || "",
+                    mobile: data?.mobile || "",
+                    product: data?.product || "",
+                };
+                navigationRef.navigate("Main", {
+                    screen: "FollowUp",
+                    params: {
+                        openComposer: true,
+                        composerToken: `${Date.now()}`,
+                        enquiry,
+                        focusTab: "Today",
+                        focusSearch: data?.name || "",
+                        autoOpenForm: true,
+                    },
                 });
             } else if (data.type === 'enquiry-success' || data.type === 'new-enquiry-alert') {
                 navigationRef.navigate('Main', {
@@ -1841,6 +1910,96 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
     }
 };
 
+const getEnqKey = ({ enqId, enqNo } = {}) => {
+    const idStr = enqId ? String(enqId).trim() : "";
+    if (idStr) return `id:${idStr}`;
+    const noStr = enqNo ? String(enqNo).trim() : "";
+    if (noStr) return `no:${noStr}`;
+    return "";
+};
+
+export const cancelNextFollowUpPromptForEnquiry = async ({ enqId, enqNo } = {}) => {
+    try {
+        if (!isNotificationSupported()) return { cancelled: 0, skipped: true };
+        const key = getEnqKey({ enqId, enqNo });
+        if (!key) return { cancelled: 0, skipped: true, reason: "no-key" };
+
+        const raw = await AsyncStorage.getItem(NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        const idsByKey = parsed?.idsByKey && typeof parsed.idsByKey === "object" ? parsed.idsByKey : {};
+        const id = idsByKey?.[key];
+        if (!id) return { cancelled: 0, skipped: true, reason: "none" };
+
+        try {
+            await Notifications.cancelScheduledNotificationAsync(String(id));
+        } catch {}
+
+        const next = { ...idsByKey };
+        delete next[key];
+        await AsyncStorage.setItem(
+            NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY,
+            JSON.stringify({ idsByKey: next }),
+        );
+        return { cancelled: 1, skipped: false };
+    } catch (error) {
+        console.error("Failed to cancel next follow-up prompt:", error);
+        return { cancelled: 0, skipped: false, error: true };
+    }
+};
+
+export const scheduleNextFollowUpPromptForEnquiry = async ({
+    enqId,
+    enqNo,
+    name,
+    mobile,
+    product,
+    delayMinutes = 2,
+} = {}) => {
+    try {
+        if (!isNotificationSupported()) return { scheduled: 0, skipped: true };
+        const key = getEnqKey({ enqId, enqNo });
+        if (!key) return { scheduled: 0, skipped: true, reason: "no-key" };
+
+        // Replace previous prompt for this enquiry.
+        await cancelNextFollowUpPromptForEnquiry({ enqId, enqNo });
+
+        const when = new Date(Date.now() + Math.max(1, Number(delayMinutes || 2)) * 60 * 1000);
+        const safeName = String(name || "Customer").trim();
+        const body = `Please add next follow-up date and time for ${safeName}.`;
+
+        const id = await scheduleDateNotification({
+            when,
+            title: "Add next follow-up",
+            body,
+            data: {
+                type: "next-followup-prompt",
+                enqId: enqId ? String(enqId) : "",
+                enqNo: enqNo ? String(enqNo) : "",
+                name: safeName,
+                mobile: mobile ? String(mobile) : "",
+                product: product ? String(product) : "",
+                timestamp: new Date().toISOString(),
+            },
+            channelId: "followups",
+            color: "#0EA5E9",
+            categoryIdentifier: CATEGORY_IDS.next_followup,
+        });
+
+        const raw = await AsyncStorage.getItem(NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        const idsByKey = parsed?.idsByKey && typeof parsed.idsByKey === "object" ? parsed.idsByKey : {};
+        await AsyncStorage.setItem(
+            NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY,
+            JSON.stringify({ idsByKey: { ...idsByKey, [key]: id } }),
+        );
+
+        return { scheduled: 1, skipped: false, id };
+    } catch (error) {
+        console.error("Failed to schedule next follow-up prompt:", error);
+        return { scheduled: 0, skipped: false, error: true };
+    }
+};
+
 const completeFollowUpFromNotification = async (data = {}) => {
     try {
         const followUpId = String(data?.followUpId || "").trim();
@@ -1883,5 +2042,7 @@ export default {
     setupGlobalNotificationListener,
     notifyMissedFollowUpsSummary,
     cancelNotificationsForEnquiry,
+    cancelNextFollowUpPromptForEnquiry,
+    scheduleNextFollowUpPromptForEnquiry,
     resetNotificationLocalState,
 };

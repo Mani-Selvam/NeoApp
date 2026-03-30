@@ -1608,6 +1608,7 @@ const DetailView = ({
   history,
   historyLoading,
   onClose,
+  autoOpenFollowUpFormToken,
   // composer state
   selectedEnquiry,
   editRemarks,
@@ -1674,6 +1675,17 @@ const DetailView = ({
       useNativeDriver: true,
     }).start();
   }, []);
+
+  // Auto-open Add Follow-up form (used by notification actions).
+  useEffect(() => {
+    if (!autoOpenFollowUpFormToken) return;
+    tabRef.current = 0;
+    setTabIdx(0);
+    setShowFollowUpForm(true);
+    setTimeout(() => {
+      followUpFormScrollRef.current?.scrollTo?.({ y: 0, animated: true });
+    }, 80);
+  }, [autoOpenFollowUpFormToken]);
 
   const goClose = () => {
     if (tabGestureLockedRef.current) return;
@@ -3292,6 +3304,7 @@ export default function FollowUpScreen({ navigation, route }) {
   const [detailHistory, setDetailHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedEnquiry, setSelectedEnquiry] = useState(null);
+  const [detailAutoOpenFormToken, setDetailAutoOpenFormToken] = useState(null);
 
   // Follow-up composer
   const [editRemarks, setEditRemarks] = useState("");
@@ -3351,11 +3364,17 @@ export default function FollowUpScreen({ navigation, route }) {
     if (!route.params?.openComposer || !token || !enq) return;
     if (lastToken.current === token) return;
     lastToken.current = token;
+    if (route.params?.autoOpenForm) {
+      setDetailAutoOpenFormToken(token);
+    } else {
+      setDetailAutoOpenFormToken(null);
+    }
     openDetail(enq);
   }, [
     route.params?.openComposer,
     route.params?.composerToken,
     route.params?.enquiry,
+    route.params?.autoOpenForm,
   ]);
 
   useEffect(() => {
@@ -4884,6 +4903,7 @@ export default function FollowUpScreen({ navigation, route }) {
             history={detailHistory}
             historyLoading={historyLoading}
             onClose={() => setDetailEnquiry(null)}
+            autoOpenFollowUpFormToken={detailAutoOpenFormToken}
             selectedEnquiry={selectedEnquiry || detailEnquiry}
             editRemarks={editRemarks}
             setEditRemarks={setEditRemarks}

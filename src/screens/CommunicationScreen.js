@@ -1925,6 +1925,31 @@ export default function CommunicationScreen({ navigation }) {
                         Optional
                       </Text>
                     </TouchableOpacity>
+                    {isAdminUser && selfId ? (
+                      <TouchableOpacity
+                        style={[
+                          S.fChip,
+                          String(taskForm.assignedTo) === String(selfId) &&
+                            S.fChipActive,
+                        ]}
+                        onPress={() =>
+                          setTaskForm((p) => ({
+                            ...p,
+                            assignedTo: String(selfId),
+                          }))
+                        }
+                      >
+                        <Text
+                          style={[
+                            S.fChipTxt,
+                            String(taskForm.assignedTo) === String(selfId) &&
+                              S.fChipTxtActive,
+                          ]}
+                        >
+                          Me
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
                     {taskAssigneeOptions.map((member) => (
                       <TouchableOpacity
                         key={member._id}
