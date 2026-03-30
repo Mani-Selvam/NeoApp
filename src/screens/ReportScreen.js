@@ -154,6 +154,19 @@ const buildExplicitDateRange = (fromDate, toDate) => {
 };
 const formatAppliedRangeLabel = (fromDate, toDate) => `${formatShortDate(fromDate)} - ${formatShortDate(toDate)}`;
 const isSameIsoDate = (left, right) => String(left || "") === String(right || "");
+const normalizeId = (value) => String(value?._id || value || "").trim();
+const getStaffId = (item) =>
+    normalizeId(
+        item?.assignedTo?._id ||
+        item?.assignedTo ||
+        item?.staffId?._id ||
+        item?.staffId ||
+        item?.assignedToId ||
+        item?.enqId?.assignedTo?._id ||
+        item?.enqId?.assignedTo ||
+        item?.enquiryId?.assignedTo?._id ||
+        item?.enquiryId?.assignedTo
+    );
 const matchesStaffFilter = (item, staffFilter) => (
     staffFilter === ALL_STAFF || getStaffName(item) === staffFilter
 );
@@ -368,6 +381,8 @@ const CardHeader = ({ title, icon, accent, right }) => (
 export default function ReportScreen({ navigation }) {
     const insets = useSafeAreaInsets();
     const { user, logout } = useAuth();
+    const selfId = useMemo(() => normalizeId(user?.id || user?._id), [user?.id, user?._id]);
+    const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
     const todayIso = useMemo(() => toIsoDate(new Date()), []);
 
     const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
@@ -490,26 +505,29 @@ export default function ReportScreen({ navigation }) {
     }, [fromDate, toDate, todayIso]);
 
     const filteredEnq   = useMemo(() => reportData.enquiries.filter(item => {
+        if (isStaffUser && getStaffId(item) !== selfId) return false;
         if (!inRange(getEnqDate(item),filterRange)) return false;
         if (!matchesStaffFilter(item, staffFilter)) return false;
         if (!matchesStatusFilter(item, statusFilter)) return false;
         return true;
-    }), [filterRange, reportData.enquiries, staffFilter, statusFilter]);
+    }), [filterRange, isStaffUser, reportData.enquiries, selfId, staffFilter, statusFilter]);
 
     const filteredFups  = useMemo(() => reportData.followups.filter(item => {
+        if (isStaffUser && getStaffId(item) !== selfId) return false;
         if (!inRange(getFupDate(item),filterRange)) return false;
         if (!matchesStaffFilter(item, staffFilter)) return false;
         if (!matchesStatusFilter(item, statusFilter)) return false;
         return true;
-    }), [filterRange, reportData.followups, staffFilter, statusFilter]);
+    }), [filterRange, isStaffUser, reportData.followups, selfId, staffFilter, statusFilter]);
 
     const filteredCalls = useMemo(() => reportData.callLogs.filter((item) => {
+        if (isStaffUser && getStaffId(item) !== selfId) return false;
         if (!inRange(getCallDate(item), filterRange)) return false;
         if (!matchesStaffFilter(item, staffFilter)) return false;
         const itemStatus = getItemStatus(item);
         if (statusFilter !== ALL_STATUS && itemStatus && itemStatus !== statusFilter) return false;
         return true;
-    }), [filterRange, reportData.callLogs, staffFilter, statusFilter]);
+    }), [filterRange, isStaffUser, reportData.callLogs, selfId, staffFilter, statusFilter]);
 
     const leadM = useMemo(() => {
         const counts = filteredEnq.reduce((a,i)=>{const k=i?.status||"New";a[k]=(a[k]||0)+1;return a;},{});

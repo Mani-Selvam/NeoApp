@@ -16,6 +16,7 @@ const CHANNEL_IDS = {
     followups: "followups_v2",
     enquiries: "enquiries_v2",
     coupons: "coupons_v2",
+    team_chat: "team_chat_v1",
     billing: "billing_v2",
 };
 const NOTIFICATION_CHANNELS = {
@@ -33,6 +34,11 @@ const NOTIFICATION_CHANNELS = {
         name: "Coupons",
         lightColor: "#2563EB",
         vibrationPattern: [0, 180, 120, 180],
+    },
+    team_chat: {
+        name: "Team Chat",
+        lightColor: "#0F766E",
+        vibrationPattern: [0, 180, 90, 180],
     },
     billing: {
         name: "Plan Alerts",
@@ -218,6 +224,16 @@ export const initializeNotifications = async () => {
                 enableLights: true,
             });
 
+            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.team_chat, {
+                name: NOTIFICATION_CHANNELS.team_chat.name,
+                importance: Notifications.AndroidImportance.HIGH,
+                vibrationPattern: NOTIFICATION_CHANNELS.team_chat.vibrationPattern,
+                lightColor: NOTIFICATION_CHANNELS.team_chat.lightColor,
+                sound: "default",
+                enableVibrate: true,
+                enableLights: true,
+            });
+
             await Notifications.setNotificationChannelAsync(CHANNEL_IDS.billing, {
                 name: NOTIFICATION_CHANNELS.billing.name,
                 importance: Notifications.AndroidImportance.HIGH,
@@ -388,6 +404,56 @@ export const showCouponOfferNotification = async (couponData) => {
         });
     } catch (error) {
         console.error("Failed to show coupon notification:", error);
+    }
+};
+
+export const showTeamChatNotification = async (messageData = {}) => {
+    try {
+        if (!isNotificationSupported()) {
+            return null;
+        }
+
+        const senderName = String(
+            messageData?.senderId?.name || messageData?.senderName || "Team member",
+        ).trim();
+        const messageType = String(messageData?.messageType || "text").trim().toLowerCase();
+        const taskTitle = String(messageData?.taskId?.title || messageData?.taskTitle || "").trim();
+        const bodyText = String(messageData?.message || "").trim();
+
+        let title = senderName;
+        let body = bodyText || "Sent a new message";
+
+        if (messageType === "task") {
+            title = `${senderName} assigned a task`;
+            body = taskTitle || bodyText || "Tap to open team chat";
+        } else if (messageType === "image") {
+            body = "Sent an image";
+        } else if (messageType === "audio") {
+            body = "Sent a voice message";
+        } else if (messageType === "document") {
+            body = "Sent a document";
+        } else if (messageType === "call") {
+            body = bodyText || "Shared a call update";
+        }
+
+        return await scheduleImmediateNotification({
+            title,
+            body,
+            subtitle: "Team Chat",
+            channelId: "team_chat",
+            color: "#0F766E",
+            data: {
+                type: "team-chat-message",
+                senderId: String(messageData?.senderId?._id || messageData?.senderId || ""),
+                receiverId: String(messageData?.receiverId?._id || messageData?.receiverId || ""),
+                messageId: String(messageData?._id || ""),
+                taskId: String(messageData?.taskId?._id || messageData?.taskId || ""),
+                timestamp: new Date().toISOString(),
+            },
+        });
+    } catch (error) {
+        console.error("Failed to show team chat notification:", error);
+        return null;
     }
 };
 
@@ -1203,6 +1269,10 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                 navigationRef.navigate("Main", {
                     screen: "Home",
                 });
+            } else if (data.type === "team-chat-message") {
+                navigationRef.navigate("Main", {
+                    screen: "Communication",
+                });
             } else if (data.type === "billing-alert") {
                 navigationRef.navigate("PricingScreen");
             }
@@ -1239,6 +1309,7 @@ export default {
     showEnquirySuccessNotification,
     showNewEnquiryAlertNotification,
     showCouponOfferNotification,
+    showTeamChatNotification,
     showBillingPlanNotification,
     showEnquiryErrorNotification,
     showEnquiryStatusNotification,

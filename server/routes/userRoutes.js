@@ -189,12 +189,20 @@ const sendPlanReceiptEmail = async ({ user, receipt }) => {
 
 const isAdminRole = (role) => ["admin", "Admin"].includes(String(role || ""));
 
-const buildPublicFormUrl = (req, slug) => {
+const resolvePublicBaseUrl = (req) => {
+  const explicitBaseUrl = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (explicitBaseUrl) {
+    return explicitBaseUrl.replace(/\/+$/, "");
+  }
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
     .split(",")[0]
     .trim();
   const protocol = forwardedProto || req.protocol || "https";
-  return `${protocol}://${req.get("host")}/public/forms/${encodeURIComponent(String(slug || "").trim())}`;
+  return `${protocol}://${req.get("host")}`;
+};
+
+const buildPublicFormUrl = (req, slug) => {
+  return `${resolvePublicBaseUrl(req)}/public/forms/${encodeURIComponent(String(slug || "").trim())}`;
 };
 
 const ensureCompanyPublicForm = async (companyId) => {

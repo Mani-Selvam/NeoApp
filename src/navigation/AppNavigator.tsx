@@ -63,7 +63,6 @@ import {
   getFeatureLabel,
   hasPlanFeature,
 } from "../utils/planFeatures";
-import { getSocket } from "../services/socketService";
 import { navigationRef } from "./navigationRef";
 
 import ChatScreen from "../screens/ChatScreen";
@@ -117,7 +116,6 @@ function MainTabNavigator() {
   const selfId = String(user?.id || user?._id || "");
   const currentTabRef = useRef("Home");
   const [chatBadgeCount, setChatBadgeCount] = useState(0);
-  const [followUpBadgeCount, setFollowUpBadgeCount] = useState(0);
 
   useEffect(() => {
     if (Platform.OS !== "android") return undefined;
@@ -155,46 +153,25 @@ function MainTabNavigator() {
   }, []);
 
   useEffect(() => {
-    const socket = getSocket();
-    if (!socket || !selfId) return undefined;
+    if (!selfId) return undefined;
 
-    const onNewMessage = (payload: any) => {
-      const receiverId = String(
-        payload?.receiverId?._id || payload?.receiverId || "",
-      );
-      const senderId = String(payload?.senderId?._id || payload?.senderId || "");
-      if (receiverId !== selfId || senderId === selfId) return;
-      if (currentTabRef.current === "Communication") return;
-      setChatBadgeCount((prev) => prev + 1);
-    };
-
-    socket.on("COMMUNICATION_MESSAGE_CREATED", onNewMessage);
-    return () => {
-      socket.off("COMMUNICATION_MESSAGE_CREATED", onNewMessage);
-    };
-  }, [selfId]);
-
-  useEffect(() => {
-    const callSub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-      if (currentTabRef.current !== "FollowUp") {
-        setFollowUpBadgeCount((prev) => prev + 1);
-      }
-    });
-
-    const followupSub = DeviceEventEmitter.addListener(
-      "FOLLOWUP_CHANGED",
-      (payload) => {
-        if (currentTabRef.current === "FollowUp") return;
-        if (payload?.action === "delete") return;
-        setFollowUpBadgeCount((prev) => prev + 1);
+    const sub = DeviceEventEmitter.addListener(
+      "COMMUNICATION_MESSAGE_CREATED",
+      (payload: any) => {
+        const receiverId = String(
+          payload?.receiverId?._id || payload?.receiverId || "",
+        );
+        const senderId = String(payload?.senderId?._id || payload?.senderId || "");
+        if (receiverId !== selfId || senderId === selfId) return;
+        if (currentTabRef.current === "Communication") return;
+        setChatBadgeCount((prev) => prev + 1);
       },
     );
 
     return () => {
-      callSub.remove();
-      followupSub.remove();
+      sub.remove();
     };
-  }, []);
+  }, [selfId]);
 
   const baseTabBarStyle = {
     height: 68 + Math.min(insets.bottom, 10),
@@ -295,11 +272,10 @@ function MainTabNavigator() {
       <Tab.Screen
         name="FollowUp"
         component={FollowUpScreen}
-        options={getTabOptions("FollowUp", "calendar-outline", followUpBadgeCount)}
+        options={getTabOptions("FollowUp", "calendar-outline")}
         listeners={{
           focus: () => {
             currentTabRef.current = "FollowUp";
-            setFollowUpBadgeCount(0);
           },
         }}
       />

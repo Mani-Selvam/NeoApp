@@ -51,6 +51,7 @@ const defaultCorsOrigins = [
   "https://neophrondev.in",
   "https://www.neophrondev.in",
   "https://neoapp.neophrondev.in",
+  "https://neomobile.neophrondev.in",
 ];
 
 const configuredCorsOrigins = (process.env.CORS_ORIGINS || "")

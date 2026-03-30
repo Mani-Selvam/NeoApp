@@ -477,7 +477,18 @@ router.post(
           readBy: [req.userId],
         });
 
-        emitToUsers(req, [req.userId, assignedTo], "COMMUNICATION_MESSAGE_CREATED", taskMessage);
+        const populatedTaskMessage = await CommunicationMessage.findById(taskMessage._id)
+          .populate("senderId", "name role")
+          .populate("receiverId", "name role")
+          .populate("taskId", "title status dueDate priority")
+          .lean();
+
+        emitToUsers(
+          req,
+          [req.userId, assignedTo],
+          "COMMUNICATION_MESSAGE_CREATED",
+          populatedTaskMessage || taskMessage,
+        );
       }
 
       emitToUsers(
@@ -615,6 +626,39 @@ router.patch(
       res.json(task);
     } catch (error) {
       res.status(500).json({ error: error.message });
+    }
+  },
+);
+
+router.delete(
+  "/tasks/:id",
+  verifyToken,
+  requireCompany,
+  requireRole(["Admin"]),
+  async (req, res) => {
+    try {
+      const task = await CommunicationTask.findOneAndDelete({
+        _id: req.params.id,
+        companyId: req.companyId,
+      }).lean();
+
+      if (!task?._id) {
+        return res.status(404).json({ error: "Task not found" });
+      }
+
+      emitToUsers(
+        req,
+        [req.userId, task.assignedTo].filter(Boolean),
+        "COMMUNICATION_TASK_UPDATED",
+        {
+          _id: task._id,
+          action: "delete",
+        },
+      );
+
+      return res.json({ success: true, message: "Task deleted" });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
     }
   },
 );

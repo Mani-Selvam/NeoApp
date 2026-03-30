@@ -80,15 +80,30 @@ const toIsoDate = (value) => {
 
 const getEnquiryAccessScope = async (req) => {
   const normalizedRole = String(req.user?.role || "").trim().toLowerCase();
+  const companyId = req.user?.company_id;
 
-  if (normalizedRole === "staff" && req.user?.parentUserId) {
+  if (normalizedRole === "staff") {
+    if (companyId) {
+      const companyUsers = await User.find({ company_id: companyId })
+        .select("_id")
+        .lean();
+
+      const ownerUserIds = companyUsers
+        .map((item) => item?._id)
+        .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
+
+      return {
+        ownerUserIds: ownerUserIds.length > 0 ? ownerUserIds : [req.userId],
+        scopingFilter: { assignedTo: req.userId },
+      };
+    }
+
     return {
-      ownerUserIds: [req.user.parentUserId],
+      ownerUserIds: [req.user?.parentUserId || req.userId],
       scopingFilter: { assignedTo: req.userId },
     };
   }
 
-  const companyId = req.user?.company_id;
   if (companyId) {
     const companyUsers = await User.find({ company_id: companyId })
       .select("_id")
@@ -452,20 +467,7 @@ const resolveAssignee = async ({ requestedAssignedTo, ownerId, actorId, actor })
     if (validAssignee?._id) return validAssignee._id;
   }
 
-  if (companyId) {
-    const staffCandidate = await User.findOne({
-      company_id: companyId,
-      status: "Active",
-      role: { $in: ["staff", "Staff"] },
-    })
-      .sort({ createdAt: 1 })
-      .select("_id")
-      .lean();
-
-    if (staffCandidate?._id) return staffCandidate._id;
-  }
-
-  return actorId || ownerId;
+  return null;
 };
 
 // ADD NEW ENQUIRY (with optional image upload)

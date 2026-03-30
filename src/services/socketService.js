@@ -1,15 +1,39 @@
 import { DeviceEventEmitter, Platform, ToastAndroid } from "react-native";
 import { io } from "socket.io-client";
 import { SOCKET_URL } from "./apiConfig";
-import { showCouponOfferNotification } from "./notificationService";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+    showCouponOfferNotification,
+    showTeamChatNotification,
+} from "./notificationService";
 import { getAuthToken } from "./secureTokenStorage";
 
 let socket = null;
+let currentSocketUserId = "";
+
+const loadCurrentSocketUserId = async () => {
+    try {
+        const rawUser = await AsyncStorage.getItem("user");
+        const parsed = rawUser ? JSON.parse(rawUser) : null;
+        currentSocketUserId = String(parsed?.id || parsed?._id || "");
+    } catch (_error) {
+        currentSocketUserId = "";
+    }
+    return currentSocketUserId;
+};
+
+const getCurrentSocketUserId = async () => {
+    if (currentSocketUserId) {
+        return currentSocketUserId;
+    }
+    return loadCurrentSocketUserId();
+};
 
 export const initSocket = async () => {
     if (socket) return socket;
     const token = await getAuthToken();
     if (!token) return null;
+    await loadCurrentSocketUserId();
 
     console.log("Initializing socket connection to:", SOCKET_URL);
 
@@ -97,6 +121,33 @@ export const initSocket = async () => {
     socket.on("COUPON_SYNC", (payload) => {
         console.log("Coupon sync via socket:", payload);
         DeviceEventEmitter.emit("COUPON_SYNC", payload);
+    });
+
+    socket.on("COMMUNICATION_MESSAGE_CREATED", async (payload) => {
+        DeviceEventEmitter.emit("COMMUNICATION_MESSAGE_CREATED", payload);
+
+        const activeUserId = await getCurrentSocketUserId();
+        const receiverId = String(
+            payload?.receiverId?._id || payload?.receiverId || "",
+        );
+        const senderId = String(
+            payload?.senderId?._id || payload?.senderId || "",
+        );
+        const isIncoming = Boolean(
+            activeUserId && receiverId === activeUserId && senderId !== activeUserId,
+        );
+
+        if (!isIncoming) {
+            return;
+        }
+
+        Promise.resolve(showTeamChatNotification(payload)).catch(() => {});
+
+        if (Platform.OS === "android") {
+            const senderName = String(payload?.senderId?.name || "Team member").trim();
+            const preview = String(payload?.message || "").trim() || "Sent a new message";
+            ToastAndroid.show(`${senderName}: ${preview}`, ToastAndroid.LONG);
+        }
     });
 
     socket.on("disconnect", () => {

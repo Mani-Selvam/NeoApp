@@ -36,6 +36,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../services/apiConfig";
 import {
   createCommunicationTask,
+  deleteCommunicationTask,
   getCommunicationTasks,
   getCommunicationTeam,
   getCommunicationThreads,
@@ -416,6 +417,7 @@ export default function CommunicationScreen({ navigation }) {
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskAttachment, setTaskAttachment] = useState(null);
   const [editingTaskId, setEditingTaskId] = useState("");
+  const [highlightedTaskId, setHighlightedTaskId] = useState("");
   const [taskForm, setTaskForm] = useState({
     title: "",
     description: "",
@@ -955,6 +957,19 @@ export default function CommunicationScreen({ navigation }) {
     },
     [resetTaskComposer],
   );
+  const openTaskFromMessage = useCallback(
+    (messageItem) => {
+      const taskId = String(messageItem?.taskId?._id || messageItem?.taskId || "");
+      if (!taskId) return;
+
+      const taskStatus = String(messageItem?.taskId?.status || "Pending");
+      setView("list");
+      setTab(taskStatus === "Completed" ? "Completed" : "Pending");
+      setHighlightedTaskId(taskId);
+      setTimeout(() => setHighlightedTaskId(""), 2200);
+    },
+    [setHighlightedTaskId, setTab, setView],
+  );
   const openEditTaskModal = useCallback((task) => {
     if (!task?._id) return;
     setEditingTaskId(String(task._id));
@@ -1170,6 +1185,35 @@ export default function CommunicationScreen({ navigation }) {
     [loadTasks],
   );
 
+  const deleteTask = useCallback(
+    (task) => {
+      if (!isAdminUser || !task?._id) return;
+      Alert.alert(
+        "Delete task",
+        `Delete "${task.title || "this task"}"?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                await deleteCommunicationTask(task._id);
+                await loadTasks();
+              } catch (e) {
+                Alert.alert(
+                  "Error",
+                  e?.response?.data?.error || "Failed to delete task",
+                );
+              }
+            },
+          },
+        ],
+      );
+    },
+    [isAdminUser, loadTasks],
+  );
+
   // ── LOADING ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -1290,7 +1334,7 @@ export default function CommunicationScreen({ navigation }) {
                         size={16}
                         color={isMine ? T.accentDark : T.accent}
                       />
-                  </View>
+                    </View>
                   <Text style={S.docLabel} numberOfLines={1}>
                     {item.attachmentName || "Attachment"}
                   </Text>
@@ -1299,12 +1343,16 @@ export default function CommunicationScreen({ navigation }) {
             ) : null}
             {item.message ? <Text style={S.msgTxt}>{item.message}</Text> : null}
             {item.taskId?.title ? (
-              <View style={S.taskInlineBubble}>
+              <TouchableOpacity
+                activeOpacity={0.88}
+                style={S.taskInlineBubble}
+                onPress={() => openTaskFromMessage(item)}
+              >
                 <Text style={S.taskInlineTitle}>{item.taskId.title}</Text>
                 <Text style={S.taskInlineMeta}>
                   {item.taskId.status} · {item.taskId.priority}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ) : null}
             <View style={S.msgMeta}>
               <Text style={S.msgTime}>{formatClock(item.createdAt)}</Text>
@@ -1541,36 +1589,6 @@ export default function CommunicationScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
-
-        {renderTaskModal()}
-        <Modal
-          visible={Boolean(previewImageUri)}
-          transparent
-          animationType="fade"
-          onRequestClose={closeImagePreview}
-        >
-          <View style={S.imagePreviewOverlay}>
-            <TouchableOpacity
-              style={S.imagePreviewBackdrop}
-              activeOpacity={1}
-              onPress={closeImagePreview}
-            />
-            <TouchableOpacity
-              style={S.imagePreviewClose}
-              activeOpacity={0.85}
-              onPress={closeImagePreview}
-            >
-              <Ionicons name="close" size={24} color="#fff" />
-            </TouchableOpacity>
-            {previewImageUri ? (
-              <Image
-                source={{ uri: previewImageUri }}
-                style={S.imagePreviewFull}
-                resizeMode="contain"
-              />
-            ) : null}
-          </View>
-        </Modal>
       </SafeAreaView>
     );
   }
@@ -1653,7 +1671,18 @@ export default function CommunicationScreen({ navigation }) {
       item.attachmentUrl,
     );
     return (
-      <View key={item._id} style={[S.taskCard, isCompleted && S.taskCardDone]}>
+      <TouchableOpacity
+        key={item._id}
+        activeOpacity={0.92}
+        delayLongPress={260}
+        disabled={!canEditTask}
+        onLongPress={() => deleteTask(item)}
+        style={[
+          S.taskCard,
+          isCompleted && S.taskCardDone,
+          highlightedTaskId === String(item._id) && S.taskCardHighlight,
+        ]}
+      >
         <View style={[S.taskAccent, { backgroundColor: st.text }]} />
         <View style={S.taskInner}>
           <View style={S.taskTopRowCard}>
@@ -1701,11 +1730,16 @@ export default function CommunicationScreen({ navigation }) {
           {(item.attachmentUrl || item.attachmentName) && (
             <View style={S.taskAttachmentBlock}>
               {showTaskImage && attachmentSource ? (
-                <Image
-                  source={{ uri: attachmentSource }}
-                  style={S.taskAttachmentImage}
-                  resizeMode="cover"
-                />
+                <TouchableOpacity
+                  activeOpacity={0.92}
+                  onPress={() => setPreviewImageUri(attachmentSource)}
+                >
+                  <Image
+                    source={{ uri: attachmentSource }}
+                    style={S.taskAttachmentImage}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
               ) : null}
               <AttachmentPill
                 attachment={{
@@ -1762,7 +1796,7 @@ export default function CommunicationScreen({ navigation }) {
               )}
           </View>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -1787,7 +1821,8 @@ export default function CommunicationScreen({ navigation }) {
         <View style={S.modalOverlay}>
           <KeyboardAvoidingView
             style={S.modalKav}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}
           >
             <View
               style={[
@@ -1822,8 +1857,10 @@ export default function CommunicationScreen({ navigation }) {
                 contentContainerStyle={[
                   S.modalBody,
                   isCompactHeight && S.modalBodyCompact,
+                  { paddingBottom: insets.bottom + 26 },
                 ]}
-                keyboardShouldPersistTaps="handled"
+                keyboardShouldPersistTaps="always"
+                keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
                 showsVerticalScrollIndicator={false}
               >
                 <Text style={S.fLbl}>TITLE</Text>
@@ -2152,6 +2189,34 @@ export default function CommunicationScreen({ navigation }) {
       )}
 
       {renderTaskModal()}
+      <Modal
+        visible={Boolean(previewImageUri)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeImagePreview}
+      >
+        <View style={S.imagePreviewOverlay}>
+          <TouchableOpacity
+            style={S.imagePreviewBackdrop}
+            activeOpacity={1}
+            onPress={closeImagePreview}
+          />
+          <TouchableOpacity
+            style={S.imagePreviewClose}
+            activeOpacity={0.85}
+            onPress={closeImagePreview}
+          >
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+          {previewImageUri ? (
+            <Image
+              source={{ uri: previewImageUri }}
+              style={S.imagePreviewFull}
+              resizeMode="contain"
+            />
+          ) : null}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2500,6 +2565,15 @@ const S = StyleSheet.create({
   },
   taskInlineTitle: { fontSize: 12, fontWeight: "700", color: T.ink },
   taskInlineMeta: { fontSize: 11, color: T.mid, marginTop: 2 },
+  taskCardHighlight: {
+    borderWidth: 2,
+    borderColor: "#2563EB",
+    shadowColor: "#2563EB",
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
 
   attPreview: {
     paddingHorizontal: 14,
@@ -2779,13 +2853,14 @@ const S = StyleSheet.create({
     backgroundColor: "rgba(11,20,28,0.38)",
     justifyContent: "flex-end",
   },
-  modalKav: { justifyContent: "flex-end" },
+  modalKav: { flex: 1, justifyContent: "flex-end" },
   modalSheet: {
     backgroundColor: T.bg,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     paddingTop: 10,
     maxHeight: "90%",
+    minHeight: 420,
   },
   modalSheetCompact: { maxHeight: "94%" },
   modalPull: {

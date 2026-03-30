@@ -141,3 +141,9 @@ export const updateCommunicationTask = async (taskId, payload) => {
   );
   return response.data;
 };
+
+export const deleteCommunicationTask = async (taskId) => {
+  const client = await getApiClient();
+  const response = await client.delete(`/communication/tasks/${taskId}`);
+  return response.data;
+};

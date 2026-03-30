@@ -3,9 +3,7 @@ const mongoose = require("mongoose");
 const connectDB = async () => {
     try {
         // Try MongoDB Atlas first
-        const mongoURI =
-            process.env.MONGODB_URI ||
-            "mongodb+srv://mani001:admin@cluster0.tzie1yt.mongodb.net/crm_db?retryWrites=true&w=majority";
+        const mongoURI =process.env.MONGODB_URI
 
         const conn = await mongoose.connect(mongoURI, {
             serverSelectionTimeoutMS: 5000,

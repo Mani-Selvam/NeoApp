@@ -65,47 +65,61 @@ const formatDateShort = (v) => {
 
 // ─── UserCard ─────────────────────────────────────────────────────────────────
 // Clean card replacing the old heavy gradient header
-const UserCard = React.memo(({ user, role, logoUri, insetTop }) => {
-  const name = user?.name || "User";
-  const email = user?.email || "";
-  const initials = getInitials(name);
+const UserCard = React.memo(
+  ({ user, role, logoUri, insetTop, compactTop = false }) => {
+    const name = user?.name || "User";
+    const email = user?.email || "";
+    const initials = getInitials(name);
 
-  return (
-    <View style={[UC.root, { paddingTop: Math.max(insetTop + 12, 20) }]}>
-      {/* Avatar */}
-      <View style={UC.avatarWrap}>
-        {logoUri ? (
-          <Image source={{ uri: logoUri }} style={UC.avatarImg} />
-        ) : (
-          <LinearGradient colors={[C.primary, "#7C9EFF"]} style={UC.avatarGrad}>
-            <Text style={UC.avatarInitials}>{initials || "U"}</Text>
-          </LinearGradient>
-        )}
-        {/* Online dot */}
-        <View style={UC.onlineDot} />
-      </View>
+    return (
+      <View
+        style={[
+          UC.root,
+          {
+            paddingTop: compactTop
+              ? Math.max(insetTop, 6)
+              : Math.max(insetTop + 12, 20),
+          },
+        ]}
+      >
+        {/* Avatar */}
+        <View style={UC.avatarWrap}>
+          {logoUri ? (
+            <Image source={{ uri: logoUri }} style={UC.avatarImg} />
+          ) : (
+            <LinearGradient
+              colors={[C.primary, "#7C9EFF"]}
+              style={UC.avatarGrad}
+            >
+              <Text style={UC.avatarInitials}>{initials || "U"}</Text>
+            </LinearGradient>
+          )}
+          {/* Online dot */}
+          <View style={UC.onlineDot} />
+        </View>
 
-      {/* Info */}
-      <View style={UC.info}>
-        <Text style={UC.name} numberOfLines={1}>
-          {name}
-        </Text>
-        {email ? (
-          <Text style={UC.email} numberOfLines={1}>
-            {email}
+        {/* Info */}
+        <View style={UC.info}>
+          <Text style={UC.name} numberOfLines={1}>
+            {name}
           </Text>
-        ) : null}
-        {/* Role pill */}
-        <View style={UC.rolePill}>
-          <View style={UC.roleIcon}>
-            <Ionicons name="shield-checkmark" size={9} color={C.primary} />
+          {email ? (
+            <Text style={UC.email} numberOfLines={1}>
+              {email}
+            </Text>
+          ) : null}
+          {/* Role pill */}
+          <View style={UC.rolePill}>
+            <View style={UC.roleIcon}>
+              <Ionicons name="shield-checkmark" size={9} color={C.primary} />
+            </View>
+            <Text style={UC.roleText}>{role}</Text>
           </View>
-          <Text style={UC.roleText}>{role}</Text>
         </View>
       </View>
-    </View>
-  );
-});
+    );
+  },
+);
 UserCard.displayName = "UserCard";
 
 const UC = StyleSheet.create({
@@ -413,7 +427,11 @@ const MenuItem = React.memo(
       onPress?.();
     };
 
-    const iconColor = locked ? C.textMuted : active ? C.primary : color || C.textSub;
+    const iconColor = locked
+      ? C.textMuted
+      : active
+        ? C.primary
+        : color || C.textSub;
 
     return (
       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
@@ -427,16 +445,26 @@ const MenuItem = React.memo(
 
           {/* Icon */}
           <View style={[MI.iconWrap, active && MI.iconWrapActive]}>
-              <Ionicons name={locked ? "lock-closed-outline" : icon} size={16} color={iconColor} />
+            <Ionicons
+              name={locked ? "lock-closed-outline" : icon}
+              size={16}
+              color={iconColor}
+            />
           </View>
 
           {/* Label */}
           <Text
             style={[
               MI.label,
-               { color: locked ? C.textMuted : active ? C.primary : color || C.textSub },
-               active && MI.labelActive,
-             ]}
+              {
+                color: locked
+                  ? C.textMuted
+                  : active
+                    ? C.primary
+                    : color || C.textSub,
+              },
+              active && MI.labelActive,
+            ]}
           >
             {label}
           </Text>
@@ -449,8 +477,12 @@ const MenuItem = React.memo(
           ) : null}
 
           {/* Active chevron dot */}
-           {locked ? <Text style={MI.lockedText}>Locked</Text> : active ? <View style={MI.activeDot} /> : null}
-         </TouchableOpacity>
+          {locked ? (
+            <Text style={MI.lockedText}>Locked</Text>
+          ) : active ? (
+            <View style={MI.activeDot} />
+          ) : null}
+        </TouchableOpacity>
       </Animated.View>
     );
   },
@@ -718,7 +750,8 @@ export default function AppSideMenu({
           user={user}
           role={role}
           logoUri={logoUri}
-          insetTop={insets.top + 20}
+          insetTop={isStaff ? 80 : insets.top + 10}
+          compactTop={isStaff}
         />
 
         {/* Scrollable menu */}
@@ -748,35 +781,57 @@ export default function AppSideMenu({
               <MenuItem
                 icon="link-outline"
                 label="Lead Sources"
-                onPress={() => navWithFeature("LeadSourceScreen", "lead_sources", "Lead Sources")}
+                onPress={() =>
+                  navWithFeature(
+                    "LeadSourceScreen",
+                    "lead_sources",
+                    "Lead Sources",
+                  )
+                }
                 active={isActive("LeadSourceScreen")}
                 locked={!hasPlanFeature(billingInfo?.plan, "lead_sources")}
               />
               <MenuItem
                 icon="pricetags-outline"
                 label="Products"
-                onPress={() => navWithFeature("ProductScreen", "products", "Products")}
+                onPress={() =>
+                  navWithFeature("ProductScreen", "products", "Products")
+                }
                 active={isActive("ProductScreen")}
                 locked={!hasPlanFeature(billingInfo?.plan, "products")}
               />
               <MenuItem
                 icon="people-circle-outline"
                 label="Admin / Staff"
-                onPress={() => navWithFeature("StaffScreen", "staff_management", "Admin / Staff")}
+                onPress={() =>
+                  navWithFeature(
+                    "StaffScreen",
+                    "staff_management",
+                    "Admin / Staff",
+                  )
+                }
                 active={isActive("StaffScreen")}
                 locked={!hasPlanFeature(billingInfo?.plan, "staff_management")}
               />
               <MenuItem
                 icon="flag-outline"
                 label="Targets"
-                onPress={() => navWithFeature("TargetsScreen", "targets", "Targets")}
+                onPress={() =>
+                  navWithFeature("TargetsScreen", "targets", "Targets")
+                }
                 active={isActive("TargetsScreen")}
                 locked={!hasPlanFeature(billingInfo?.plan, "targets")}
               />
               <MenuItem
                 icon="chatbubble-ellipses-outline"
                 label="Templates"
-                onPress={() => navWithFeature("MessageTemplateScreen", "whatsapp", "Templates")}
+                onPress={() =>
+                  navWithFeature(
+                    "MessageTemplateScreen",
+                    "whatsapp",
+                    "Templates",
+                  )
+                }
                 active={isActive("MessageTemplateScreen")}
                 locked={!hasPlanFeature(billingInfo?.plan, "whatsapp")}
               />
@@ -808,45 +863,51 @@ export default function AppSideMenu({
 
           {/* CRM */}
           <MenuSection title="CRM">
-              <MenuItem
-                icon="people-outline"
-                label="Enquiries"
-                onPress={() => navWithFeature("Enquiry", "enquiries", "Enquiries")}
-                active={isActive("Enquiry")}
-                locked={!hasPlanFeature(billingInfo?.plan, "enquiries")}
-              />
             <MenuItem
-                icon="call-outline"
-                label="Follow-ups"
-                onPress={() => navWithFeature("FollowUp", "followups", "Follow-ups")}
-                active={isActive("FollowUp")}
-                locked={!hasPlanFeature(billingInfo?.plan, "followups")}
-              />
+              icon="people-outline"
+              label="Enquiries"
+              onPress={() =>
+                navWithFeature("Enquiry", "enquiries", "Enquiries")
+              }
+              active={isActive("Enquiry")}
+              locked={!hasPlanFeature(billingInfo?.plan, "enquiries")}
+            />
             <MenuItem
-                icon="mail-outline"
-                label="Email"
-                onPress={() => navWithFeature("EmailScreen", "email", "Email")}
-                active={isActive("EmailScreen")}
-                locked={!hasPlanFeature(billingInfo?.plan, "email")}
-              />
+              icon="call-outline"
+              label="Follow-ups"
+              onPress={() =>
+                navWithFeature("FollowUp", "followups", "Follow-ups")
+              }
+              active={isActive("FollowUp")}
+              locked={!hasPlanFeature(billingInfo?.plan, "followups")}
+            />
             <MenuItem
-                icon="list-outline"
-                label="Calls"
-                onPress={() => navWithFeature("CallLog", "call_logs", "Calls")}
-                active={isActive("CallLog")}
-                locked={!hasPlanFeature(billingInfo?.plan, "call_logs")}
-              />
+              icon="mail-outline"
+              label="Email"
+              onPress={() => navWithFeature("EmailScreen", "email", "Email")}
+              active={isActive("EmailScreen")}
+              locked={!hasPlanFeature(billingInfo?.plan, "email")}
+            />
+            <MenuItem
+              icon="list-outline"
+              label="Calls"
+              onPress={() => navWithFeature("CallLog", "call_logs", "Calls")}
+              active={isActive("CallLog")}
+              locked={!hasPlanFeature(billingInfo?.plan, "call_logs")}
+            />
           </MenuSection>
 
           {/* Communication */}
           <MenuSection title="Communication">
             <MenuItem
-                icon="chatbubbles-outline"
-                label="Team Chat"
-                onPress={() => navWithFeature("CommunicationScreen", "team_chat", "Team Chat")}
-                active={isActive("CommunicationScreen")}
-                locked={!hasPlanFeature(billingInfo?.plan, "team_chat")}
-              />
+              icon="chatbubbles-outline"
+              label="Team Chat"
+              onPress={() =>
+                navWithFeature("CommunicationScreen", "team_chat", "Team Chat")
+              }
+              active={isActive("CommunicationScreen")}
+              locked={!hasPlanFeature(billingInfo?.plan, "team_chat")}
+            />
           </MenuSection>
           {/* Footer */}
           <FooterSection version={version} bottomInset={insets.bottom} />

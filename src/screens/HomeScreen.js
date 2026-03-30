@@ -47,6 +47,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import { getImageUrl } from "../services/apiConfig";
 import * as dashboardService from "../services/dashboardService";
+import { getFollowUps } from "../services/followupService";
 import { getBillingCoupons } from "../services/userService";
 
 // -----------------------------------------------------------------------------
@@ -68,6 +69,14 @@ const getBreakpoint = (w) => {
 const rs = (base, bp) => {
   const multipliers = { sm: 0.85, md: 1, lg: 1.2, xl: 1.35 };
   return Math.round(base * (multipliers[bp] ?? 1));
+};
+
+const toLocalIsoDate = (value = new Date()) => {
+  const d = value instanceof Date ? value : new Date(value);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 };
 
 // Hook: returns { bp, w, h, isTablet, isDesktop, isSmallPhone }
@@ -906,6 +915,7 @@ export default function HomeScreen({ navigation }) {
     totalEnquiry: 0,
     todayEnquiry: 0,
     todayFollowup: 0,
+    missedFollowup: 0,
     salesMonthly: 0,
     monthlyRevenue: 0,
     overallSalesAmount: 0,
@@ -955,15 +965,29 @@ export default function HomeScreen({ navigation }) {
   const fetchData = async () => {
     try {
       if (stats.totalEnquiry === 0) setLoading(true);
-      const [data, couponData] = await Promise.all([
+      const referenceDate = toLocalIsoDate(new Date());
+      const [data, couponData, todayFollowUpsRes, missedFollowUpsRes] = await Promise.all([
         dashboardService.getDashboardSummary(),
         getBillingCoupons().catch(() => ({ coupons: [] })),
+        getFollowUps("Today", 1, 1, referenceDate).catch(() => null),
+        getFollowUps("Missed", 1, 1, referenceDate).catch(() => null),
       ]);
+      const todayFollowUpTotal = Number(
+        todayFollowUpsRes?.pagination?.total ??
+          data?.todayFollowUps ??
+          0,
+      );
+      const missedFollowUpTotal = Number(
+        missedFollowUpsRes?.pagination?.total ??
+          data?.missedFollowUps ??
+          0,
+      );
       if (data) {
         setStats({
           totalEnquiry: data.totalEnquiry || 0,
           todayEnquiry: data.todayEnquiry || 0,
-          todayFollowup: data.todayFollowUps || 0,
+          todayFollowup: todayFollowUpTotal,
+          missedFollowup: missedFollowUpTotal,
           salesMonthly: data.salesMonthly || 0,
           monthlyRevenue: data.monthlyRevenue || 0,
           overallSalesAmount: data.overallSalesAmount || 0,
@@ -1104,8 +1128,8 @@ export default function HomeScreen({ navigation }) {
     } catch {}
   };
 
-  const todayActivityCount = todayTasks.length;
-  const missedActivityCount = missedTasks.length;
+  const todayActivityCount = Number(stats.todayFollowup || todayTasks.length || 0);
+  const missedActivityCount = Number(stats.missedFollowup || missedTasks.length || 0);
 
   const weekBarData = [
     { value: Math.round(stats.conv * 0.3), label: "M" },

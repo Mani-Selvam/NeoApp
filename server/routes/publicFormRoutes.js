@@ -53,12 +53,20 @@ const generateEnquiryNumber = async (companyId) => {
   return `ENQ-${String(nextNumber).padStart(3, "0")}`;
 };
 
-const buildPublicFormUrl = (req, slug) => {
+const resolvePublicBaseUrl = (req) => {
+  const explicitBaseUrl = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (explicitBaseUrl) {
+    return explicitBaseUrl.replace(/\/+$/, "");
+  }
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
     .split(",")[0]
     .trim();
   const protocol = forwardedProto || req.protocol || "https";
-  return `${protocol}://${req.get("host")}/public/forms/${encodeURIComponent(slug)}`;
+  return `${protocol}://${req.get("host")}`;
+};
+
+const buildPublicFormUrl = (req, slug) => {
+  return `${resolvePublicBaseUrl(req)}/public/forms/${encodeURIComponent(slug)}`;
 };
 
 const getClientKey = (req, slug) =>
@@ -99,19 +107,10 @@ const resolveOwnerAndAssignee = async (companyId) => {
     .lean();
 
   const owner = admins[0] || null;
-  const staff = await User.findOne({
-    company_id: companyId,
-    status: "Active",
-    role: { $in: ["Staff", "staff"] },
-  })
-    .sort({ createdAt: 1, _id: 1 })
-    .select("_id")
-    .lean();
-
   return {
     ownerId: owner?._id || null,
     ownerName: owner?.name || "Public Form",
-    assignedTo: staff?._id || owner?._id || null,
+    assignedTo: null,
   };
 };
 
@@ -479,7 +478,15 @@ const renderFormPage = ({ company, url }) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
+        const raw = await res.text();
+        let data = {};
+        try {
+          data = raw ? JSON.parse(raw) : {};
+        } catch (_error) {
+          throw new Error(
+            "Server returned HTML instead of JSON. Check the hosted public form POST route."
+          );
+        }
         if (!res.ok) throw new Error(data.message || "Unable to submit form");
         form.reset();
         status.textContent = data.message || ${JSON.stringify(successMessage)};

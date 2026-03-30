@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "myApp",
-    "slug": "myapp",
+    "name": "NeoApp",
+    "slug": "neoapp-manibro01",
+    "owner": "manibro01",
     "version": "1.0.0",
     "icon": "./src/assets/app-icon.png",
     "orientation": "portrait",
@@ -70,7 +71,7 @@
         "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
       },
       "eas": {
-        "projectId": "e1b59ff5-9cd7-4593-b37b-d7bec2e10318"
+        "projectId": "b952a2fd-6b16-48be-8656-8b932541b531"
       }
     }
   }
