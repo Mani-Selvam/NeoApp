@@ -25,6 +25,7 @@ import {
     Modal,
     PanResponder,
     Platform,
+    Pressable,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -1162,7 +1163,14 @@ const mapEnquiryToFollowUpCard = (item = {}) => ({
     source: item?.source || "",
     address: item?.address || "",
     requirements: "",
-    isVirtualNew: true,
+    // FIX #13: isVirtualNew should be false if a follow-up date exists
+    isVirtualNew: !(
+        item?.selectedFollowUpDate ||
+        item?.latestFollowUpDate ||
+        item?.nextFollowUpDate ||
+        item?.followUpDate ||
+        item?.date
+    ),
 });
 const getHistoryEditStatus = (item = {}) => {
     const explicit = normalizeStatus(item?.enquiryStatus || item?.status || "");
@@ -1226,7 +1234,7 @@ const getCalendarSummaryBucket = (item = {}) => {
                         const nowMinutes =
                             now.getHours() * 60 + now.getMinutes();
                         const dueMinutes = hh * 60 + mm;
-	                        if (dueMinutes <= nowMinutes) return "missed";
+                        if (dueMinutes <= nowMinutes) return "missed";
                     }
                 }
             }
@@ -1574,18 +1582,19 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                             fontSize: sc.f.xs,
                                         },
                                     ]}>
-                                    {item.isVirtualNew
-                                        ? "No follow-up yet"
-                                        : item.latestFollowUpDate ||
-                                          safeDate(
-                                              item.lastContactedAt ||
-                                                  item.enquiryDateTime ||
-                                                  item.createdAt,
-                                              {
-                                                  month: "short",
-                                                  day: "numeric",
-                                              },
-                                          )}
+                                    {item.nextFollowUpDate ||
+                                        item.latestFollowUpDate ||
+                                        (item.isVirtualNew
+                                            ? "No follow-up yet"
+                                            : safeDate(
+                                                  item.lastContactedAt ||
+                                                      item.enquiryDateTime ||
+                                                      item.createdAt,
+                                                  {
+                                                      month: "short",
+                                                      day: "numeric",
+                                                  },
+                                              ))}
                                 </Text>
                             </View>
                         </View>
@@ -1738,6 +1747,8 @@ const DetailView = ({
     history,
     historyLoading,
     onClose,
+    onDeleteEnquiry,
+    deletingEnquiry,
     autoOpenFollowUpFormToken,
     // composer state
     selectedEnquiry,
@@ -1769,6 +1780,10 @@ const DetailView = ({
     currentStatus,
     billingInfo,
     showUpgradePrompt,
+    activeTab = "Today",
+    setFollowUps,
+    lastFetch,
+    refreshDetailHistory,
 }) => {
     const insets = useSafeAreaInsets();
     const { width: SW, height: SH } = useWindowDimensions();
@@ -1777,6 +1792,7 @@ const DetailView = ({
     const mountX = useRef(new Animated.Value(SW)).current;
     const [tabIdx, setTabIdx] = useState(0);
     const [showFollowUpForm, setShowFollowUpForm] = useState(false);
+    const [deletingFollowUpId, setDeletingFollowUpId] = useState(null);
     const tabRef = useRef(0);
     const tabGestureLockedRef = useRef(false);
     const followUpFormScrollRef = useRef(null);
@@ -2733,11 +2749,68 @@ const DetailView = ({
                                                         h.date ||
                                                         "-";
                                                     const isEditable = Boolean(
+                                                        h?.followupId ||
+                                                        h?.id ||
                                                         h?._id,
                                                     );
+                                                    const handleDeleteFollowUp =
+                                                        async () => {
+                                                            // Try to delete the follow-up if it has an ID
+                                                            const followupId =
+                                                                h?.followupId ||
+                                                                h?.id ||
+                                                                h?._id;
+                                                            if (!followupId) {
+                                                                console.warn(
+                                                                    "[FollowUpScreen] No followup ID to delete",
+                                                                );
+                                                                return;
+                                                            }
+                                                            try {
+                                                                console.log(
+                                                                    `[FollowUpScreen] Deleting follow-up: ${followupId}`,
+                                                                );
+                                                                setDeletingFollowUpId(
+                                                                    followupId,
+                                                                );
+                                                                await notificationService.cancelNotificationsForFollowUpIds?.(
+                                                                    [
+                                                                        followupId,
+                                                                    ],
+                                                                );
+                                                                await followupService.deleteFollowUp(
+                                                                    followupId,
+                                                                );
+                                                                // Refresh after deletion
+                                                                setFollowUps(
+                                                                    [],
+                                                                );
+                                                                lastFetch.current = 0;
+                                                                onEditScheduledFollowUp?.(
+                                                                    null,
+                                                                );
+                                                                // Refresh the detail view history
+                                                                await refreshDetailHistory?.();
+                                                                console.log(
+                                                                    `[FollowUpScreen] ✓ Follow-up deleted and history refreshed`,
+                                                                );
+                                                                setDeletingFollowUpId(
+                                                                    null,
+                                                                );
+                                                            } catch (error) {
+                                                                console.error(
+                                                                    "[FollowUpScreen] Delete followup error:",
+                                                                    error,
+                                                                );
+                                                                setDeletingFollowUpId(
+                                                                    null,
+                                                                );
+                                                            }
+                                                        };
+
                                                     return (
                                                         <View
-                                                            key={`inline-${h._id || "history"}-${h.activityType || h.type || "row"}-${i}`}
+                                                            key={`inline-${h?.followupId || h?.id || h._id || "history"}-${h.activityType || h.type || "row"}-${i}`}
                                                             style={[
                                                                 FU.timelineCard,
                                                                 i <
@@ -2792,48 +2865,119 @@ const DetailView = ({
                                                                 </Text>
                                                             </View>
                                                             {isEditable && (
-                                                                <TouchableOpacity
-                                                                    onPress={() => {
-                                                                        setShowFollowUpForm(
-                                                                            true,
-                                                                        );
-                                                                        onEditScheduledFollowUp?.(
-                                                                            h,
-                                                                        );
-                                                                        setTimeout(
-                                                                            () => {
-                                                                                followUpFormScrollRef.current?.scrollTo?.(
-                                                                                    {
-                                                                                        y: 0,
-                                                                                        animated: true,
-                                                                                    },
-                                                                                );
+                                                                <View
+                                                                    style={{
+                                                                        flexDirection:
+                                                                            "row",
+                                                                        gap: 6,
+                                                                    }}>
+                                                                    <TouchableOpacity
+                                                                        disabled={
+                                                                            deletingFollowUpId ===
+                                                                            (h?.followupId ||
+                                                                                h?.id ||
+                                                                                h?._id)
+                                                                        }
+                                                                        onPress={() => {
+                                                                            setShowFollowUpForm(
+                                                                                true,
+                                                                            );
+                                                                            onEditScheduledFollowUp?.(
+                                                                                h,
+                                                                            );
+                                                                            setTimeout(
+                                                                                () => {
+                                                                                    followUpFormScrollRef.current?.scrollTo?.(
+                                                                                        {
+                                                                                            y: 0,
+                                                                                            animated: true,
+                                                                                        },
+                                                                                    );
+                                                                                },
+                                                                                50,
+                                                                            );
+                                                                        }}
+                                                                        style={[
+                                                                            FU.timelineEditBtn,
+                                                                            deletingFollowUpId ===
+                                                                                (h?.followupId ||
+                                                                                    h?.id ||
+                                                                                    h?._id) && {
+                                                                                opacity: 0.5,
                                                                             },
-                                                                            50,
-                                                                        );
-                                                                    }}
-                                                                    style={
-                                                                        FU.timelineEditBtnRight
-                                                                    }
-                                                                    activeOpacity={
-                                                                        0.85
-                                                                    }>
-                                                                    <Ionicons
-                                                                        name="create-outline"
-                                                                        size={
-                                                                            13
-                                                                        }
-                                                                        color={
-                                                                            C.primary
-                                                                        }
-                                                                    />
-                                                                    <Text
-                                                                        style={
-                                                                            FU.timelineEditText
+                                                                        ]}
+                                                                        activeOpacity={
+                                                                            0.7
                                                                         }>
-                                                                        Edit
-                                                                    </Text>
-                                                                </TouchableOpacity>
+                                                                        <Ionicons
+                                                                            name="create-outline"
+                                                                            size={
+                                                                                13
+                                                                            }
+                                                                            color={
+                                                                                C.primary
+                                                                            }
+                                                                        />
+                                                                        <Text
+                                                                            style={
+                                                                                FU.timelineBtnText
+                                                                            }>
+                                                                            Edit
+                                                                        </Text>
+                                                                    </TouchableOpacity>
+                                                                    <TouchableOpacity
+                                                                        disabled={
+                                                                            deletingFollowUpId ===
+                                                                            (h?.followupId ||
+                                                                                h?.id ||
+                                                                                h?._id)
+                                                                        }
+                                                                        onPress={
+                                                                            handleDeleteFollowUp
+                                                                        }
+                                                                        style={[
+                                                                            FU.timelineDeleteBtn,
+                                                                            deletingFollowUpId ===
+                                                                                (h?.followupId ||
+                                                                                    h?.id ||
+                                                                                    h?._id) && {
+                                                                                opacity: 0.5,
+                                                                            },
+                                                                        ]}
+                                                                        activeOpacity={
+                                                                            0.7
+                                                                        }>
+                                                                        {deletingFollowUpId ===
+                                                                        (h?.followupId ||
+                                                                            h?.id ||
+                                                                            h?._id) ? (
+                                                                            <ActivityIndicator
+                                                                                size="small"
+                                                                                color={
+                                                                                    C.danger
+                                                                                }
+                                                                            />
+                                                                        ) : (
+                                                                            <>
+                                                                                <Ionicons
+                                                                                    name="trash-outline"
+                                                                                    size={
+                                                                                        13
+                                                                                    }
+                                                                                    color={
+                                                                                        C.danger
+                                                                                    }
+                                                                                />
+                                                                                <Text
+                                                                                    style={
+                                                                                        FU.timelineDeleteText
+                                                                                    }>
+                                                                                    Delete
+                                                                                </Text>
+                                                                            </>
+                                                                        )}
+                                                                    </TouchableOpacity>
+                                                                </View>
                                                             )}
                                                         </View>
                                                     );
@@ -3630,25 +3774,43 @@ const FU = StyleSheet.create({
         borderWidth: 1,
         borderColor: C.primaryMid,
     },
-    timelineEditBtnRight: {
-        marginLeft: 10,
-        minWidth: 72,
+    timelineEditBtn: {
+        minWidth: 70,
         alignSelf: "center",
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
-        gap: 6,
+        gap: 5,
         paddingHorizontal: 10,
-        paddingVertical: 8,
-        borderRadius: 12,
+        paddingVertical: 7,
+        borderRadius: 10,
         backgroundColor: C.primarySoft,
         borderWidth: 1,
         borderColor: C.primaryMid,
     },
-    timelineEditText: {
+    timelineDeleteBtn: {
+        minWidth: 70,
+        alignSelf: "center",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 5,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        borderRadius: 10,
+        backgroundColor: C.dangerSoft ?? "#FEE2E2",
+        borderWidth: 1,
+        borderColor: C.dangerMid ?? "#FECACA",
+    },
+    timelineBtnText: {
         fontSize: 11,
         fontWeight: "700",
         color: C.primary,
+    },
+    timelineDeleteText: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.danger,
     },
 });
 
@@ -3748,71 +3910,80 @@ export default function FollowUpScreen({ navigation, route }) {
         };
     }, [isRealTodaySelected, selectedDate, showMissedModal]);
 
-	    // Real-time missed detection: run every 60 seconds and auto-refresh the list once a due time is reached.
-	    useEffect(() => {
-	        if (!isRealTodaySelected) return undefined;
+    // Real-time missed detection: run every 60 seconds and auto-refresh the list once a due time is reached.
+    useEffect(() => {
+        if (!isRealTodaySelected) return undefined;
 
-	        let alive = true;
-	        const checkMissedItems = () => {
-	            if (!alive || followUps.length === 0) return;
+        let alive = true;
+        const checkMissedItems = () => {
+            if (!alive || followUps.length === 0) return;
 
-	            const now = new Date();
-	            const currentMinutes = now.getHours() * 60 + now.getMinutes();
-	            const minuteKey = `${selectedDate}:${currentMinutes}`;
-	            if (missedTimeCheckRef.current === minuteKey) return;
+            const now = new Date();
+            const currentMinutes = now.getHours() * 60 + now.getMinutes();
+            const minuteKey = `${selectedDate}:${currentMinutes}`;
+            if (missedTimeCheckRef.current === minuteKey) return;
 
-	            const shouldRefresh = followUps.some((item) => {
-	                // Already treated as missed by UI logic.
-	                if (getCalendarSummaryBucket(item) === "missed") return false;
+            const shouldRefresh = followUps.some((item) => {
+                // Already treated as missed by UI logic.
+                if (getCalendarSummaryBucket(item) === "missed") return false;
 
-	                // Only apply to real-today items with a time.
-	                const iso = getFollowUpCalendarDate(item);
-	                if (!iso || iso !== selectedDate) return false;
+                // Only apply to real-today items with a time.
+                const iso = getFollowUpCalendarDate(item);
+                if (!iso || iso !== selectedDate) return false;
 
-	                const status = getHistoryEditStatus(item);
-	                if (!["New", "Contacted", "Interested"].includes(status)) return false;
+                const status = getHistoryEditStatus(item);
+                if (!["New", "Contacted", "Interested"].includes(status))
+                    return false;
 
-	                const timeStr = String(item?.time || "").trim();
-	                if (!timeStr) return false;
+                const timeStr = String(item?.time || "").trim();
+                if (!timeStr) return false;
 
-	                const m = timeStr.match(
-	                    /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
-	                );
-	                if (!m) return false;
+                const m = timeStr.match(
+                    /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
+                );
+                if (!m) return false;
 
-	                let hh = Number(m[1]);
-	                const mm = Number(m[2] ?? "0");
-	                const meridian = String(m[4] || "").toUpperCase();
+                let hh = Number(m[1]);
+                const mm = Number(m[2] ?? "0");
+                const meridian = String(m[4] || "").toUpperCase();
 
-	                if (meridian === "PM" && hh !== 12) hh += 12;
-	                if (meridian === "AM" && hh === 12) hh = 0;
+                if (meridian === "PM" && hh !== 12) hh += 12;
+                if (meridian === "AM" && hh === 12) hh = 0;
 
-	                const itemMinutes = hh * 60 + mm;
-	                return itemMinutes <= currentMinutes;
-	            });
+                const itemMinutes = hh * 60 + mm;
+                return itemMinutes <= currentMinutes;
+            });
 
-	            if (!shouldRefresh) return;
+            if (!shouldRefresh) return;
 
-	            missedTimeCheckRef.current = minuteKey;
-	            console.log("[FollowUp] Due time reached; refreshing missed status...");
+            missedTimeCheckRef.current = minuteKey;
+            console.log(
+                "[FollowUp] Due time reached; refreshing missed status...",
+            );
 
-	            // Server also auto-marks Missed on /followups, so refresh both list + counts.
-	            fetchFollowUps(activeTab, true);
-	            fetchTabCounts(selectedDate).catch(() => {});
-	            if (showMissedModal) loadMissedModalItems(selectedDate);
-	        };
+            // Server also auto-marks Missed on /followups, so refresh both list + counts.
+            fetchFollowUps(activeTab, true);
+            fetchTabCounts(selectedDate).catch(() => {});
+            if (showMissedModal) loadMissedModalItems(selectedDate);
+        };
 
-	        checkMissedItems();
-	        missedCheckIntervalRef.current = setInterval(checkMissedItems, 60000);
+        checkMissedItems();
+        missedCheckIntervalRef.current = setInterval(checkMissedItems, 60000);
 
-	        return () => {
-	            alive = false;
-	            if (missedCheckIntervalRef.current) {
-	                clearInterval(missedCheckIntervalRef.current);
-	                missedCheckIntervalRef.current = null;
-	            }
-	        };
-	    }, [isRealTodaySelected, activeTab, followUps, selectedDate, showMissedModal]);
+        return () => {
+            alive = false;
+            if (missedCheckIntervalRef.current) {
+                clearInterval(missedCheckIntervalRef.current);
+                missedCheckIntervalRef.current = null;
+            }
+        };
+    }, [
+        isRealTodaySelected,
+        activeTab,
+        followUps,
+        selectedDate,
+        showMissedModal,
+    ]);
 
     // ── Focus ────────────────────────────────────────────────────────────────
     useFocusEffect(
@@ -3979,6 +4150,9 @@ export default function FollowUpScreen({ navigation, route }) {
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () => {
+            // FIX #15: Clear list when enquiry is updated to properly handle
+            // status changes across tabs (prevents stale items from old sections)
+            setFollowUps([]);
             lastFetch.current = 0;
             fetchFollowUps(activeTab, true);
         });
@@ -4285,6 +4459,28 @@ export default function FollowUpScreen({ navigation, route }) {
         setEditFollowUpId(null);
     }, []);
 
+    const refreshDetailHistory = useCallback(async () => {
+        if (!detailEnquiry) return;
+        try {
+            setHistoryLoading(true);
+            const hist = await followupService.getFollowUpHistory(
+                detailEnquiry.enqNo || detailEnquiry.enqId || detailEnquiry._id,
+            );
+            setDetailHistory(Array.isArray(hist) ? hist : []);
+            console.log(
+                `[FollowUpScreen] ✓ Detail history refreshed: ${hist?.length || 0} items`,
+            );
+        } catch (error) {
+            console.error(
+                "[FollowUpScreen] Error refreshing history:",
+                error?.message || error,
+            );
+            setDetailHistory([]);
+        } finally {
+            setHistoryLoading(false);
+        }
+    }, [detailEnquiry]);
+
     const handleEditScheduledFollowUp = useCallback((item) => {
         if (!item?._id) return;
         setEditFollowUpId(item._id);
@@ -4414,6 +4610,12 @@ export default function FollowUpScreen({ navigation, route }) {
                         : {}),
                 },
             );
+            // FIX #15b: Emit event so listeners refresh the list
+            DeviceEventEmitter.emit("ENQUIRY_UPDATED");
+            // FIX #14: Clear entire list and refresh to properly handle status changes
+            // across tabs (e.g., drop → contacted). Old approach only refreshed activeTab,
+            // but item stayed in old section if status changed to different category.
+            setFollowUps([]);
             lastFetch.current = 0;
             fetchFollowUps(activeTab, true);
             if (["Contacted", "Interested", "Converted"].includes(editStatus))
@@ -5540,6 +5742,10 @@ export default function FollowUpScreen({ navigation, route }) {
                         }
                         billingInfo={billingInfo}
                         showUpgradePrompt={showUpgradePrompt}
+                        activeTab={activeTab}
+                        setFollowUps={setFollowUps}
+                        lastFetch={lastFetch}
+                        refreshDetailHistory={refreshDetailHistory}
                     />
                 </View>
             )}

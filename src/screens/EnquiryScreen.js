@@ -499,6 +499,7 @@ const EnquiryDetailPage = ({
     logsLoading,
     onClose,
     onEdit,
+    onMakeFollowUp,
     billingInfo,
     showUpgradePrompt,
 }) => {
@@ -792,6 +793,26 @@ const EnquiryDetailPage = ({
                                             </View>
                                         </View>
                                     ))}
+                                    <TouchableOpacity
+                                        style={SD.makeFollowupBtn}
+                                        onPress={() => {
+                                            onClose();
+                                            setTimeout(
+                                                () => onMakeFollowUp?.(enquiry),
+                                                100,
+                                            );
+                                        }}
+                                        activeOpacity={0.8}>
+                                        <Ionicons
+                                            name="add-circle-outline"
+                                            size={16}
+                                            color="#FFFFFF"
+                                            style={{ marginRight: 6 }}
+                                        />
+                                        <Text style={SD.makeFollowupBtnText}>
+                                            Make Follow-up
+                                        </Text>
+                                    </TouchableOpacity>
                                 </View>
                             )}
 
@@ -947,43 +968,43 @@ export default function EnquiryListScreen({ navigation, route }) {
     const [showLogoutModal, setShowLogoutModal] = useState(false);
 
     const fabScale = useRef(new Animated.Value(1)).current;
-	    const isInitialMount = useRef(true);
-	    const skipNextSearch = useRef(false);
-	    const fetchRef = useRef(null);
+    const isInitialMount = useRef(true);
+    const skipNextSearch = useRef(false);
+    const fetchRef = useRef(null);
 
-	    const getEnquiryKey = useCallback((item) => {
-	        const id = item?._id || item?.id;
-	        if (id) return `id:${String(id)}`;
-	        const no = item?.enqNo;
-	        if (no) return `no:${String(no)}`;
-	        const mobile = item?.mobile || item?.phone;
-	        if (mobile) return `m:${String(mobile)}`;
-	        return "";
-	    }, []);
+    const getEnquiryKey = useCallback((item) => {
+        const id = item?._id || item?.id;
+        if (id) return `id:${String(id)}`;
+        const no = item?.enqNo;
+        if (no) return `no:${String(no)}`;
+        const mobile = item?.mobile || item?.phone;
+        if (mobile) return `m:${String(mobile)}`;
+        return "";
+    }, []);
 
-	    const dedupeEnquiries = useCallback(
-	        (items = []) => {
-	            const list = Array.isArray(items) ? items.filter(Boolean) : [];
-	            const seen = new Set();
-	            const out = [];
-	            for (const item of list) {
-	                const key = getEnquiryKey(item);
-	                if (!key) {
-	                    out.push(item);
-	                    continue;
-	                }
-	                if (seen.has(key)) continue;
-	                seen.add(key);
-	                out.push(item);
-	            }
-	            return out;
-	        },
-	        [getEnquiryKey],
-	    );
+    const dedupeEnquiries = useCallback(
+        (items = []) => {
+            const list = Array.isArray(items) ? items.filter(Boolean) : [];
+            const seen = new Set();
+            const out = [];
+            for (const item of list) {
+                const key = getEnquiryKey(item);
+                if (!key) {
+                    out.push(item);
+                    continue;
+                }
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push(item);
+            }
+            return out;
+        },
+        [getEnquiryKey],
+    );
 
     // ── Data fetching ──────────────────────────────────────────────────────────
-	    const fetchEnquiries = useCallback(
-	        async (refresh = false) => {
+    const fetchEnquiries = useCallback(
+        async (refresh = false) => {
             if (refresh) {
                 setIsLoading(true);
             } else {
@@ -1032,7 +1053,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                         if (loadedPages >= totalPages) break;
                     }
 
-	                    setEnquiries(dedupeEnquiries(merged));
+                    setEnquiries(dedupeEnquiries(merged));
                     setHasMore(totalPages ? loadedPages < totalPages : false);
                     setPage(
                         totalPages
@@ -1050,34 +1071,36 @@ export default function EnquiryListScreen({ navigation, route }) {
                     );
                     let data = [];
                     let totalPages = 1;
-	                    if (Array.isArray(res)) {
-	                        data = res;
-	                        setHasMore(false);
-	                    } else if (res?.data) {
-	                        data = res.data;
-	                        totalPages = res.pagination?.pages || 1;
-	                        setHasMore(pg < totalPages);
-	                    }
-	                    setEnquiries((p) => dedupeEnquiries([...(p || []), ...data]));
-	                    setPage((p) => p + 1);
-	                }
+                    if (Array.isArray(res)) {
+                        data = res;
+                        setHasMore(false);
+                    } else if (res?.data) {
+                        data = res.data;
+                        totalPages = res.pagination?.pages || 1;
+                        setHasMore(pg < totalPages);
+                    }
+                    setEnquiries((p) =>
+                        dedupeEnquiries([...(p || []), ...data]),
+                    );
+                    setPage((p) => p + 1);
+                }
             } catch (e) {
                 console.error(e);
             } finally {
                 setIsLoading(false);
                 setIsLoadingMore(false);
             }
-	        },
-	        [
-	            enquiries,
-	            hasMore,
-	            isLoadingMore,
-	            page,
-	            searchQuery,
-	            selectedDate,
-	            dedupeEnquiries,
-	        ],
-	    );
+        },
+        [
+            enquiries,
+            hasMore,
+            isLoadingMore,
+            page,
+            searchQuery,
+            selectedDate,
+            dedupeEnquiries,
+        ],
+    );
 
     useEffect(() => {
         fetchRef.current = fetchEnquiries;
@@ -1285,46 +1308,70 @@ export default function EnquiryListScreen({ navigation, route }) {
         [navigation],
     );
 
-	    const handleDelete = useCallback(async (enquiry) => {
-	        const id = enquiry?._id;
-	        if (!id) return;
-	        try {
-	            setDeletingEnquiryId(id);
-	            // Grab follow-up ids before deletion, so we can cancel any queued notifications even if enqId/enqNo is missing in old schedules.
-	            const followUpIds = await (async () => {
-	                try {
-	                    const key = enquiry?.enqNo || id;
-	                    const hist = await followupService.getFollowUpHistory(key);
-	                    const list = Array.isArray(hist?.data) ? hist.data : Array.isArray(hist) ? hist : [];
-	                    return list.map((x) => x?._id).filter(Boolean);
-	                } catch {
-	                    return [];
-	                }
-	            })();
-	            await enquiryService.deleteEnquiry(id);
-	            try {
-	                await notificationService.cancelNotificationsForEnquiry?.({
-	                    enqId: id,
-	                    enqNo: enquiry?.enqNo,
-	                });
-	                await notificationService.cancelNotificationsForFollowUpIds?.(followUpIds);
-	                await notificationService.cancelNextFollowUpPromptForEnquiry?.({
-	                    enqId: id,
-	                    enqNo: enquiry?.enqNo,
-	                });
-	            } catch (e) {}
+    const handleMakeFollowUp = useCallback(
+        (enquiry) => {
+            if (!enquiry) return;
+            setDetailEnquiry(null);
+            navigation.navigate("FollowUp", {
+                openComposer: true,
+                composerToken: String(Date.now()),
+                enquiry,
+                autoOpenForm: true,
+            });
+        },
+        [navigation],
+    );
 
-	            // Trigger a follow-up resync so hourly/time reminders reflect the deletion immediately.
-	            try {
-	                DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
-	                    item: { status: "deleted", enqId: id, enqNo: enquiry?.enqNo },
-	                });
-	            } catch {}
-	            setEnquiries((p) => p.filter((e) => e._id !== id));
-	            setDeleteEnquiryId((current) => (current === id ? null : current));
-	        } catch (e) {
-	            Alert.alert("Failed", getUserFacingError(e, "Failed to delete."));
-	        } finally {
+    const handleDelete = useCallback(async (enquiry) => {
+        const id = enquiry?._id;
+        if (!id) return;
+        try {
+            setDeletingEnquiryId(id);
+            // Grab follow-up ids before deletion, so we can cancel any queued notifications even if enqId/enqNo is missing in old schedules.
+            const followUpIds = await (async () => {
+                try {
+                    const key = enquiry?.enqNo || id;
+                    const hist = await followupService.getFollowUpHistory(key);
+                    const list = Array.isArray(hist?.data)
+                        ? hist.data
+                        : Array.isArray(hist)
+                          ? hist
+                          : [];
+                    return list.map((x) => x?._id).filter(Boolean);
+                } catch {
+                    return [];
+                }
+            })();
+            await enquiryService.deleteEnquiry(id);
+            try {
+                await notificationService.cancelNotificationsForEnquiry?.({
+                    enqId: id,
+                    enqNo: enquiry?.enqNo,
+                });
+                await notificationService.cancelNotificationsForFollowUpIds?.(
+                    followUpIds,
+                );
+                await notificationService.cancelNextFollowUpPromptForEnquiry?.({
+                    enqId: id,
+                    enqNo: enquiry?.enqNo,
+                });
+            } catch (e) {}
+
+            // Trigger a follow-up resync so hourly/time reminders reflect the deletion immediately.
+            try {
+                DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+                    item: {
+                        status: "deleted",
+                        enqId: id,
+                        enqNo: enquiry?.enqNo,
+                    },
+                });
+            } catch {}
+            setEnquiries((p) => p.filter((e) => e._id !== id));
+            setDeleteEnquiryId((current) => (current === id ? null : current));
+        } catch (e) {
+            Alert.alert("Failed", getUserFacingError(e, "Failed to delete."));
+        } finally {
             setDeletingEnquiryId((current) =>
                 current === id ? null : current,
             );
@@ -1364,23 +1411,23 @@ export default function EnquiryListScreen({ navigation, route }) {
         ],
     );
 
-	    const listEnquiries = useMemo(() => {
-	        const arr = Array.isArray(enquiries) ? enquiries : [];
-	        return dedupeEnquiries(arr);
-	    }, [enquiries, dedupeEnquiries]);
+    const listEnquiries = useMemo(() => {
+        const arr = Array.isArray(enquiries) ? enquiries : [];
+        return dedupeEnquiries(arr);
+    }, [enquiries, dedupeEnquiries]);
 
-	    const keyExtractor = useCallback((item, index) => {
-	        const base = String(
-	            item?._id ||
-	                item?.id ||
-	                item?.enqNo ||
-	                item?.mobile ||
-	                item?.phone ||
-	                "enq",
-	        );
-	        // Use stable keys; duplicates are handled by dedupeEnquiries().
-	        return base || `enq-${index}`;
-	    }, []);
+    const keyExtractor = useCallback((item, index) => {
+        const base = String(
+            item?._id ||
+                item?.id ||
+                item?.enqNo ||
+                item?.mobile ||
+                item?.phone ||
+                "enq",
+        );
+        // Use stable keys; duplicates are handled by dedupeEnquiries().
+        return base || `enq-${index}`;
+    }, []);
 
     return (
         <SafeAreaView style={S.root} edges={["top"]}>
@@ -1774,6 +1821,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                         logsLoading={logsLoading}
                         onClose={() => setDetailEnquiry(null)}
                         onEdit={handleEdit}
+                        onMakeFollowUp={handleMakeFollowUp}
                         billingInfo={billingInfo}
                         showUpgradePrompt={showUpgradePrompt}
                     />
@@ -2472,6 +2520,28 @@ const SD = StyleSheet.create({
         marginBottom: 2,
     },
     detailValue: { fontSize: 13, color: C.text, fontWeight: "600" },
+
+    // ── Make Follow-up Button ──
+    makeFollowupBtn: {
+        backgroundColor: C.primary,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 10,
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+        marginTop: 12,
+        shadowColor: C.shadow,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 6,
+        elevation: 2,
+    },
+    makeFollowupBtnText: {
+        color: "#FFFFFF",
+        fontSize: 14,
+        fontWeight: "600",
+    },
 
     // ── Calls tab ──
     logItem: {
