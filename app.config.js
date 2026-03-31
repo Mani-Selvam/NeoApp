@@ -5,6 +5,12 @@ require("dotenv").config({ path: path.join(__dirname, ".env"), quiet: true });
 module.exports = ({ config }) => {
   const existingExtra = config.extra || {};
   const rawPlugins = Array.isArray(config.plugins) ? config.plugins : [];
+  const playStoreSafeMode =
+    String(process.env.EXPO_PUBLIC_PLAY_STORE_SAFE_MODE ?? "true")
+      .trim()
+      .toLowerCase() !== "false";
+  const easBuildProfile = String(process.env.EAS_BUILD_PROFILE || "").trim().toLowerCase();
+  const iosNotificationsMode = easBuildProfile === "production" ? "production" : "development";
 
   const upsertPlugin = (plugins, name, pluginConfig = undefined) => {
     const list = Array.isArray(plugins) ? [...plugins] : [];
@@ -23,16 +29,37 @@ module.exports = ({ config }) => {
       process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "",
     appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID || "",
   };
-  const safeAndroidPermissions = ["CALL_PHONE"];
-  const blockedAndroidPermissions = [
-    "android.permission.READ_CALL_LOG",
-    "android.permission.READ_PHONE_STATE",
-    "android.permission.PROCESS_OUTGOING_CALLS",
-    "android.permission.ANSWER_PHONE_CALLS",
-    "android.permission.READ_PHONE_NUMBERS",
-    "android.permission.READ_CONTACTS",
-    "android.permission.RECORD_AUDIO",
+  // Keep this list minimal for Play Store safety, but include the permissions required for reliable notifications.
+  // NOTE: Setting `android.permissions` overrides Expo defaults, so we must explicitly add POST_NOTIFICATIONS.
+  const safeAndroidPermissions = [
+    "CALL_PHONE",
+    "POST_NOTIFICATIONS",
+    "VIBRATE",
+    "RECEIVE_BOOT_COMPLETED",
+    // Improves timing for scheduled local notifications on newer Android versions (still subject to OEM battery optimizations).
+    "SCHEDULE_EXACT_ALARM",
+    "USE_EXACT_ALARM",
   ];
+  const callLogAndroidPermissions = [
+    "READ_CALL_LOG",
+    "READ_PHONE_STATE",
+    "READ_CONTACTS",
+    "READ_PHONE_NUMBERS",
+    // Optional/legacy (OEM dependent)
+    "PROCESS_OUTGOING_CALLS",
+    "ANSWER_PHONE_CALLS",
+  ];
+  const blockedAndroidPermissions = playStoreSafeMode
+    ? [
+        "android.permission.READ_CALL_LOG",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.PROCESS_OUTGOING_CALLS",
+        "android.permission.ANSWER_PHONE_CALLS",
+        "android.permission.READ_PHONE_NUMBERS",
+        "android.permission.READ_CONTACTS",
+        "android.permission.RECORD_AUDIO",
+      ]
+    : [];
 
   return {
     ...config,
@@ -44,50 +71,17 @@ module.exports = ({ config }) => {
 
       // Custom notification sounds (needed for background/killed sound on Android/iOS).
       plugins = upsertPlugin(plugins, "expo-notifications", {
-        android: {
-          sounds: [
-            "./assets/notification_sounds/followup_soon_en.mp3",
-            "./assets/notification_sounds/followup_due_en.mp3",
-            "./assets/notification_sounds/followup_missed_en.mp3",
-            "./assets/notification_sounds/followup_soon_ta.mp3",
-            "./assets/notification_sounds/followup_due_ta.mp3",
-            "./assets/notification_sounds/followup_missed_ta.mp3",
-          ],
-        },
-        ios: {
-          sounds: [
-            {
-              name: "followup_soon_en",
-              type: "mp3",
-              target: "Sounds/followup_soon_en.mp3",
-            },
-            {
-              name: "followup_due_en",
-              type: "mp3",
-              target: "Sounds/followup_due_en.mp3",
-            },
-            {
-              name: "followup_missed_en",
-              type: "mp3",
-              target: "Sounds/followup_missed_en.mp3",
-            },
-            {
-              name: "followup_soon_ta",
-              type: "mp3",
-              target: "Sounds/followup_soon_ta.mp3",
-            },
-            {
-              name: "followup_due_ta",
-              type: "mp3",
-              target: "Sounds/followup_due_ta.mp3",
-            },
-            {
-              name: "followup_missed_ta",
-              type: "mp3",
-              target: "Sounds/followup_missed_ta.mp3",
-            },
-          ],
-        },
+        // expo-notifications expects a flat `sounds` array (it copies these into Android `res/raw`
+        // and into the iOS Xcode project). Nested `android/ios` keys are ignored.
+        mode: iosNotificationsMode,
+        sounds: [
+          "./assets/notification_sounds/followup_soon_en.mp3",
+          "./assets/notification_sounds/followup_due_en.mp3",
+          "./assets/notification_sounds/followup_missed_en.mp3",
+          "./assets/notification_sounds/followup_soon_ta.mp3",
+          "./assets/notification_sounds/followup_due_ta.mp3",
+          "./assets/notification_sounds/followup_missed_ta.mp3",
+        ],
       });
 
       return plugins;
@@ -95,7 +89,7 @@ module.exports = ({ config }) => {
     extra: {
       ...existingExtra,
       businessNumber: process.env.PHONE_NUMBER,
-      playStoreSafeMode: true,
+      playStoreSafeMode,
       privacyPolicyUrl:
         process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL ||
         "https://neophrondev.in/privacy/",
@@ -107,7 +101,9 @@ module.exports = ({ config }) => {
     },
     android: {
       ...config.android,
-      permissions: safeAndroidPermissions,
+      permissions: playStoreSafeMode
+        ? safeAndroidPermissions
+        : [...safeAndroidPermissions, ...callLogAndroidPermissions],
       blockedPermissions: [
         ...(config.android?.blockedPermissions || []),
         ...blockedAndroidPermissions,

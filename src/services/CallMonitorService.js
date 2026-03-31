@@ -104,6 +104,8 @@ const requestPermissions = async () => {
     return true;
 };
 
+export const ensureCallLogPermissions = async () => requestPermissions();
+
 const syncDeviceLogsIfPossible = async ({ force = false } = {}) => {
     if (Platform.OS !== "android") return;
     if (isPlayStoreSafeMode()) return;

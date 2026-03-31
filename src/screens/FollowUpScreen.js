@@ -1134,13 +1134,48 @@ const getHistoryEditStatus = (item = {}) => {
   return "Contacted";
 };
 const getCalendarSummaryBucket = (item = {}) => {
-	  const status = getHistoryEditStatus(item);
-	  if (status === "Missed") return "missed";
-	  if (["New", "Contacted", "Interested"].includes(status)) return "followup";
-	  if (status === "Converted") return "sales";
-	  if (status === "Closed") return "drop";
-	  if (status === "Not Interested") return "notInterested";
-	  return "followup";
+  const status = getHistoryEditStatus(item);
+
+  // Real-time missed: if today + time has already passed, treat as Missed instantly (no refresh needed).
+  try {
+    const iso = getFollowUpCalendarDate(item);
+    const todayIso = toIso(new Date());
+    if (iso && iso === todayIso && ["New", "Contacted", "Interested"].includes(status)) {
+      const timeStr = String(item?.time || "").trim();
+      if (timeStr) {
+        const m = timeStr.match(
+          /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
+        );
+        if (m) {
+          let hh = Number(m[1]);
+          const mm = Number(m[2] ?? "0");
+          const meridian = String(m[4] || "").toUpperCase();
+          if (Number.isFinite(hh) && Number.isFinite(mm) && mm <= 59) {
+            if (meridian) {
+              if (hh >= 1 && hh <= 12) {
+                if (meridian === "AM") {
+                  if (hh === 12) hh = 0;
+                } else if (meridian === "PM") {
+                  if (hh !== 12) hh += 12;
+                }
+              }
+            }
+            const now = new Date();
+            const nowMinutes = now.getHours() * 60 + now.getMinutes();
+            const dueMinutes = hh * 60 + mm;
+            if (dueMinutes < nowMinutes) return "missed";
+          }
+        }
+      }
+    }
+  } catch {}
+
+  if (status === "Missed") return "missed";
+  if (["New", "Contacted", "Interested"].includes(status)) return "followup";
+  if (status === "Converted") return "sales";
+  if (status === "Closed") return "drop";
+  if (status === "Not Interested") return "notInterested";
+  return "followup";
 };
 const toTs = (value) => {
   if (!value) return 0;
@@ -3343,6 +3378,29 @@ export default function FollowUpScreen({ navigation, route }) {
 
   const missedAlertCount = Number(tabCounts?.Missed || 0);
   const droppedAlertCount = Number(tabCounts?.Dropped || 0);
+  const isRealTodaySelected = selectedDate === toIso(new Date());
+
+  // Realtime refresh for missed count (no manual refresh).
+  useEffect(() => {
+    if (!isRealTodaySelected) return undefined;
+    let alive = true;
+    const tick = async () => {
+      if (!alive) return;
+      try {
+        await fetchTabCounts(selectedDate);
+        if (showMissedModal) {
+          await loadMissedModalItems(selectedDate);
+        }
+      } catch {}
+    };
+
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [isRealTodaySelected, selectedDate, showMissedModal]);
 
   // ── Focus ────────────────────────────────────────────────────────────────
   useFocusEffect(
@@ -4809,23 +4867,21 @@ export default function FollowUpScreen({ navigation, route }) {
 	                          </Text>
 	                        </View>
 	                      ) : null}
-	                      {summary.missed > 0 ? (
-	                        <View
-	                          style={[
-	                            MS.calMissedBadge,
-	                            isSelected && MS.calStatusBadgeSelected,
-	                          ]}
-	                        >
-	                          <Text
-	                            style={[
-	                              MS.calMissedBadgeText,
-	                              isSelected && MS.calStatusBadgeTextSelected,
-	                            ]}
-	                          >
-	                            M+{summary.missed}
-	                          </Text>
-	                        </View>
-	                      ) : null}
+		                      {summary.missed > 0 ? (
+		                        <View
+		                          style={[
+		                            MS.calMissedBadge,
+		                          ]}
+		                        >
+		                          <Text
+		                            style={[
+		                              MS.calMissedBadgeText,
+		                            ]}
+		                          >
+		                            M+{summary.missed}
+		                          </Text>
+		                        </View>
+		                      ) : null}
 	                      {summary.sales > 0 ? (
 	                        <View
 	                          style={[
@@ -5246,17 +5302,17 @@ const MS = StyleSheet.create({
 	  calStatusBadgeTextSelected: {
 	    color: "#fff",
 	  },
-	  calMissedBadge: {
-	    paddingHorizontal: 4,
-	    paddingVertical: 1,
-	    borderRadius: 999,
-	    backgroundColor: "#FEE2E2",
-	  },
-	  calMissedBadgeText: {
-	    fontSize: 8,
-	    fontWeight: "800",
-	    color: C.danger,
-	  },
+		  calMissedBadge: {
+		    paddingHorizontal: 4,
+		    paddingVertical: 1,
+		    borderRadius: 999,
+		    backgroundColor: C.danger,
+		  },
+		  calMissedBadgeText: {
+		    fontSize: 8,
+		    fontWeight: "800",
+		    color: "#fff",
+		  },
 	  calSalesBadge: {
 	    paddingHorizontal: 4,
 	    paddingVertical: 1,

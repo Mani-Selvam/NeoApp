@@ -41,7 +41,10 @@ import {
   setCallMuted,
   setCallSpeaker,
 } from "../services/inCallControlService";
-import { isRestrictedCallMonitoringEnabled } from "../services/CallMonitorService";
+import {
+  ensureCallLogPermissions,
+  isRestrictedCallMonitoringEnabled,
+} from "../services/CallMonitorService";
 
 // ─── Design tokens (matches app design system) ────────────────────────────────
 const C = {
@@ -767,6 +770,9 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
   const debounceRef = useRef(null);
   const hasLoadedRef = useRef(false);
   const skipFocusRef = useRef(true);
+  const lastAutoSyncRef = useRef(0);
+  const hasWarnedPermissionRef = useRef(false);
+  const syncLogsRef = useRef(async () => {});
   const activeCallRef = useRef(null);
   const unsupportedToastRef = useRef(false);
   const lastStartCallTokenRef = useRef(null);
@@ -857,6 +863,14 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
         return;
       }
       fetchData();
+      const now = Date.now();
+      if (
+        isRestrictedCallMonitoringEnabled() &&
+        now - lastAutoSyncRef.current > 2 * 60 * 1000
+      ) {
+        lastAutoSyncRef.current = now;
+        syncLogsRef.current?.({ silent: true });
+      }
     }, [fetchData]),
   );
 
@@ -1079,14 +1093,27 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     }
   };
 
-  const syncLogs = async () => {
+  const syncLogs = async ({ silent = false } = {}) => {
     if (Platform.OS === "web") return;
     if (isExpoGo()) {
-      toast("Sync needs a production build", true);
+      if (!silent) toast("Sync needs a production build", true);
       return;
     }
     if (!isRestrictedCallMonitoringEnabled()) {
-      toast("Device call-log sync is disabled in the Play Store build", true);
+      if (!silent) {
+        toast(
+          "Device call-log sync is disabled in this build (enable EXPO_PUBLIC_PLAY_STORE_SAFE_MODE=false)",
+          true,
+        );
+      }
+      return;
+    }
+    const ok = await ensureCallLogPermissions();
+    if (!ok) {
+      if (!hasWarnedPermissionRef.current && !silent) {
+        hasWarnedPermissionRef.current = true;
+        toast("Call-log permission denied", true);
+      }
       return;
     }
     setIsSyncing(true);
@@ -1096,18 +1123,23 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
       const logs = await CallLog.load(200, {
         minTimestamp: Date.now() - 7 * 86400000,
       });
-      if (!logs?.length) return toast("No new records");
+      if (!logs?.length) {
+        if (!silent) toast("No new records");
+        return;
+      }
       const r = await callLogService.syncCallLogs(logs);
-      toast(`Synced ${r?.synced || 0} calls`);
+      if (!silent) toast(`Synced ${r?.synced || 0} calls`);
       fetchData();
     } catch (e) {
-      toast(`Sync failed: ${e?.message || "Unknown"}`, true);
+      if (!silent) toast(`Sync failed: ${e?.message || "Unknown"}`, true);
     } finally {
       setIsSyncing(false);
     }
   };
 
   // ── Grouped flat list data ────────────────────────────────────────────────
+  syncLogsRef.current = syncLogs;
+
   const flatData = useMemo(() => {
     const sorted = [...callLogs].sort(
       (a, b) => new Date(b?.callTime || 0) - new Date(a?.callTime || 0),

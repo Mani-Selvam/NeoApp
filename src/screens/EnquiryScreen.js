@@ -947,13 +947,43 @@ export default function EnquiryListScreen({ navigation, route }) {
     const [showLogoutModal, setShowLogoutModal] = useState(false);
 
     const fabScale = useRef(new Animated.Value(1)).current;
-    const isInitialMount = useRef(true);
-    const skipNextSearch = useRef(false);
-    const fetchRef = useRef(null);
+	    const isInitialMount = useRef(true);
+	    const skipNextSearch = useRef(false);
+	    const fetchRef = useRef(null);
+
+	    const getEnquiryKey = useCallback((item) => {
+	        const id = item?._id || item?.id;
+	        if (id) return `id:${String(id)}`;
+	        const no = item?.enqNo;
+	        if (no) return `no:${String(no)}`;
+	        const mobile = item?.mobile || item?.phone;
+	        if (mobile) return `m:${String(mobile)}`;
+	        return "";
+	    }, []);
+
+	    const dedupeEnquiries = useCallback(
+	        (items = []) => {
+	            const list = Array.isArray(items) ? items.filter(Boolean) : [];
+	            const seen = new Set();
+	            const out = [];
+	            for (const item of list) {
+	                const key = getEnquiryKey(item);
+	                if (!key) {
+	                    out.push(item);
+	                    continue;
+	                }
+	                if (seen.has(key)) continue;
+	                seen.add(key);
+	                out.push(item);
+	            }
+	            return out;
+	        },
+	        [getEnquiryKey],
+	    );
 
     // ── Data fetching ──────────────────────────────────────────────────────────
-    const fetchEnquiries = useCallback(
-        async (refresh = false) => {
+	    const fetchEnquiries = useCallback(
+	        async (refresh = false) => {
             if (refresh) {
                 setIsLoading(true);
             } else {
@@ -1002,7 +1032,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                         if (loadedPages >= totalPages) break;
                     }
 
-                    setEnquiries(merged);
+	                    setEnquiries(dedupeEnquiries(merged));
                     setHasMore(totalPages ? loadedPages < totalPages : false);
                     setPage(
                         totalPages
@@ -1020,26 +1050,34 @@ export default function EnquiryListScreen({ navigation, route }) {
                     );
                     let data = [];
                     let totalPages = 1;
-                    if (Array.isArray(res)) {
-                        data = res;
-                        setHasMore(false);
-                    } else if (res?.data) {
-                        data = res.data;
-                        totalPages = res.pagination?.pages || 1;
-                        setHasMore(pg < totalPages);
-                    }
-                    setEnquiries((p) => [...p, ...data]);
-                    setPage((p) => p + 1);
-                }
+	                    if (Array.isArray(res)) {
+	                        data = res;
+	                        setHasMore(false);
+	                    } else if (res?.data) {
+	                        data = res.data;
+	                        totalPages = res.pagination?.pages || 1;
+	                        setHasMore(pg < totalPages);
+	                    }
+	                    setEnquiries((p) => dedupeEnquiries([...(p || []), ...data]));
+	                    setPage((p) => p + 1);
+	                }
             } catch (e) {
                 console.error(e);
             } finally {
                 setIsLoading(false);
                 setIsLoadingMore(false);
             }
-        },
-        [enquiries, hasMore, isLoadingMore, page, searchQuery, selectedDate],
-    );
+	        },
+	        [
+	            enquiries,
+	            hasMore,
+	            isLoadingMore,
+	            page,
+	            searchQuery,
+	            selectedDate,
+	            dedupeEnquiries,
+	        ],
+	    );
 
     useEffect(() => {
         fetchRef.current = fetchEnquiries;
@@ -1326,23 +1364,23 @@ export default function EnquiryListScreen({ navigation, route }) {
         ],
     );
 
-    const listEnquiries = useMemo(() => {
-        const arr = Array.isArray(enquiries) ? enquiries : [];
-        return arr.filter(Boolean);
-    }, [enquiries]);
+	    const listEnquiries = useMemo(() => {
+	        const arr = Array.isArray(enquiries) ? enquiries : [];
+	        return dedupeEnquiries(arr);
+	    }, [enquiries, dedupeEnquiries]);
 
-    const keyExtractor = useCallback((item, index) => {
-        const base = String(
-            item?._id ||
-                item?.id ||
-                item?.enqNo ||
-                item?.mobile ||
-                item?.phone ||
-                "enq",
-        );
-        // Always include index to avoid duplicate-key drops when backend returns repeated ids/enqNo.
-        return `${base}-${index}`;
-    }, []);
+	    const keyExtractor = useCallback((item, index) => {
+	        const base = String(
+	            item?._id ||
+	                item?.id ||
+	                item?.enqNo ||
+	                item?.mobile ||
+	                item?.phone ||
+	                "enq",
+	        );
+	        // Use stable keys; duplicates are handled by dedupeEnquiries().
+	        return base || `enq-${index}`;
+	    }, []);
 
     return (
         <SafeAreaView style={S.root} edges={["top"]}>

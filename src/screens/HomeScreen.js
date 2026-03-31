@@ -1051,7 +1051,7 @@ export default function HomeScreen({ navigation }) {
   const revenueDeltaLabel = (() => {
     const now = Number(stats.overallSalesAmount || 0);
     const prev = Number(stats.prevRevenue || 0);
-    if (prev === 0 && now > 0) return "+âˆž%";
+    if (prev === 0 && now > 0) return "+∞%";
     if (prev === 0 && now === 0) return "0%";
     if (stats.revenueChangePct == null) return "0%";
     const pct = Number(stats.revenueChangePct || 0);
@@ -1336,7 +1336,7 @@ export default function HomeScreen({ navigation }) {
                   : rangeType === "month"
                     ? "Month"
                     : "Year"}{" "}
-              â€¢ {rangeLabel}
+              • {rangeLabel}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -1744,7 +1744,7 @@ export default function HomeScreen({ navigation }) {
           </MotiView>
           <SH
             title="Revenue & Conversion"
-            sub={`Filtered: ${rangeType} â€¢ ${rangeLabel}`}
+            sub={`Filtered: ${rangeType} • ${rangeLabel}`}
             titleSize={sectionTitleSize}
           />
           <MotiView

@@ -38,12 +38,15 @@ const DAILY_TRIGGER_TYPE = TRIGGER_TYPES.DAILY || "daily";
 const CHANNEL_IDS = {
     default: "default_v4",
     followups: "followups_v4",
-    followups_soon_en: "followups_soon_en_v1",
-    followups_due_en: "followups_due_en_v1",
-    followups_missed_en: "followups_missed_en_v1",
-    followups_soon_ta: "followups_soon_ta_v1",
-    followups_due_ta: "followups_due_ta_v1",
-    followups_missed_ta: "followups_missed_ta_v1",
+    // NOTE: Android notification channel sound cannot be changed after creation.
+    // Bump the suffix whenever changing/bundling custom sound assets to ensure
+    // devices recreate channels and pick up the new audio.
+    followups_soon_en: "followups_soon_en_v2",
+    followups_due_en: "followups_due_en_v2",
+    followups_missed_en: "followups_missed_en_v2",
+    followups_soon_ta: "followups_soon_ta_v2",
+    followups_due_ta: "followups_due_ta_v2",
+    followups_missed_ta: "followups_missed_ta_v2",
     enquiries: "enquiries_v4",
     coupons: "coupons_v4",
     team_chat: "team_chat_v1",
@@ -172,6 +175,72 @@ const openCsvFileUri = async (uri) => {
         return { opened: true, shared: true };
     } catch (error) {
         console.warn("Failed to share/open CSV:", error?.message || error);
+        return { opened: false, error: true };
+    }
+};
+
+const getAndroidPackageName = () => {
+    try {
+        return (
+            Constants?.expoConfig?.android?.package ||
+            Constants?.manifest2?.android?.package ||
+            Constants?.manifest?.android?.package ||
+            ""
+        );
+    } catch {
+        return "";
+    }
+};
+
+export const openAndroidNotificationSettings = async () => {
+    if (Platform.OS !== "android") return { opened: false, skipped: true, reason: "not-android" };
+    try {
+        const pkg = getAndroidPackageName();
+        try {
+            await IntentLauncher.startActivityAsync(
+                IntentLauncher.ActivityAction.APP_NOTIFICATION_SETTINGS,
+                pkg
+                    ? {
+                          extra: {
+                              "android.provider.extra.APP_PACKAGE": pkg,
+                          },
+                      }
+                    : undefined,
+            );
+            return { opened: true };
+        } catch (_err) {
+            // Fallback: open app details, user can enable notifications from there.
+            await IntentLauncher.startActivityAsync(
+                IntentLauncher.ActivityAction.APPLICATION_DETAILS_SETTINGS,
+                pkg ? { data: `package:${pkg}` } : undefined,
+            );
+            return { opened: true, fallback: "app-details" };
+        }
+    } catch (error) {
+        console.warn("Failed to open notification settings:", error?.message || error);
+        return { opened: false, error: true };
+    }
+};
+
+export const openAndroidExactAlarmSettings = async () => {
+    if (Platform.OS !== "android") return { opened: false, skipped: true, reason: "not-android" };
+    try {
+        // Android 12+ exact alarm permission settings.
+        await IntentLauncher.startActivityAsync("android.settings.REQUEST_SCHEDULE_EXACT_ALARM");
+        return { opened: true };
+    } catch (error) {
+        console.warn("Failed to open exact alarm settings:", error?.message || error);
+        return { opened: false, error: true };
+    }
+};
+
+export const openAndroidBatteryOptimizationSettings = async () => {
+    if (Platform.OS !== "android") return { opened: false, skipped: true, reason: "not-android" };
+    try {
+        await IntentLauncher.startActivityAsync("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS");
+        return { opened: true };
+    } catch (error) {
+        console.warn("Failed to open battery optimization settings:", error?.message || error);
         return { opened: false, error: true };
     }
 };
@@ -424,48 +493,34 @@ const scheduleDateNotification = async ({
     categoryIdentifier = CATEGORY_IDS.followups,
 }) => {
     const resolvedChannelId = resolveChannelId(channelId);
-    return Notifications.scheduleNotificationAsync({
-        content: {
-            title,
-            body,
-            subtitle,
-            data,
-            categoryIdentifier,
-            sound,
-            vibrate,
-            ios: { sound: true },
-            android: {
-                channelId: resolvedChannelId,
-                smallIcon: "icon",
-                color,
-                priority,
-                sticky,
-            },
-        },
-        trigger: buildDateTrigger(when, channelId),
-    });
-};
+	    return Notifications.scheduleNotificationAsync({
+	        content: {
+	            title,
+	            body,
+	            subtitle,
+	            data,
+	            categoryIdentifier,
+	            sound,
+	            vibrate,
+	            android: {
+	                channelId: resolvedChannelId,
+	                color,
+	                priority,
+	                sticky,
+	            },
+	        },
+	        trigger: buildDateTrigger(when),
+	    });
+	};
 
-const buildDateTrigger = (date, channelId = "followups") => {
-    const trigger = { type: DATE_TRIGGER_TYPE, date };
-    if (Platform.OS === "android" && channelId) {
-        trigger.channelId = resolveChannelId(channelId);
-    }
-    return trigger;
-};
+const buildDateTrigger = (date) => ({ type: DATE_TRIGGER_TYPE, date });
 
-const buildDailyTrigger = (hour, minute, channelId = "followups") => {
-    const trigger = {
-        type: DAILY_TRIGGER_TYPE,
-        hour,
-        minute,
-        repeats: true,
-    };
-    if (Platform.OS === "android" && channelId) {
-        trigger.channelId = resolveChannelId(channelId);
-    }
-    return trigger;
-};
+const buildDailyTrigger = (hour, minute) => ({
+    type: DAILY_TRIGGER_TYPE,
+    hour,
+    minute,
+    repeats: true,
+});
 
 const getChannelMeta = (channelId = "default") =>
     NOTIFICATION_CHANNELS[channelId] || {
@@ -501,24 +556,22 @@ const scheduleImmediateNotification = async ({
             subtitle,
             data,
             sound: "default",
-            vibrate: vibrationPattern,
-            badge,
-            ios: {
-                sound: true,
-                badge,
-            },
-            android: {
-                channelId: resolvedChannelId,
-                smallIcon: "icon",
-                color,
-                vibrate: vibrationPattern,
-                priority,
-                sticky,
-            },
-        },
-        trigger: null,
-    });
-};
+	            vibrate: vibrationPattern,
+	            badge,
+	            ios: {
+	                badge,
+	            },
+	            android: {
+	                channelId: resolvedChannelId,
+	                color,
+	                vibrate: vibrationPattern,
+	                priority,
+	                sticky,
+	            },
+	        },
+	        trigger: null,
+	    });
+	};
 
 // Configure notification behavior (only on supported platforms)
 if (isNotificationSupported()) {
@@ -566,6 +619,22 @@ export const initializeNotifications = async () => {
 
         if (status !== "granted") {
             console.warn("Notification permission not granted");
+            try {
+                const latest = await Notifications.getPermissionsAsync();
+                if (Platform.OS === "android" && latest?.canAskAgain === false) {
+                    const openSettings = await confirmPermissionRequest({
+                        title: "Notifications are off",
+                        message:
+                            "Notifications are disabled in device settings. Open settings to enable follow-up reminders?",
+                        confirmText: "Open Settings",
+                    });
+                    if (openSettings) {
+                        await openAndroidNotificationSettings();
+                    }
+                }
+            } catch {
+                // ignore
+            }
             // Still continue, but user won't see notifications
         }
 
@@ -981,18 +1050,16 @@ export const showEnquiryErrorNotification = async (errorMessage) => {
                 sound: "default",
                 vibrate: [0, 300, 150, 300],
                 badge: 1,
-                ios: {
-                    sound: true,
-                    badge: 1,
-                },
-                android: {
-                    channelId: resolveChannelId("enquiries"),
-                    smallIcon: "icon",
-                    color: "#DC2626",
-                    vibrate: [0, 300, 150, 300],
-                    priority: "high",
-                    sticky: true,
-                },
+	                ios: {
+	                    badge: 1,
+	                },
+	                android: {
+	                    channelId: resolveChannelId("enquiries"),
+	                    color: "#DC2626",
+	                    vibrate: [0, 300, 150, 300],
+	                    priority: "high",
+	                    sticky: true,
+	                },
             },
             trigger: null, // Send immediately
         });
@@ -1039,18 +1106,16 @@ export const showEnquiryStatusNotification = async (enquiryName, newStatus) => {
                 sound: "default",
                 vibrate: [0, 200, 200],
                 badge: 1,
-                ios: {
-                    sound: true,
-                    badge: 1,
-                },
-                android: {
-                    channelId: resolveChannelId("enquiries"),
-                    smallIcon: "icon",
-                    color: "#0EA5E9",
-                    vibrate: [0, 200, 200],
-                    priority: "default",
-                    sticky: false,
-                },
+	                ios: {
+	                    badge: 1,
+	                },
+	                android: {
+	                    channelId: resolveChannelId("enquiries"),
+	                    color: "#0EA5E9",
+	                    vibrate: [0, 200, 200],
+	                    priority: "default",
+	                    sticky: false,
+	                },
             },
             trigger: null, // Send immediately
         });
@@ -1066,7 +1131,7 @@ export const showEnquiryStatusNotification = async (enquiryName, newStatus) => {
 // Schedule daily notification at specific time
 export const scheduleDailyNotification = (hour = 9, minute = 0) => {
     try {
-        const trigger = buildDailyTrigger(hour, minute, "followups");
+	        const trigger = buildDailyTrigger(hour, minute);
 
         Notifications.scheduleNotificationAsync({
             content: {
@@ -1078,14 +1143,11 @@ export const scheduleDailyNotification = (hour = 9, minute = 0) => {
                 },
                 sound: "default",
                 vibrate: [0, 250, 250, 250],
-                ios: {
-                    sound: true,
-                },
-                android: {
-                    channelId: resolveChannelId("followups"),
-                    smallIcon: "icon",
-                    color: "#0EA5E9",
-                },
+	                ios: {},
+	                android: {
+	                    channelId: resolveChannelId("followups"),
+	                    color: "#0EA5E9",
+	                },
             },
             trigger,
         });
@@ -1797,20 +1859,18 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
                     title,
                     body,
                     subtitle: "Tap to open Follow-ups",
-                    data,
-                    sound: "default",
-                    vibrate: [0, 250, 250, 250],
-                    ios: { sound: true },
-                    android: {
-                        channelId: resolveChannelId(channelId),
-                        smallIcon: "icon",
-                        color: "#0EA5E9",
-                        priority: "high",
-                        sticky: false,
-                    },
-                },
-                trigger: buildDateTrigger(cursor, channelId),
-            });
+	                    data,
+	                    sound: "default",
+	                    vibrate: [0, 250, 250, 250],
+	                    android: {
+	                        channelId: resolveChannelId(channelId),
+	                        color: "#0EA5E9",
+	                        priority: "high",
+	                        sticky: false,
+	                    },
+	                },
+	                trigger: buildDateTrigger(cursor),
+	            });
 
             ids.push(id);
             tipIndex += 1;
@@ -2552,6 +2612,9 @@ export default {
 	    cancelNextFollowUpPromptForEnquiry,
 	    scheduleNextFollowUpPromptForEnquiry,
 	    showReportCsvReadyNotification,
+        openAndroidNotificationSettings,
+        openAndroidExactAlarmSettings,
+        openAndroidBatteryOptimizationSettings,
 	    getNotificationVoiceLanguage,
 	    setNotificationVoiceLanguage,
 	    resetNotificationLocalState,
