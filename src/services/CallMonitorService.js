@@ -106,6 +106,125 @@ const requestPermissions = async () => {
 
 export const ensureCallLogPermissions = async () => requestPermissions();
 
+const normalizeDigits = (value) => String(value || "").replace(/\D/g, "");
+
+const normalizeCallType = (raw) => {
+    const value = String(raw || "")
+        .trim()
+        .toLowerCase();
+    if (!value) return null;
+
+    // react-native-call-log commonly returns numeric types: 1=in, 2=out, 3=missed
+    if (value === "1" || value.includes("incoming")) return "Incoming";
+    if (value === "2" || value.includes("outgoing")) return "Outgoing";
+    if (value === "3" || value.includes("missed")) return "Missed";
+
+    if (value.includes("rejected") || value.includes("blocked")) return "Missed";
+    if (value.includes("not attended") || value.includes("notattended"))
+        return "Not Attended";
+
+    return null;
+};
+
+const pickEntryTimestampMs = (entry) => {
+    const raw =
+        entry?.timestamp ??
+        entry?.dateTime ??
+        entry?.callDateTime ??
+        entry?.date ??
+        entry?.time ??
+        "";
+    const asNum = Number(raw);
+    if (Number.isFinite(asNum) && asNum > 0) return asNum;
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    return null;
+};
+
+const pickEntryDurationSeconds = (entry) => {
+    const raw = entry?.duration ?? entry?.callDuration ?? entry?.dur ?? 0;
+    const asNum = Number(raw);
+    return Number.isFinite(asNum) && asNum >= 0 ? asNum : 0;
+};
+
+const isSameNumberLoose = (a, b) => {
+    const da = normalizeDigits(a);
+    const db = normalizeDigits(b);
+    if (!da || !db) return false;
+    const sa = da.length > 10 ? da.slice(-10) : da;
+    const sb = db.length > 10 ? db.slice(-10) : db;
+    return sa === sb;
+};
+
+// Reads the most recent device call log entry for the given number since a timestamp.
+// Android-only. Requires call log permission and a custom dev client / EAS build (not Expo Go).
+export const getLatestDeviceCallLogForNumber = async ({
+    phoneNumber,
+    sinceMs,
+    limit = 20,
+} = {}) => {
+    try {
+        if (Platform.OS !== "android") return null;
+        if (isPlayStoreSafeMode()) return null;
+        if (isExpoGo()) return null;
+
+        const digits = normalizeDigits(phoneNumber);
+        if (!digits) return null;
+
+        const minTimestamp = Number.isFinite(Number(sinceMs))
+            ? Math.max(0, Number(sinceMs) - 60 * 1000)
+            : Date.now() - 10 * 60 * 1000;
+
+        const mod = require("react-native-call-log");
+        const CallLog = mod?.default || mod;
+        if (!CallLog?.load) return null;
+
+        const logs = await CallLog.load(Math.max(1, Number(limit) || 20), {
+            minTimestamp,
+        });
+        if (!Array.isArray(logs) || logs.length === 0) return null;
+
+        const candidates = logs
+            .map((entry) => {
+                const entryNumber =
+                    entry?.phoneNumber ||
+                    entry?.number ||
+                    entry?.formattedNumber ||
+                    "";
+                const ts = pickEntryTimestampMs(entry);
+                const callType =
+                    normalizeCallType(entry?.callType ?? entry?.type) || null;
+                const duration = pickEntryDurationSeconds(entry);
+                return {
+                    entry,
+                    entryNumber,
+                    ts,
+                    callType,
+                    duration,
+                };
+            })
+            .filter(
+                (x) =>
+                    Boolean(x.ts) &&
+                    isSameNumberLoose(x.entryNumber, digits) &&
+                    (sinceMs == null || x.ts >= minTimestamp),
+            )
+            .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+        if (candidates.length === 0) return null;
+
+        const best = candidates[0];
+        return {
+            phoneNumber: normalizeDigits(best.entryNumber) || digits,
+            callType: best.callType,
+            duration: best.duration,
+            callTime: best.ts ? new Date(best.ts) : new Date(),
+        };
+    } catch (_e) {
+        return null;
+    }
+};
+
 const syncDeviceLogsIfPossible = async ({ force = false } = {}) => {
     if (Platform.OS !== "android") return;
     if (isPlayStoreSafeMode()) return;

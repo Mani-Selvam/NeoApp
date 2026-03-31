@@ -47,6 +47,7 @@ import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
+import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
 import {
     confirmPermissionRequest,
     getUserFacingError,
@@ -1130,15 +1131,13 @@ export default function EnquiryListScreen({ navigation, route }) {
         const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
             if (callStarted && callEnquiry) {
                 global.__callClaimedByScreen = true;
-                handleSaveCallLog({
-                    phoneNumber: data.phoneNumber,
-                    callType: data.callType,
-                    duration: data.duration,
-                    note: "Auto-logged from Enquiry Screen",
-                    callTime: data.callTime || new Date(),
-                    enquiryId: callEnquiry._id,
-                    contactName: callEnquiry.name,
+                setAutoCallData({
+                    callType: data?.callType,
+                    duration: Number(data?.duration || 0),
+                    note: data?.note,
                 });
+                setAutoDuration(Number(data?.duration || 0));
+                setCallModalVisible(true);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
@@ -1155,19 +1154,33 @@ export default function EnquiryListScreen({ navigation, route }) {
                 callEnquiry &&
                 !autoCallData
             ) {
-                const dur = Math.max(
+                const device = await getLatestDeviceCallLogForNumber({
+                    phoneNumber: callEnquiry.mobile,
+                    sinceMs: callStartTime,
+                    limit: 10,
+                });
+
+                const durFallback = Math.max(
                     0,
                     Math.floor((Date.now() - callStartTime) / 1000) - 5,
                 );
-                handleSaveCallLog({
-                    phoneNumber: callEnquiry.mobile,
-                    callType: "Outgoing",
-                    duration: dur,
-                    note: `AppState fallback. Duration: ${dur}s`,
-                    callTime: new Date(),
-                    enquiryId: callEnquiry._id,
-                    contactName: callEnquiry.name,
+
+                const finalCallType =
+                    device?.callType ||
+                    (durFallback > 3 ? "Outgoing" : "Not Attended");
+                const finalDuration = Number.isFinite(Number(device?.duration))
+                    ? Number(device.duration)
+                    : durFallback;
+
+                setAutoCallData({
+                    callType: finalCallType,
+                    duration: finalDuration,
+                    note: device
+                        ? "Auto-detected from device call log"
+                        : `Fallback timer. Duration: ${finalDuration}s`,
                 });
+                setAutoDuration(finalDuration);
+                setCallModalVisible(true);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
@@ -1280,6 +1293,7 @@ export default function EnquiryListScreen({ navigation, route }) {
 
     const handleSaveCallLog = async (data) => {
         try {
+            const pendingEnquiry = callEnquiry;
             const saved = await callLogService.createCallLog(data);
             if (!saved?._id) return;
             setCallModalVisible(false);
@@ -1287,6 +1301,16 @@ export default function EnquiryListScreen({ navigation, route }) {
             setAutoCallData(null);
             DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
             fetchEnquiries(true);
+            if (data?.followUpCreated && pendingEnquiry) {
+                setTimeout(() => {
+                    navigation.navigate("FollowUp", {
+                        openComposer: true,
+                        composerToken: `${Date.now()}`,
+                        enquiry: pendingEnquiry,
+                        autoOpenForm: true,
+                    });
+                }, 250);
+            }
         } catch (e) {
             console.error(e);
         }

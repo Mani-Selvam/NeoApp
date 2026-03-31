@@ -13,6 +13,10 @@ export const getFollowUps = async (
         const client = await getApiClient();
         const params = { tab, page, limit };
         if (selectedDate) params.date = selectedDate;
+        // Let the server compute "today"/missed using the device timezone in production.
+        if (params.tzOffsetMinutes == null) {
+            params.tzOffsetMinutes = new Date().getTimezoneOffset();
+        }
         if (extraParams && typeof extraParams === "object") {
             Object.assign(params, extraParams);
         }
@@ -33,7 +37,13 @@ export const getFollowUps = async (
 export const createFollowUp = async (followUpData) => {
     try {
         const client = await getApiClient();
-        const response = await client.post("/followups", followUpData);
+        const payload = {
+            ...(followUpData || {}),
+        };
+        if (payload.tzOffsetMinutes == null) {
+            payload.tzOffsetMinutes = new Date().getTimezoneOffset();
+        }
+        const response = await client.post("/followups", payload);
         DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
             action: "create",
             item: response.data,
@@ -52,7 +62,13 @@ export const createFollowUp = async (followUpData) => {
 export const updateFollowUp = async (id, followUpData) => {
     try {
         const client = await getApiClient();
-        const response = await client.put(`/followups/${id}`, followUpData);
+        const payload = {
+            ...(followUpData || {}),
+        };
+        if (payload.tzOffsetMinutes == null) {
+            payload.tzOffsetMinutes = new Date().getTimezoneOffset();
+        }
+        const response = await client.put(`/followups/${id}`, payload);
         DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
             action: "update",
             item: response.data,

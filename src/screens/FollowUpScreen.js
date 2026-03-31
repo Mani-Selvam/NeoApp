@@ -51,6 +51,7 @@ import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
+import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
 import {
     buildFeatureUpgradeMessage,
     hasPlanFeature,
@@ -4085,15 +4086,13 @@ export default function FollowUpScreen({ navigation, route }) {
         const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
             if (callStarted && callEnquiry) {
                 global.__callClaimedByScreen = true;
-                handleSaveCallLog({
-                    phoneNumber: data.phoneNumber,
-                    callType: data.callType,
-                    duration: data.duration,
-                    note: "Auto-logged",
-                    callTime: data.callTime || new Date(),
-                    enquiryId: callEnquiry?._id,
-                    contactName: callEnquiry?.name,
+                setAutoCallData({
+                    callType: data?.callType,
+                    duration: Number(data?.duration || 0),
+                    note: data?.note,
                 });
+                setAutoDuration(Number(data?.duration || 0));
+                setCallModalVisible(true);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
@@ -4110,19 +4109,33 @@ export default function FollowUpScreen({ navigation, route }) {
                 callEnquiry &&
                 !autoCallData
             ) {
-                const dur = Math.max(
+                const device = await getLatestDeviceCallLogForNumber({
+                    phoneNumber: callEnquiry.mobile,
+                    sinceMs: callStartTime,
+                    limit: 10,
+                });
+
+                const durFallback = Math.max(
                     0,
                     Math.floor((Date.now() - callStartTime) / 1000) - 5,
                 );
-                handleSaveCallLog({
-                    phoneNumber: callEnquiry.mobile,
-                    callType: "Outgoing",
-                    duration: dur,
-                    note: "AppState fallback",
-                    callTime: new Date(),
-                    enquiryId: callEnquiry._id,
-                    contactName: callEnquiry.name,
+
+                const finalCallType =
+                    device?.callType ||
+                    (durFallback > 3 ? "Outgoing" : "Not Attended");
+                const finalDuration = Number.isFinite(Number(device?.duration))
+                    ? Number(device.duration)
+                    : durFallback;
+
+                setAutoCallData({
+                    callType: finalCallType,
+                    duration: finalDuration,
+                    note: device
+                        ? "Auto-detected from device call log"
+                        : "AppState fallback",
                 });
+                setAutoDuration(finalDuration);
+                setCallModalVisible(true);
                 setCallStarted(false);
                 setCallStartTime(null);
             }

@@ -644,6 +644,45 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
 
             await newLog.save();
             syncCount++;
+
+            // Keep enquiry contact status in sync with device logs
+            try {
+                const shouldMarkContacted =
+                    ["Incoming", "Outgoing"].includes(callTypeToSave) &&
+                    Number(durationSeconds || 0) > 0;
+                const contactAt = new Date(callTimeMs);
+
+                await Enquiry.findOneAndUpdate(
+                    { _id: existingEnquiry._id, status: { $ne: "Converted" } },
+                    {
+                        $set: {
+                            lastContactedAt: contactAt,
+                            ...(shouldMarkContacted
+                                ? { status: "Contacted" }
+                                : {}),
+                        },
+                        $inc: { callCount: 1 },
+                    },
+                );
+
+                if (shouldMarkContacted) {
+                    await CallLog.updateMany(
+                        {
+                            userId: ownerId,
+                            enquiryId: existingEnquiry._id,
+                            isPendingCallback: true,
+                        },
+                        {
+                            $set: {
+                                isPendingCallback: false,
+                                lastContactedAt: contactAt,
+                            },
+                        },
+                    );
+                }
+            } catch (_e) {
+                // ignore per-log status sync errors
+            }
         }
 
         console.log(
@@ -726,10 +765,33 @@ router.post("/", verifyToken, async (req, res) => {
 
         // If linked to an enquiry, update the enquiry's last contacted timestamp
         if (linkedEnquiryId) {
-            await Enquiry.findByIdAndUpdate(linkedEnquiryId, {
-                $set: { lastContactedAt: new Date() },
-                $inc: { callCount: 1 }, // We might need to add this field to Enquiry model
-            });
+            const now = new Date();
+            const dur = Number(savedLog?.duration || 0);
+            const shouldMarkContacted =
+                ["Incoming", "Outgoing"].includes(savedLog?.callType) && dur > 0;
+
+            await Enquiry.findOneAndUpdate(
+                { _id: linkedEnquiryId, status: { $ne: "Converted" } },
+                {
+                    $set: {
+                        lastContactedAt: now,
+                        ...(shouldMarkContacted ? { status: "Contacted" } : {}),
+                    },
+                    $inc: { callCount: 1 },
+                },
+            );
+
+            // If we successfully contacted the customer, clear pending callbacks
+            if (shouldMarkContacted) {
+                await CallLog.updateMany(
+                    {
+                        userId: ownerId,
+                        enquiryId: linkedEnquiryId,
+                        isPendingCallback: true,
+                    },
+                    { $set: { isPendingCallback: false, lastContactedAt: now } },
+                );
+            }
         }
         cache.invalidate("dashboard");
         cache.invalidate("enquiries");

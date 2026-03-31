@@ -631,16 +631,17 @@ export default function AppNavigator() {
                     }
                 }
 
-                const todayIso = new Date().toISOString().slice(0, 10);
+                const toIso = (d: Date) =>
+                    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+                const todayIso = toIso(new Date());
                 const now = new Date();
                 const dateFrom = new Date(
                     now.getTime() - 2 * 24 * 60 * 60 * 1000,
-                )
-                    .toISOString()
-                    .slice(0, 10);
-                const dateTo = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-                    .toISOString()
-                    .slice(0, 10);
+                );
+                const dateTo = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+                const dateFromIso = toIso(dateFrom);
+                const dateToIso = toIso(dateTo);
                 const [todayRes, missedRes, allRes]: any = await Promise.all([
                     followupService
                         .getFollowUps("Today", 1, 200, todayIso)
@@ -649,7 +650,10 @@ export default function AppNavigator() {
                         .getFollowUps("Missed", 1, 200, todayIso)
                         .catch(() => null),
                     followupService
-                        .getFollowUps("All", 1, 500, "", { dateFrom, dateTo })
+                        .getFollowUps("All", 1, 500, "", {
+                            dateFrom: dateFromIso,
+                            dateTo: dateToIso,
+                        })
                         .catch(() => null),
                 ]);
                 const todayList = Array.isArray(todayRes?.data)

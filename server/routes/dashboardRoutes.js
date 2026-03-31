@@ -14,6 +14,28 @@ const toLocalIsoDate = (d = new Date()) => {
     return `${y}-${m}-${day}`;
 };
 
+const clampTzOffsetMinutes = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(n)));
+};
+
+const toClientIsoDate = (tzOffsetMinutes) => {
+    const off = clampTzOffsetMinutes(tzOffsetMinutes);
+    if (off == null) return toLocalIsoDate(new Date());
+    return new Date(Date.now() - off * 60 * 1000).toISOString().slice(0, 10);
+};
+
+const getClientNowMinutes = (tzOffsetMinutes) => {
+    const off = clampTzOffsetMinutes(tzOffsetMinutes);
+    if (off == null) {
+        const now = new Date();
+        return now.getHours() * 60 + now.getMinutes();
+    }
+    const shifted = new Date(Date.now() - off * 60 * 1000);
+    return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+};
+
 const parseIsoDate = (value) => {
     if (!value) return null;
     const dt = new Date(value);
@@ -133,6 +155,7 @@ router.get("/summary", verifyToken, async (req, res) => {
             req.query.referenceDate ||
             req.query.day ||
             "";
+        const tzOffsetMinutes = req.query.tzOffsetMinutes;
         const parsedRef = parseIsoDate(dateRef) || new Date();
         const { rangeFrom, rangeTo } = getRangeBounds({ range, date: parsedRef });
         const { prevFrom, prevTo } = getPrevRangeBounds({ range, date: parsedRef });
@@ -152,12 +175,16 @@ router.get("/summary", verifyToken, async (req, res) => {
             prevTo,
             weekFrom,
             weekTo,
+            tzOffsetMinutes,
         });
 
         // ⚡ Use cache.wrap to deduplicate concurrent requests
         // Keep TTL low because "Missed" is real-time (dueAt < now), and users expect it to update fast.
         const { data: response, source } = await cache.wrap(cacheKey, async () => {
-            const today = toLocalIsoDate(parsedRef);
+            const today =
+                /^\d{4}-\d{2}-\d{2}$/.test(String(dateRef || "").trim())
+                    ? String(dateRef).trim()
+                    : toLocalIsoDate(parsedRef);
             const dateFilter = { date: { $gte: rangeFrom, $lte: rangeTo } };
             const prevDateFilter = { date: { $gte: prevFrom, $lte: prevTo } };
             const weekDateFilter = { date: { $gte: weekFrom, $lte: weekTo } };
@@ -181,9 +208,10 @@ router.get("/summary", verifyToken, async (req, res) => {
                 remarks: { $ne: "Enquiry created", $not: /^Call:/i },
             };
 
-            const realToday = toLocalIsoDate(new Date());
+            const realToday = toClientIsoDate(tzOffsetMinutes);
             const isRealToday = today === realToday;
             const now = new Date();
+            const nowMinutes = getClientNowMinutes(tzOffsetMinutes);
 
             // Keep missed status fresh for today, including legacy rows that don't have `dueAt` yet.
             // (Many screens depend on Missed counts/lists to update without opening FollowUp first.)
@@ -210,7 +238,6 @@ router.get("/summary", verifyToken, async (req, res) => {
                         .lean();
 
                     if (Array.isArray(legacyRows) && legacyRows.length > 0) {
-                        const nowMinutes = now.getHours() * 60 + now.getMinutes();
                         const ids = legacyRows
                             .filter((row) => {
                                 const mins = parseTimeToMinutes(row?.time);

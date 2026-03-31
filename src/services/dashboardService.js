@@ -16,7 +16,13 @@ const shouldSuppressAuthLog = (error) => {
 export const getDashboardSummary = async (params = {}) => {
     try {
         const client = await getApiClient();
-        const response = await client.get("/dashboard/summary", { params });
+        const nextParams = { ...(params || {}) };
+        if (nextParams.tzOffsetMinutes == null) {
+            nextParams.tzOffsetMinutes = new Date().getTimezoneOffset();
+        }
+        const response = await client.get("/dashboard/summary", {
+            params: nextParams,
+        });
         return response.data;
     } catch (error) {
         if (!shouldSuppressAuthLog(error)) {

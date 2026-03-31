@@ -15,6 +15,31 @@ const toLocalIsoDate = (d = new Date()) => {
     return `${y}-${m}-${day}`;
 };
 
+const clampTzOffsetMinutes = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    // Clamp to sane global timezones (-14h..+14h), using JS getTimezoneOffset semantics
+    return Math.max(-14 * 60, Math.min(14 * 60, Math.trunc(n)));
+};
+
+// Converts "now" into the client's local ISO date (YYYY-MM-DD) using getTimezoneOffset minutes.
+// This avoids depending on the server's OS timezone, which differs between local dev and production.
+const toClientIsoDate = (tzOffsetMinutes) => {
+    const off = clampTzOffsetMinutes(tzOffsetMinutes);
+    if (off == null) return toLocalIsoDate(new Date());
+    return new Date(Date.now() - off * 60 * 1000).toISOString().slice(0, 10);
+};
+
+const getClientNowMinutes = (tzOffsetMinutes) => {
+    const off = clampTzOffsetMinutes(tzOffsetMinutes);
+    if (off == null) {
+        const now = new Date();
+        return now.getHours() * 60 + now.getMinutes();
+    }
+    const shifted = new Date(Date.now() - off * 60 * 1000);
+    return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+};
+
 const parseTimeToMinutes = (value) => {
     const raw = String(value || "").trim();
     if (!raw) return null;
@@ -79,7 +104,48 @@ const parseDueAtLocal = (isoDate, timeStr) => {
     return Number.isNaN(dt.getTime()) ? null : dt;
 };
 
-const isMissedForReference = (item, referenceDate) => {
+// Parse a dueAt timestamp using the client's timezone offset (minutes from Date#getTimezoneOffset).
+// Stores an absolute UTC moment so production servers in UTC still classify missed items correctly.
+const parseDueAtWithOffset = (isoDate, timeStr, tzOffsetMinutes) => {
+    const off = clampTzOffsetMinutes(tzOffsetMinutes);
+    if (off == null) return parseDueAtLocal(isoDate, timeStr);
+
+    const iso = String(isoDate || "").trim();
+    const time = String(timeStr || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+    if (!time) return null;
+
+    const m = time.match(
+        /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
+    );
+    if (!m) return null;
+    let hh = Number(m[1]);
+    const mm = Number(m[2] ?? "0");
+    const meridian = String(m[4] || "").toUpperCase();
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) return null;
+
+    if (meridian) {
+        if (hh < 1 || hh > 12) return null;
+        if (meridian === "AM") {
+            if (hh === 12) hh = 0;
+        } else if (meridian === "PM") {
+            if (hh !== 12) hh += 12;
+        }
+    } else if (hh > 23) {
+        return null;
+    }
+
+    const [yy, mo, dd] = iso.split("-").map((n) => Number(n));
+    const utcMs = Date.UTC(yy, (mo || 1) - 1, dd || 1, hh, mm, 0, 0) + off * 60 * 1000;
+    const dt = new Date(utcMs);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+};
+
+const isMissedForReference = (
+    item,
+    referenceDate,
+    { realToday = null, nowMinutes = null } = {},
+) => {
     const itemDate = String(
         item?.date || item?.nextFollowUpDate || item?.followUpDate || "",
     ).trim();
@@ -87,7 +153,7 @@ const isMissedForReference = (item, referenceDate) => {
     if (itemDate < referenceDate) return true;
     if (itemDate > referenceDate) return false;
 
-    const todayIso = toLocalIsoDate(new Date());
+    const todayIso = realToday || toLocalIsoDate(new Date());
     if (referenceDate !== todayIso) return false;
 
     const dueAt = item?.dueAt ? new Date(item.dueAt) : null;
@@ -98,9 +164,12 @@ const isMissedForReference = (item, referenceDate) => {
     const dueMinutes = parseTimeToMinutes(item?.time);
     if (dueMinutes == null) return false;
 
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    return dueMinutes <= nowMinutes;
+    const fallbackNow = new Date();
+    const minutesNow =
+        Number.isFinite(Number(nowMinutes)) && nowMinutes != null
+            ? Number(nowMinutes)
+            : fallbackNow.getHours() * 60 + fallbackNow.getMinutes();
+    return dueMinutes <= minutesNow;
 };
 
 const getFollowUpAccessScope = async (req) => {
@@ -204,11 +273,12 @@ router.get("/", verifyToken, async (req, res) => {
             date,
             dateFrom,
             dateTo,
+            tzOffsetMinutes,
             page = 1,
             limit = 20,
         } = req.query;
-        const cacheReferenceDate = date || toLocalIsoDate(new Date());
-        const cacheRealToday = toLocalIsoDate(new Date());
+        const cacheReferenceDate = date || toClientIsoDate(tzOffsetMinutes);
+        const cacheRealToday = toClientIsoDate(tzOffsetMinutes);
         const cacheIsRealToday = cacheReferenceDate === cacheRealToday;
         const realtimeTtlMs =
             cacheIsRealToday && (tab === "Today" || tab === "Missed")
@@ -224,6 +294,7 @@ router.get("/", verifyToken, async (req, res) => {
             date,
             dateFrom,
             dateTo,
+            tzOffsetMinutes,
             page,
             limit,
         });
@@ -236,10 +307,11 @@ router.get("/", verifyToken, async (req, res) => {
                         .trim()
                         .toLowerCase() === "staff";
                 // Use the selected date as the reference day when provided.
-                const referenceDate = date || toLocalIsoDate(new Date());
-                const realToday = toLocalIsoDate(new Date());
+                const referenceDate = date || toClientIsoDate(tzOffsetMinutes);
+                const realToday = toClientIsoDate(tzOffsetMinutes);
                 const isRealToday = referenceDate === realToday;
                 const now = new Date();
+                const nowMinutes = getClientNowMinutes(tzOffsetMinutes);
                 const scope = await getFollowUpAccessScope(req);
                 let query = buildFollowUpScopedFilter(scope);
 
@@ -381,8 +453,6 @@ router.get("/", verifyToken, async (req, res) => {
                             .lean();
 
                         if (Array.isArray(legacy) && legacy.length > 0) {
-                            const nowMinutes =
-                                now.getHours() * 60 + now.getMinutes();
                             const ids = legacy
                                 .filter((row) => {
                                     const mins = parseTimeToMinutes(row?.time);
@@ -695,7 +765,10 @@ router.get("/", verifyToken, async (req, res) => {
                 if (tab === "Missed") {
                     for (let i = followUps.length - 1; i >= 0; i -= 1) {
                         if (
-                            !isMissedForReference(followUps[i], referenceDate)
+                            !isMissedForReference(followUps[i], referenceDate, {
+                                realToday,
+                                nowMinutes,
+                            })
                         ) {
                             followUps.splice(i, 1);
                         }
@@ -771,7 +844,11 @@ router.post("/", verifyToken, async (req, res) => {
         const effTime = String(req.body.time || "").trim();
         let dueAt = null;
         if (effDate && effTime) {
-            dueAt = parseDueAtLocal(effDate, effTime);
+            dueAt = parseDueAtWithOffset(
+                effDate,
+                effTime,
+                req.body?.tzOffsetMinutes,
+            );
         }
 
         const newFollowUp = new FollowUp({
@@ -880,7 +957,11 @@ router.put("/:id", verifyToken, async (req, res) => {
         ).trim();
         const effTime = String(updateData.time || "").trim();
         if (effDate && effTime) {
-            const dueAt = parseDueAtLocal(effDate, effTime);
+            const dueAt = parseDueAtWithOffset(
+                effDate,
+                effTime,
+                updateData?.tzOffsetMinutes,
+            );
             if (dueAt) updateData.dueAt = dueAt;
         } else if (
             "time" in updateData ||
