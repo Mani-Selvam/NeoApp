@@ -1,16 +1,29 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { AppState, DeviceEventEmitter } from "react-native";
 import {
-    stopCallMonitoring,
-} from "../services/CallMonitorService";
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useState,
+} from "react";
+import { AppState, DeviceEventEmitter } from "react-native";
+import { stopCallMonitoring } from "../services/CallMonitorService";
 import notificationService, {
     showBillingPlanNotification,
+    getDevicePushToken,
+    registerPushTokenWithServer,
 } from "../services/notificationService";
 import { API_URL } from "../services/apiConfig";
 import { clearApiClient } from "../services/apiClient";
-import { clearAuthErrorHandler, setAuthErrorHandler } from "../services/authErrorBus";
-import { deleteAuthToken, getAuthToken, setAuthToken } from "../services/secureTokenStorage";
+import {
+    clearAuthErrorHandler,
+    setAuthErrorHandler,
+} from "../services/authErrorBus";
+import {
+    deleteAuthToken,
+    getAuthToken,
+    setAuthToken,
+} from "../services/secureTokenStorage";
 import { getEffectivePlan } from "../services/userService";
 
 const AuthContext = createContext();
@@ -50,14 +63,18 @@ const getBillingAlertState = (billingInfo) => {
             level: "expired",
             code: "expired",
             title: "Plan expired",
-            message: "Your current plan has expired. Upgrade to continue using app actions.",
+            message:
+                "Your current plan has expired. Upgrade to continue using app actions.",
         };
     }
 
-    const planName = `${billingInfo?.plan?.code || ""} ${billingInfo?.plan?.name || ""}`.toLowerCase();
+    const planName =
+        `${billingInfo?.plan?.code || ""} ${billingInfo?.plan?.name || ""}`.toLowerCase();
     const isFreeLike =
         planName.includes("free") ||
-        String(billingInfo?.subscription?.status || "").toLowerCase().includes("trial") ||
+        String(billingInfo?.subscription?.status || "")
+            .toLowerCase()
+            .includes("trial") ||
         Number(billingInfo?.plan?.basePrice || 0) <= 0;
 
     if (isFreeLike) {
@@ -66,7 +83,8 @@ const getBillingAlertState = (billingInfo) => {
                 level: "warning",
                 code: "free-1h",
                 title: "Free plan expiring soon",
-                message: "Your current free plan will expire within 1 hour. Please upgrade now.",
+                message:
+                    "Your current free plan will expire within 1 hour. Please upgrade now.",
             };
         }
         return null;
@@ -77,7 +95,8 @@ const getBillingAlertState = (billingInfo) => {
             level: "warning",
             code: "paid-1h",
             title: "Plan expiring in 1 hour",
-            message: "Your current plan will expire within 1 hour. Please upgrade now.",
+            message:
+                "Your current plan will expire within 1 hour. Please upgrade now.",
         };
     }
 
@@ -86,7 +105,8 @@ const getBillingAlertState = (billingInfo) => {
             level: "notice",
             code: "paid-1d",
             title: "Plan expiring tomorrow",
-            message: "Your current plan will expire within 1 day. Please renew or upgrade soon.",
+            message:
+                "Your current plan will expire within 1 day. Please renew or upgrade soon.",
         };
     }
 
@@ -151,70 +171,93 @@ export const AuthProvider = ({ children }) => {
         return data?.user || null;
     }, []);
 
-    const syncBillingUiState = useCallback(async (nextInfo, { forcePrompt = false } = {}) => {
-        setBillingInfo(nextInfo);
-        setBillingPlan(nextInfo?.plan || null);
+    const syncBillingUiState = useCallback(
+        async (nextInfo, { forcePrompt = false } = {}) => {
+            setBillingInfo(nextInfo);
+            setBillingPlan(nextInfo?.plan || null);
 
-        if (nextInfo?.plan) {
-            await AsyncStorage.setItem("billingPlan", JSON.stringify(nextInfo.plan));
-        } else {
-            await AsyncStorage.removeItem("billingPlan");
-        }
-        await AsyncStorage.setItem(BILLING_INFO_KEY, JSON.stringify(nextInfo));
-
-        const nextAlert = getBillingAlertState(nextInfo);
-        if (!nextAlert) {
-            setBillingAlert(null);
-            return;
-        }
-
-        const entityKey = nextInfo?.subscription?.id || nextInfo?.plan?.id || "billing";
-        const expiryKey = nextInfo?.expiry ? new Date(nextInfo.expiry).toISOString() : "none";
-        const alertStorageKey = `${BILLING_ALERT_KEY_PREFIX}:${entityKey}:${nextAlert.code}:${expiryKey}`;
-        const snoozeUntilRaw = await AsyncStorage.getItem(`${alertStorageKey}:snoozeUntil`);
-        const snoozeUntil = Number(snoozeUntilRaw || 0);
-
-        if (!forcePrompt && Number.isFinite(snoozeUntil) && snoozeUntil > Date.now()) {
-            setBillingAlert(null);
-            return;
-        }
-
-        setBillingAlert(nextAlert);
-
-        const lastNotifiedRaw = await AsyncStorage.getItem(
-            `${alertStorageKey}:lastNotifiedAt`,
-        );
-        const lastNotifiedAt = Number(lastNotifiedRaw || 0);
-        const notificationCooldownMs = BILLING_ALERT_SNOOZE_MINUTES * 60 * 1000;
-
-        if (
-            forcePrompt ||
-            !Number.isFinite(lastNotifiedAt) ||
-            Date.now() - lastNotifiedAt >= notificationCooldownMs
-        ) {
-            await showBillingPlanNotification({
-                title: nextAlert.title,
-                body: nextAlert.message,
-                code: nextAlert.code,
-                expiry: nextInfo?.expiry || null,
-                reason: nextInfo?.reason || "",
-            });
+            if (nextInfo?.plan) {
+                await AsyncStorage.setItem(
+                    "billingPlan",
+                    JSON.stringify(nextInfo.plan),
+                );
+            } else {
+                await AsyncStorage.removeItem("billingPlan");
+            }
             await AsyncStorage.setItem(
-                `${alertStorageKey}:lastNotifiedAt`,
-                String(Date.now()),
+                BILLING_INFO_KEY,
+                JSON.stringify(nextInfo),
             );
-        }
 
-        if (forcePrompt || !billingPrompt?.visible || billingPrompt?.alertKey !== alertStorageKey) {
-            setBillingPrompt({
-                visible: true,
-                title: nextAlert.title,
-                message: nextAlert.message,
-                kind: "alert",
-                alertKey: alertStorageKey,
-            });
-        }
-    }, [billingPrompt?.alertKey, billingPrompt?.visible]);
+            const nextAlert = getBillingAlertState(nextInfo);
+            if (!nextAlert) {
+                setBillingAlert(null);
+                return;
+            }
+
+            const entityKey =
+                nextInfo?.subscription?.id || nextInfo?.plan?.id || "billing";
+            const expiryKey = nextInfo?.expiry
+                ? new Date(nextInfo.expiry).toISOString()
+                : "none";
+            const alertStorageKey = `${BILLING_ALERT_KEY_PREFIX}:${entityKey}:${nextAlert.code}:${expiryKey}`;
+            const snoozeUntilRaw = await AsyncStorage.getItem(
+                `${alertStorageKey}:snoozeUntil`,
+            );
+            const snoozeUntil = Number(snoozeUntilRaw || 0);
+
+            if (
+                !forcePrompt &&
+                Number.isFinite(snoozeUntil) &&
+                snoozeUntil > Date.now()
+            ) {
+                setBillingAlert(null);
+                return;
+            }
+
+            setBillingAlert(nextAlert);
+
+            const lastNotifiedRaw = await AsyncStorage.getItem(
+                `${alertStorageKey}:lastNotifiedAt`,
+            );
+            const lastNotifiedAt = Number(lastNotifiedRaw || 0);
+            const notificationCooldownMs =
+                BILLING_ALERT_SNOOZE_MINUTES * 60 * 1000;
+
+            if (
+                forcePrompt ||
+                !Number.isFinite(lastNotifiedAt) ||
+                Date.now() - lastNotifiedAt >= notificationCooldownMs
+            ) {
+                await showBillingPlanNotification({
+                    title: nextAlert.title,
+                    body: nextAlert.message,
+                    code: nextAlert.code,
+                    expiry: nextInfo?.expiry || null,
+                    reason: nextInfo?.reason || "",
+                });
+                await AsyncStorage.setItem(
+                    `${alertStorageKey}:lastNotifiedAt`,
+                    String(Date.now()),
+                );
+            }
+
+            if (
+                forcePrompt ||
+                !billingPrompt?.visible ||
+                billingPrompt?.alertKey !== alertStorageKey
+            ) {
+                setBillingPrompt({
+                    visible: true,
+                    title: nextAlert.title,
+                    message: nextAlert.message,
+                    kind: "alert",
+                    alertKey: alertStorageKey,
+                });
+            }
+        },
+        [billingPrompt?.alertKey, billingPrompt?.visible],
+    );
 
     const refreshBillingPlan = useCallback(async () => {
         try {
@@ -259,16 +302,23 @@ export const AuthProvider = ({ children }) => {
                 try {
                     const latestUser = await fetchLatestProfile(token);
                     if (latestUser) {
-                        await AsyncStorage.setItem("user", JSON.stringify(latestUser));
+                        await AsyncStorage.setItem(
+                            "user",
+                            JSON.stringify(latestUser),
+                        );
                         setUser(latestUser);
                         setUserStatus(latestUser.status || "Active");
                     }
                 } catch (_error) {
-                    console.log("Failed to refresh latest profile", _error?.message || _error);
+                    console.log(
+                        "Failed to refresh latest profile",
+                        _error?.message || _error,
+                    );
                 }
 
                 try {
-                    const cachedPlan = await AsyncStorage.getItem("billingPlan");
+                    const cachedPlan =
+                        await AsyncStorage.getItem("billingPlan");
                     if (cachedPlan) {
                         setBillingPlan(JSON.parse(cachedPlan));
                     }
@@ -277,11 +327,14 @@ export const AuthProvider = ({ children }) => {
                 }
 
                 try {
-                    const cachedBillingInfo = await AsyncStorage.getItem(BILLING_INFO_KEY);
+                    const cachedBillingInfo =
+                        await AsyncStorage.getItem(BILLING_INFO_KEY);
                     if (cachedBillingInfo) {
                         const parsedBillingInfo = JSON.parse(cachedBillingInfo);
                         setBillingInfo(parsedBillingInfo);
-                        setBillingAlert(getBillingAlertState(parsedBillingInfo));
+                        setBillingAlert(
+                            getBillingAlertState(parsedBillingInfo),
+                        );
                     }
                 } catch (e) {
                     // ignore cached billing info parse issues
@@ -297,35 +350,38 @@ export const AuthProvider = ({ children }) => {
     }, [fetchLatestProfile]);
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("FORCE_LOGOUT", async (payload) => {
-            if (!isLoggedIn) return;
-            const companyStatus = payload?.companyStatus || "Suspended";
-            const reason = payload?.reason || "Company is suspended";
+        const sub = DeviceEventEmitter.addListener(
+            "FORCE_LOGOUT",
+            async (payload) => {
+                if (!isLoggedIn) return;
+                const companyStatus = payload?.companyStatus || "Suspended";
+                const reason = payload?.reason || "Company is suspended";
 
-            let cachedUser = user;
-            if (!cachedUser) {
-                try {
-                    const raw = await AsyncStorage.getItem("user");
-                    cachedUser = raw ? JSON.parse(raw) : null;
-                } catch (e) {
-                    cachedUser = null;
+                let cachedUser = user;
+                if (!cachedUser) {
+                    try {
+                        const raw = await AsyncStorage.getItem("user");
+                        cachedUser = raw ? JSON.parse(raw) : null;
+                    } catch (e) {
+                        cachedUser = null;
+                    }
                 }
-            }
 
-            setSuspensionInfo((prev) => ({
-                ...prev,
-                visible: true,
-                companyStatus,
-                reason,
-                name: cachedUser?.name || "",
-                email: cachedUser?.email || "",
-                mobile: cachedUser?.mobile || "",
-                submitted: false,
-                submitError: "",
-            }));
+                setSuspensionInfo((prev) => ({
+                    ...prev,
+                    visible: true,
+                    companyStatus,
+                    reason,
+                    name: cachedUser?.name || "",
+                    email: cachedUser?.email || "",
+                    mobile: cachedUser?.mobile || "",
+                    submitted: false,
+                    submitError: "",
+                }));
 
-            await doLogout();
-        });
+                await doLogout();
+            },
+        );
 
         return () => {
             sub?.remove?.();
@@ -333,10 +389,13 @@ export const AuthProvider = ({ children }) => {
     }, [isLoggedIn, user]);
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("SUBSCRIPTION_UPDATED", () => {
-            if (!isLoggedIn) return;
-            refreshBillingPlan().catch(() => {});
-        });
+        const sub = DeviceEventEmitter.addListener(
+            "SUBSCRIPTION_UPDATED",
+            () => {
+                if (!isLoggedIn) return;
+                refreshBillingPlan().catch(() => {});
+            },
+        );
 
         return () => {
             sub?.remove?.();
@@ -344,26 +403,42 @@ export const AuthProvider = ({ children }) => {
     }, [isLoggedIn, refreshBillingPlan]);
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("PROFILE_UPDATED", async (payload) => {
-            const incomingUserId = String(payload?.id || payload?._id || payload?.userId || "");
-            const selfUserId = String(user?.id || user?._id || "");
-            if (!isLoggedIn || !incomingUserId || !selfUserId || incomingUserId !== selfUserId) {
-                return;
-            }
+        const sub = DeviceEventEmitter.addListener(
+            "PROFILE_UPDATED",
+            async (payload) => {
+                const incomingUserId = String(
+                    payload?.id || payload?._id || payload?.userId || "",
+                );
+                const selfUserId = String(user?.id || user?._id || "");
+                if (
+                    !isLoggedIn ||
+                    !incomingUserId ||
+                    !selfUserId ||
+                    incomingUserId !== selfUserId
+                ) {
+                    return;
+                }
 
-            try {
-                const latestUser = await fetchLatestProfile();
-                const nextUser = latestUser || { ...user, ...payload };
-                await AsyncStorage.setItem("user", JSON.stringify(nextUser));
-                setUser(nextUser);
-                setUserStatus(nextUser.status || "Active");
-            } catch (_error) {
-                const nextUser = { ...user, ...payload };
-                await AsyncStorage.setItem("user", JSON.stringify(nextUser));
-                setUser(nextUser);
-                setUserStatus(nextUser.status || "Active");
-            }
-        });
+                try {
+                    const latestUser = await fetchLatestProfile();
+                    const nextUser = latestUser || { ...user, ...payload };
+                    await AsyncStorage.setItem(
+                        "user",
+                        JSON.stringify(nextUser),
+                    );
+                    setUser(nextUser);
+                    setUserStatus(nextUser.status || "Active");
+                } catch (_error) {
+                    const nextUser = { ...user, ...payload };
+                    await AsyncStorage.setItem(
+                        "user",
+                        JSON.stringify(nextUser),
+                    );
+                    setUser(nextUser);
+                    setUserStatus(nextUser.status || "Active");
+                }
+            },
+        );
 
         return () => {
             sub?.remove?.();
@@ -378,11 +453,18 @@ export const AuthProvider = ({ children }) => {
 
             const code = data?.code;
             const text = String(message || "");
-            if (status === 402 || code === "NO_ACTIVE_PLAN" || code === "FEATURE_DISABLED") {
+            if (
+                status === 402 ||
+                code === "NO_ACTIVE_PLAN" ||
+                code === "FEATURE_DISABLED"
+            ) {
                 await refreshBillingPlan().catch(() => {});
                 setBillingPrompt({
                     visible: true,
-                    title: code === "FEATURE_DISABLED" ? "Upgrade required" : "Plan expired",
+                    title:
+                        code === "FEATURE_DISABLED"
+                            ? "Upgrade required"
+                            : "Plan expired",
                     message:
                         text ||
                         (code === "FEATURE_DISABLED"
@@ -398,7 +480,10 @@ export const AuthProvider = ({ children }) => {
                 text.toLowerCase().includes("invalid or expired token") ||
                 text.toLowerCase().includes("account is inactive")
             ) {
-                if (code === "COMPANY_NOT_ACTIVE" || text.toLowerCase().includes("company is suspended")) {
+                if (
+                    code === "COMPANY_NOT_ACTIVE" ||
+                    text.toLowerCase().includes("company is suspended")
+                ) {
                     let cachedUser = user;
                     if (!cachedUser) {
                         try {
@@ -516,6 +601,34 @@ export const AuthProvider = ({ children }) => {
         }
         setIsLoggedIn(true);
         refreshBillingPlan().catch(() => {});
+
+        // Register push token for closed-app notifications
+        try {
+            console.log(
+                "[Auth] Registering push token for closed-app notifications...",
+            );
+            const pushToken = await getDevicePushToken();
+            if (pushToken) {
+                const registered = await registerPushTokenWithServer(pushToken);
+                if (registered) {
+                    console.log(
+                        "[Auth] ✓ Push token successfully registered - closed-app notifications enabled",
+                    );
+                } else {
+                    console.warn(
+                        "[Auth] ⚠ Push token registration failed - notifications may not work when app is closed",
+                    );
+                }
+            } else {
+                console.warn("[Auth] ⚠ Could not obtain push token");
+            }
+        } catch (error) {
+            // Don't let push token registration failure block login
+            console.error(
+                "[Auth] ✗ Error during push token registration:",
+                error?.message,
+            );
+        }
     };
 
     const updateUser = async (updatedObj) => {
@@ -570,7 +683,11 @@ export const AuthProvider = ({ children }) => {
 
     const submitSuspensionReport = async (reportMessage) => {
         try {
-            setSuspensionInfo((prev) => ({ ...prev, submitting: true, submitError: "" }));
+            setSuspensionInfo((prev) => ({
+                ...prev,
+                submitting: true,
+                submitError: "",
+            }));
             const payload = {
                 name: suspensionInfo?.name || "",
                 email: suspensionInfo?.email || "",
@@ -608,10 +725,16 @@ export const AuthProvider = ({ children }) => {
                         "Support API not found on this server. Please restart/update backend or check API URL.",
                     );
                 }
-                throw new Error(data.message || data.error || `Failed to submit report (HTTP ${res.status})`);
+                throw new Error(
+                    data.message ||
+                        data.error ||
+                        `Failed to submit report (HTTP ${res.status})`,
+                );
             }
 
-            console.log("[Support] Ticket submitted", { ticketId: data?.ticketId || data?.ticketID || null });
+            console.log("[Support] Ticket submitted", {
+                ticketId: data?.ticketId || data?.ticketID || null,
+            });
             setSuspensionInfo((prev) => ({ ...prev, submitted: true }));
             return true;
         } catch (e) {
@@ -692,7 +815,9 @@ export const AuthProvider = ({ children }) => {
         setBillingPrompt((prev) => ({ ...prev, visible: false }));
     };
 
-    const showUpgradePrompt = (message = "Please upgrade your current plan to continue.") => {
+    const showUpgradePrompt = (
+        message = "Please upgrade your current plan to continue.",
+    ) => {
         setBillingPrompt({
             visible: true,
             title: "Upgrade required",

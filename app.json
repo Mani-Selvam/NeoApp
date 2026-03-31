@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "NeoApp",
-    "slug": "neoapp-manibro11",
-    "owner": "manibro11",
+    "slug": "neoapp-manibro12",
+    "owner": "manibro12",
     "version": "1.0.0",
     "icon": "./src/assets/app-icon.png",
     "orientation": "portrait",
@@ -38,7 +38,8 @@
         "backgroundColor": "#FFFFFF"
       },
       "permissions": [
-        "CALL_PHONE"
+        "CALL_PHONE",
+        "POST_NOTIFICATIONS"
       ]
     },
     "plugins": [
@@ -71,7 +72,7 @@
         "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
       },
       "eas": {
-        "projectId": "0d0a1ff8-d408-45c3-875f-595914013928"
+        "projectId": "d514f090-ffbc-47ae-b9de-86468d7c1189"
       }
     }
   }

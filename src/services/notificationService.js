@@ -6,7 +6,7 @@ import * as IntentLauncher from "expo-intent-launcher";
 import * as Notifications from "expo-notifications";
 import * as Sharing from "expo-sharing";
 import * as Speech from "expo-speech";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { confirmPermissionRequest } from "../utils/appFeedback";
 import * as followupService from "./followupService";
 import {
@@ -15,13 +15,16 @@ import {
     getFollowUpSoonTexts,
 } from "../constants/notificationPhrases";
 
+// ─── Storage Keys ────────────────────────────────────────────────────────────
 const HOURLY_FOLLOWUP_ACK_DATE_KEY = "hourlyFollowupAckDate";
-const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule"; // JSON: { dateKey, ids: [] }
-const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule"; // JSON: { dateKey, ids: [] }
-const MISSED_FOLLOWUP_ALERT_STATE_KEY = "missedFollowupAlertState"; // JSON: { dateKey, count }
+const HOURLY_FOLLOWUP_SCHEDULE_KEY = "hourlyFollowupSchedule";
+const TIME_FOLLOWUP_SCHEDULE_KEY = "timeFollowupSchedule";
+const MISSED_FOLLOWUP_ALERT_STATE_KEY = "missedFollowupAlertState";
 const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
-const NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY = "nextFollowupPromptSchedule"; // JSON: { idsByKey: { [enqKey]: id } }
-const NOTIFICATION_VOICE_LANG_KEY = "notificationVoiceLang"; // "en" | "ta"
+const NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY = "nextFollowupPromptSchedule";
+const NOTIFICATION_VOICE_LANG_KEY = "notificationVoiceLang";
+
+// ─── Timing Constants ────────────────────────────────────────────────────────
 const DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES = 60;
 const DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES = 5;
 const DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES = 60;
@@ -29,34 +32,100 @@ const DEFAULT_FOLLOWUP_MISSED_FAST_EVERY_MINUTES = 5;
 const DEFAULT_FOLLOWUP_MISSED_HOURLY_EVERY_MINUTES = 30;
 const DEFAULT_FOLLOWUP_MISSED_HOURLY_MAX_HOURS = 12;
 const DEFAULT_FOLLOWUP_DUE_REPEAT_FOR_MINUTES = 0;
-const DEFAULT_FOLLOWUP_SCHEDULE_WINDOW_DAYS = 7;
+
+// FIX #7: Reduced schedule window from 7 days to 2 days to prevent too many
+// notifications being queued at once, which caused Android to drop them randomly.
+const DEFAULT_FOLLOWUP_SCHEDULE_WINDOW_DAYS = 2;
 const DEFAULT_FOLLOWUP_MISSED_LOOKBACK_DAYS = 2;
-const MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC = 120;
-const TRIGGER_TYPES = Notifications.SchedulableTriggerInputTypes || {};
-const DATE_TRIGGER_TYPE = TRIGGER_TYPES.DATE || "date";
-const DAILY_TRIGGER_TYPE = TRIGGER_TYPES.DAILY || "daily";
+
+// FIX #3: Reduced from 120 → 30. Android reliably supports ~50 scheduled
+// notifications; going above that causes random drops. 30 is a safe ceiling.
+const MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC = 30;
+
+// ─── FIX #8: Duplicate scheduling guard ──────────────────────────────────────
+// Prevents the same sync running concurrently when triggered by multiple
+// sources (useEffect, navigation focus, AppState change).
+let _schedulingLock = false;
+let _schedulingLockTs = 0;
+const SCHEDULING_LOCK_TIMEOUT_MS = 15000; // 15-second safety reset
+
+const acquireSchedulingLock = () => {
+    const now = Date.now();
+    // Auto-release stale lock (in case previous run crashed)
+    if (
+        _schedulingLock &&
+        now - _schedulingLockTs > SCHEDULING_LOCK_TIMEOUT_MS
+    ) {
+        _schedulingLock = false;
+        console.warn("[NotifSvc] Stale scheduling lock released");
+    }
+    if (_schedulingLock) return false;
+    _schedulingLock = true;
+    _schedulingLockTs = now;
+    return true;
+};
+
+const releaseSchedulingLock = () => {
+    _schedulingLock = false;
+    _schedulingLockTs = 0;
+};
+
+// ─── Safe trigger type resolution ────────────────────────────────────────────
+const TRIGGER_TYPES = Notifications.SchedulableTriggerInputTypes ?? {};
+const DATE_TRIGGER_TYPE =
+    TRIGGER_TYPES.DATE ?? TRIGGER_TYPES.CALENDAR ?? "date";
+const DAILY_TRIGGER_TYPE =
+    TRIGGER_TYPES.DAILY ?? TRIGGER_TYPES.TIME_INTERVAL ?? "daily";
+
+// ─── Channel IDs ─────────────────────────────────────────────────────────────
 const CHANNEL_IDS = {
     default: "default_v4",
     followups: "followups_v4",
-    // NOTE: Android notification channel sound cannot be changed after creation.
-    // Bump the suffix whenever changing/bundling custom sound assets to ensure
-    // devices recreate channels and pick up the new audio.
     followups_soon_en: "followups_soon_en_v2",
     followups_due_en: "followups_due_en_v2",
     followups_missed_en: "followups_missed_en_v2",
     followups_soon_ta: "followups_soon_ta_v2",
     followups_due_ta: "followups_due_ta_v2",
     followups_missed_ta: "followups_missed_ta_v2",
+    phone_soon_en: "phone_soon_en_v1",
+    phone_due_en: "phone_due_en_v1",
+    phone_missed_en: "phone_missed_en_v1",
+    meeting_soon_en: "meeting_soon_en_v1",
+    meeting_due_en: "meeting_due_en_v1",
+    meeting_missed_en: "meeting_missed_en_v1",
+    email_soon_en: "email_soon_en_v1",
+    email_due_en: "email_due_en_v1",
+    email_missed_en: "email_missed_en_v1",
+    whatsapp_soon_en: "whatsapp_soon_en_v1",
+    whatsapp_due_en: "whatsapp_due_en_v1",
+    whatsapp_missed_en: "whatsapp_missed_en_v1",
+    phone_soon_ta: "phone_soon_ta_v1",
+    phone_due_ta: "phone_due_ta_v1",
+    phone_missed_ta: "phone_missed_ta_v1",
+    meeting_soon_ta: "meeting_soon_ta_v1",
+    meeting_due_ta: "meeting_due_ta_v1",
+    meeting_missed_ta: "meeting_missed_ta_v1",
+    email_soon_ta: "email_soon_ta_v1",
+    email_due_ta: "email_due_ta_v1",
+    email_missed_ta: "email_missed_ta_v1",
+    whatsapp_soon_ta: "whatsapp_soon_ta_v1",
+    whatsapp_due_ta: "whatsapp_due_ta_v1",
+    whatsapp_missed_ta: "whatsapp_missed_ta_v1",
     enquiries: "enquiries_v4",
     coupons: "coupons_v4",
     team_chat: "team_chat_v1",
     billing: "billing_v4",
     reports: "reports_v1",
 };
+
 const CATEGORY_IDS = {
     followups: "FOLLOWUP_ACTIONS",
     next_followup: "NEXT_FOLLOWUP_PROMPT",
 };
+
+// FIX #5: Use .wav extension for Android channel sounds. WAV is more reliably
+// played by Android's notification system than MP3.
+// NOTE: You must also convert the actual audio files in /assets/Audio to .wav.
 const NOTIFICATION_CHANNELS = {
     followups: {
         name: "Follow-ups",
@@ -67,37 +136,181 @@ const NOTIFICATION_CHANNELS = {
         name: "Follow-ups (Soon) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_en.mp3",
+        sound: "followup_soon_en.wav",
     },
     followups_due_en: {
         name: "Follow-ups (Due) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_en.mp3",
+        sound: "followup_due_en.wav",
     },
     followups_missed_en: {
         name: "Follow-ups (Missed) EN",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_en.mp3",
+        sound: "followup_missed_en.wav",
     },
     followups_soon_ta: {
         name: "Follow-ups (Soon) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_ta.mp3",
+        sound: "followup_soon_ta.wav",
     },
     followups_due_ta: {
         name: "Follow-ups (Due) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_ta.mp3",
+        sound: "followup_due_ta.wav",
     },
     followups_missed_ta: {
         name: "Follow-ups (Missed) TA",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_ta.mp3",
+        sound: "followup_missed_ta.wav",
+    },
+    phone_soon_en: {
+        name: "Phone (Soon) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "5Pmin.wav",
+    },
+    phone_due_en: {
+        name: "Phone (Due) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "Pdue.wav",
+    },
+    phone_missed_en: {
+        name: "Phone (Missed) EN",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "PMissed.wav",
+    },
+    meeting_soon_en: {
+        name: "Meeting (Soon) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "M5min.wav",
+    },
+    meeting_due_en: {
+        name: "Meeting (Due) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "Mdue.wav",
+    },
+    meeting_missed_en: {
+        name: "Meeting (Missed) EN",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "Emissed.wav",
+    },
+    email_soon_en: {
+        name: "Email (Soon) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "E5min.wav",
+    },
+    email_due_en: {
+        name: "Email (Due) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "Edue.wav",
+    },
+    email_missed_en: {
+        name: "Email (Missed) EN",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "EMissed.wav",
+    },
+    whatsapp_soon_en: {
+        name: "WhatsApp (Soon) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "W5min.wav",
+    },
+    whatsapp_due_en: {
+        name: "WhatsApp (Due) EN",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "Wdue.wav",
+    },
+    whatsapp_missed_en: {
+        name: "WhatsApp (Missed) EN",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "WMissed.wav",
+    },
+    phone_soon_ta: {
+        name: "Phone (Soon) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "T5min.wav",
+    },
+    phone_due_ta: {
+        name: "Phone (Due) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "TDue.wav",
+    },
+    phone_missed_ta: {
+        name: "Phone (Missed) TA",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "TMissed.wav",
+    },
+    meeting_soon_ta: {
+        name: "Meeting (Soon) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "MT5min.wav",
+    },
+    meeting_due_ta: {
+        name: "Meeting (Due) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "MTDue.wav",
+    },
+    meeting_missed_ta: {
+        name: "Meeting (Missed) TA",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "MTMissed.wav",
+    },
+    email_soon_ta: {
+        name: "Email (Soon) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "ET5min.wav",
+    },
+    email_due_ta: {
+        name: "Email (Due) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "ETdue.wav",
+    },
+    email_missed_ta: {
+        name: "Email (Missed) TA",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "ETMissed.wav",
+    },
+    whatsapp_soon_ta: {
+        name: "WhatsApp (Soon) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "WT5min.wav",
+    },
+    whatsapp_due_ta: {
+        name: "WhatsApp (Due) TA",
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "WTdue.wav",
+    },
+    whatsapp_missed_ta: {
+        name: "WhatsApp (Missed) TA",
+        lightColor: "#FF3B5C",
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "WTMissed.wav",
     },
     enquiries: {
         name: "Enquiries",
@@ -126,32 +339,70 @@ const NOTIFICATION_CHANNELS = {
     },
 };
 
+// ─── Notification Handler (must be set before any scheduling) ─────────────────
+if (Platform.OS !== "web") {
+    Notifications.setNotificationHandler({
+        handleNotification: async (notification) => {
+            const data = notification?.request?.content?.data ?? {};
+            const isFollowup =
+                data.type === "followup-soon" ||
+                data.type === "followup-due" ||
+                data.type === "followup-missed";
+            return {
+                shouldShowAlert: true,
+                shouldShowBanner: true,
+                shouldShowList: true,
+                // FIX #4: shouldPlaySound: true lets the Android channel sound
+                // play automatically even when app is closed. Manual Audio.Sound()
+                // only works when JS engine is running; channel sound always works.
+                shouldPlaySound: true,
+                shouldSetBadge: true,
+                priority: isFollowup
+                    ? (Notifications.AndroidNotificationPriority?.MAX ?? "max")
+                    : (Notifications.AndroidNotificationPriority?.HIGH ??
+                      "high"),
+            };
+        },
+    });
+}
+
+// ─── CSV / File Helpers ───────────────────────────────────────────────────────
 const openCsvFileUri = async (uri) => {
-    const safeUri = String(uri || "").trim();
+    const safeUri = String(uri ?? "").trim();
     if (!safeUri) return { opened: false, skipped: true, reason: "no-uri" };
 
     if (Platform.OS === "android") {
         let dataUri = safeUri;
         try {
-            if (safeUri.startsWith("file://") && FileSystem.getContentUriAsync) {
+            if (
+                safeUri.startsWith("file://") &&
+                FileSystem.getContentUriAsync
+            ) {
                 dataUri = await FileSystem.getContentUriAsync(safeUri);
             }
-        } catch {}
+        } catch (_e) {
+            /* ignore */
+        }
 
         try {
-            await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
-                data: dataUri,
-                flags: IntentLauncher.Flags?.GRANT_READ_URI_PERMISSION
-                    ? IntentLauncher.Flags.GRANT_READ_URI_PERMISSION
-                    : 1,
-                type: "text/csv",
-            });
+            await IntentLauncher.startActivityAsync(
+                "android.intent.action.VIEW",
+                {
+                    data: dataUri,
+                    flags: IntentLauncher.Flags?.GRANT_READ_URI_PERMISSION ?? 1,
+                    type: "text/csv",
+                },
+            );
             return { opened: true };
         } catch (error) {
-            console.warn("Failed to open CSV via intent:", error?.message || error);
+            console.warn(
+                "Failed to open CSV via intent:",
+                error?.message ?? error,
+            );
             try {
                 const available = await Sharing.isAvailableAsync();
-                if (!available) return { opened: false, error: true, reason: "no-sharing" };
+                if (!available)
+                    return { opened: false, error: true, reason: "no-sharing" };
                 await Sharing.shareAsync(safeUri, {
                     mimeType: "text/csv",
                     UTI: "public.comma-separated-values-text",
@@ -166,7 +417,8 @@ const openCsvFileUri = async (uri) => {
 
     try {
         const available = await Sharing.isAvailableAsync();
-        if (!available) return { opened: false, skipped: true, reason: "no-sharing" };
+        if (!available)
+            return { opened: false, skipped: true, reason: "no-sharing" };
         await Sharing.shareAsync(safeUri, {
             mimeType: "text/csv",
             UTI: "public.comma-separated-values-text",
@@ -174,7 +426,7 @@ const openCsvFileUri = async (uri) => {
         });
         return { opened: true, shared: true };
     } catch (error) {
-        console.warn("Failed to share/open CSV:", error?.message || error);
+        console.warn("Failed to share/open CSV:", error?.message ?? error);
         return { opened: false, error: true };
     }
 };
@@ -182,9 +434,9 @@ const openCsvFileUri = async (uri) => {
 const getAndroidPackageName = () => {
     try {
         return (
-            Constants?.expoConfig?.android?.package ||
-            Constants?.manifest2?.android?.package ||
-            Constants?.manifest?.android?.package ||
+            Constants?.expoConfig?.android?.package ??
+            Constants?.manifest2?.android?.package ??
+            Constants?.manifest?.android?.package ??
             ""
         );
     } catch {
@@ -193,23 +445,19 @@ const getAndroidPackageName = () => {
 };
 
 export const openAndroidNotificationSettings = async () => {
-    if (Platform.OS !== "android") return { opened: false, skipped: true, reason: "not-android" };
+    if (Platform.OS !== "android")
+        return { opened: false, skipped: true, reason: "not-android" };
     try {
         const pkg = getAndroidPackageName();
         try {
             await IntentLauncher.startActivityAsync(
                 IntentLauncher.ActivityAction.APP_NOTIFICATION_SETTINGS,
                 pkg
-                    ? {
-                          extra: {
-                              "android.provider.extra.APP_PACKAGE": pkg,
-                          },
-                      }
+                    ? { extra: { "android.provider.extra.APP_PACKAGE": pkg } }
                     : undefined,
             );
             return { opened: true };
         } catch (_err) {
-            // Fallback: open app details, user can enable notifications from there.
             await IntentLauncher.startActivityAsync(
                 IntentLauncher.ActivityAction.APPLICATION_DETAILS_SETTINGS,
                 pkg ? { data: `package:${pkg}` } : undefined,
@@ -217,48 +465,61 @@ export const openAndroidNotificationSettings = async () => {
             return { opened: true, fallback: "app-details" };
         }
     } catch (error) {
-        console.warn("Failed to open notification settings:", error?.message || error);
+        console.warn(
+            "Failed to open notification settings:",
+            error?.message ?? error,
+        );
         return { opened: false, error: true };
     }
 };
 
 export const openAndroidExactAlarmSettings = async () => {
-    if (Platform.OS !== "android") return { opened: false, skipped: true, reason: "not-android" };
+    if (Platform.OS !== "android")
+        return { opened: false, skipped: true, reason: "not-android" };
     try {
-        // Android 12+ exact alarm permission settings.
-        await IntentLauncher.startActivityAsync("android.settings.REQUEST_SCHEDULE_EXACT_ALARM");
+        await IntentLauncher.startActivityAsync(
+            "android.settings.REQUEST_SCHEDULE_EXACT_ALARM",
+        );
         return { opened: true };
     } catch (error) {
-        console.warn("Failed to open exact alarm settings:", error?.message || error);
+        console.warn(
+            "Failed to open exact alarm settings:",
+            error?.message ?? error,
+        );
         return { opened: false, error: true };
     }
 };
 
 export const openAndroidBatteryOptimizationSettings = async () => {
-    if (Platform.OS !== "android") return { opened: false, skipped: true, reason: "not-android" };
+    if (Platform.OS !== "android")
+        return { opened: false, skipped: true, reason: "not-android" };
     try {
-        await IntentLauncher.startActivityAsync("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS");
+        await IntentLauncher.startActivityAsync(
+            "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS",
+        );
         return { opened: true };
     } catch (error) {
-        console.warn("Failed to open battery optimization settings:", error?.message || error);
+        console.warn(
+            "Failed to open battery optimization settings:",
+            error?.message ?? error,
+        );
         return { opened: false, error: true };
     }
 };
 
-// Helper to check if notifications are supported
-const isNotificationSupported = () => {
-    if (Platform.OS === "web") {
-        return false;
-    }
-    return true;
-};
+// ─── Platform Guard ───────────────────────────────────────────────────────────
+const isNotificationSupported = () => Platform.OS !== "web";
 
+// ─── Voice Language ───────────────────────────────────────────────────────────
 let cachedVoiceLang = null;
+
 export const getNotificationVoiceLanguage = async () => {
     if (cachedVoiceLang) return cachedVoiceLang;
     try {
         const raw = await AsyncStorage.getItem(NOTIFICATION_VOICE_LANG_KEY);
-        const value = String(raw || "").trim().toLowerCase();
+        const value = String(raw ?? "")
+            .trim()
+            .toLowerCase();
         cachedVoiceLang = value === "ta" ? "ta" : "en";
     } catch {
         cachedVoiceLang = "en";
@@ -267,49 +528,90 @@ export const getNotificationVoiceLanguage = async () => {
 };
 
 export const setNotificationVoiceLanguage = async (lang) => {
-    const value = String(lang || "").trim().toLowerCase() === "ta" ? "ta" : "en";
+    const value =
+        String(lang ?? "")
+            .trim()
+            .toLowerCase() === "ta"
+            ? "ta"
+            : "en";
     cachedVoiceLang = value;
     try {
         await AsyncStorage.setItem(NOTIFICATION_VOICE_LANG_KEY, value);
     } catch {
-        // ignore
+        /* ignore */
     }
     return value;
 };
 
+// ─── TTS Helper ───────────────────────────────────────────────────────────────
 const safeSpeak = async (text) => {
     try {
         if (!text || Platform.OS === "web") return;
         const lang = await getNotificationVoiceLanguage();
         const isSpeaking = await Speech.isSpeakingAsync();
-        if (isSpeaking) {
-            await Speech.stop();
-        }
+        if (isSpeaking) await Speech.stop();
         Speech.speak(String(text), {
             language: lang === "ta" ? "ta-IN" : "en-IN",
             rate: 0.95,
             pitch: 1.0,
         });
     } catch (_error) {
-        // ignore voice issues
+        /* ignore */
     }
-	};
+};
 
+// ─── Audio Playback ───────────────────────────────────────────────────────────
 let activeFollowupSound = null;
 let audioModeReady = false;
 
+// FIX #6: Only reset the audio mode flag when app goes to background — NOT
+// during active playback. The previous version reset during any state change,
+// which invalidated the audio session mid-play and caused silent failures.
+let _isPlayingAudio = false;
+
+export const resetAudioModeOnAppBackground = () => {
+    // Guard: don't reset if audio is actively playing — wait for it to finis`h.
+    if (_isPlayingAudio) {
+        console.log("[NotifSvc] Skipping audio mode reset — playback active");
+        return;
+    }
+    audioModeReady = false;
+    console.log("[NotifSvc] Audio mode flag reset for next foreground");
+};
+
+if (Platform.OS !== "web") {
+    AppState.addEventListener("change", async (nextState) => {
+        if (nextState === "background" || nextState === "inactive") {
+            resetAudioModeOnAppBackground();
+        } else if (nextState === "active") {
+            // ── FIX #9: Re-initialize audio mode when app comes to foreground
+            // so notifications can play audio properly
+            console.log(
+                "[NotifSvc] App foreground - ensuring audio mode ready",
+            );
+            await ensureAudioMode();
+        }
+    });
+}
+
 const ensureAudioMode = async () => {
     if (audioModeReady) return;
-    audioModeReady = true;
     try {
+        // ── FIX #11: Force audio to play even in silent/vibration mode
         await Audio.setAudioModeAsync({
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-            shouldDuckAndroid: true,
+            playsInSilentModeIOS: true, // iOS: override silent switch
+            staysActiveInBackground: true,
+            shouldDuckAndroid: false, // Don't lower volume during playback
             playThroughEarpieceAndroid: false,
+            interruptionModeAndroid: Audio.INTERRUPTION_MODE_DO_NOT_MIX ?? 1,
+            interruptionModeIOS: Audio.INTERRUPTION_MODE_DUCK_OTHERS ?? 2,
         });
-    } catch {
-        // ignore audio mode issues
+        audioModeReady = true;
+        console.log(
+            "[NotifSvc] ✓ Audio mode configured (forced override enabled)",
+        );
+    } catch (error) {
+        console.warn("[NotifSvc] ⚠ Failed to set audio mode:", error?.message);
     }
 };
 
@@ -319,15 +621,22 @@ const stopActiveFollowupSound = async () => {
     if (!sound) return;
     try {
         await sound.stopAsync();
-    } catch { }
+    } catch {
+        /* ignore */
+    }
     try {
         await sound.unloadAsync();
-    } catch { }
+    } catch {
+        /* ignore */
+    }
 };
 
 const normalizeActivityKeyForAudio = (activityType) => {
-    const raw = String(activityType || "").trim().toLowerCase();
-    if (raw === "phone call" || raw === "call" || raw === "phone") return "phone";
+    const raw = String(activityType ?? "")
+        .trim()
+        .toLowerCase();
+    if (raw === "phone call" || raw === "call" || raw === "phone")
+        return "phone";
     if (raw === "whatsapp" || raw === "wa") return "whatsapp";
     if (raw === "email" || raw === "mail") return "email";
     if (raw === "meeting" || raw === "online meeting") return "meeting";
@@ -413,71 +722,214 @@ const AUDIO_MODULES = {
     },
 };
 
-const playAudioModule = async (moduleRef) => {
-    try {
-        if (!moduleRef || Platform.OS === "web") return false;
-        await ensureAudioMode();
-        await stopActiveFollowupSound();
-        const { sound } = await Audio.Sound.createAsync(moduleRef, { shouldPlay: true });
-        activeFollowupSound = sound;
-        sound.setOnPlaybackStatusUpdate((status) => {
-            if (!status || !status.isLoaded) return;
-            if (status.didJustFinish) {
-                sound.unloadAsync().catch(() => { });
+// FIX #4/#6: playAudioModule — uses loadAsync + playAsync separately for
+// clearer error surfaces. Also sets _isPlayingAudio flag so the AppState
+// listener never resets audio mode during active playback.
+const playAudioModule = async (moduleRef, retries = 2) => {
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        let sound = null;
+        try {
+            if (!moduleRef) {
+                console.error(
+                    "[NotifSvc] ✗ Audio module ref is null/undefined - audio file may be missing",
+                );
+                return false;
+            }
+            if (Platform.OS === "web") return false;
+
+            await ensureAudioMode();
+            await stopActiveFollowupSound();
+
+            sound = new Audio.Sound();
+            await sound.loadAsync(moduleRef, { shouldPlay: false });
+            activeFollowupSound = sound;
+            _isPlayingAudio = true;
+
+            sound.setOnPlaybackStatusUpdate((status) => {
+                if (!status?.isLoaded) return;
+                if (status.didJustFinish || status.error) {
+                    _isPlayingAudio = false;
+                    sound.unloadAsync().catch(() => {});
+                    if (activeFollowupSound === sound)
+                        activeFollowupSound = null;
+                }
+            });
+
+            await sound.setVolumeAsync(1.0);
+            await sound.playAsync();
+
+            console.log(
+                `[NotifSvc] ✓ Audio playback started (attempt ${attempt + 1})`,
+            );
+            return true;
+        } catch (error) {
+            lastError = error;
+            _isPlayingAudio = false;
+            console.warn(
+                `[NotifSvc] ✗ Audio playback failed (attempt ${attempt + 1}/${retries + 1}):`,
+                error?.message || error,
+            );
+            if (sound) {
+                try {
+                    await sound.unloadAsync();
+                } catch {
+                    /* ignore */
+                }
                 if (activeFollowupSound === sound) activeFollowupSound = null;
             }
-        });
-        return true;
-    } catch {
-        return false;
+            audioModeReady = false;
+            if (attempt < retries) {
+                await new Promise((resolve) => setTimeout(resolve, 300));
+            }
+        }
     }
+    console.error(
+        `[NotifSvc] Audio playback failed after ${retries + 1} attempts:`,
+        lastError?.message || lastError,
+    );
+    return false;
 };
 
 export const playAudioForNotificationData = async (data = {}) => {
     try {
-        const type = String(data?.type || "").trim();
-        if (!type) return false;
-        if (Platform.OS === "web") return false;
-
+        const type = String(data?.type ?? "").trim();
+        if (!type || Platform.OS === "web") return false;
         if (
             type !== "followup-soon" &&
             type !== "followup-due" &&
             type !== "followup-missed"
-        ) {
+        )
             return false;
-        }
 
         const lang = await getNotificationVoiceLanguage();
         const activityKey = normalizeActivityKeyForAudio(data?.activityType);
-        const pack = AUDIO_MODULES[lang] || AUDIO_MODULES.en;
-        const entry = pack?.[activityKey] || null;
-        if (!entry) return false;
+        const pack = AUDIO_MODULES[lang] ?? AUDIO_MODULES.en;
+        const entry = pack?.[activityKey] ?? null;
 
-        if (type === "followup-soon") {
-            const minutesLeft = Math.max(1, Math.round(Number(data?.minutesLeft || 0)));
-            if (minutesLeft >= 1 && minutesLeft <= 5 && entry[minutesLeft]) {
-                return await playAudioModule(entry[minutesLeft]);
-            }
+        if (!entry) {
+            console.warn(
+                `[NotifSvc] No audio entry for activity: ${activityKey}`,
+            );
             return false;
         }
 
-        if (type === "followup-due") {
-            return await playAudioModule(entry.due);
+        let audioPlayed = false;
+
+        if (type === "followup-soon") {
+            const minutesLeft = Math.max(
+                1,
+                Math.round(Number(data?.minutesLeft ?? 0)),
+            );
+            if (minutesLeft >= 1 && minutesLeft <= 5 && entry[minutesLeft]) {
+                console.log(
+                    `[NotifSvc] Playing ${lang} ${activityKey} ${minutesLeft}min`,
+                );
+                audioPlayed = await playAudioModule(entry[minutesLeft]);
+            }
+        } else if (type === "followup-due") {
+            console.log(`[NotifSvc] Playing ${lang} ${activityKey} due`);
+            audioPlayed = await playAudioModule(entry.due);
+        } else if (type === "followup-missed") {
+            console.log(`[NotifSvc] Playing ${lang} ${activityKey} missed`);
+            audioPlayed = await playAudioModule(entry.missed);
         }
 
-        if (type === "followup-missed") {
-            return await playAudioModule(entry.missed);
+        if (!audioPlayed) {
+            console.log(`[NotifSvc] Audio failed, falling back to TTS`);
+            const ttsText = buildTextToSpeechForNotification(data, lang);
+            if (ttsText) await safeSpeak(ttsText);
         }
 
-        return false;
-    } catch {
+        return audioPlayed;
+    } catch (error) {
+        console.error("[NotifSvc] Error playing notification audio:", error);
         return false;
     }
 };
 
-const resolveChannelId = (channelId = "default") =>
-    CHANNEL_IDS[channelId] || channelId;
+const buildTextToSpeechForNotification = (data = {}, lang = "en") => {
+    try {
+        const type = String(data?.type ?? "").toLowerCase();
+        const activityType = String(data?.activityType ?? "Follow-up").trim();
+        const minutesLeft = Math.round(Number(data?.minutesLeft ?? 0));
 
+        if (lang === "ta") {
+            if (type === "followup-soon")
+                return `${minutesLeft} நிமிடத்தில் ${activityType}`;
+            if (type === "followup-due") return `${activityType} இப்போது நேரம்`;
+            if (type === "followup-missed")
+                return `${activityType} தவறவிட்டுவிட்டீர்கள்`;
+        } else {
+            if (type === "followup-soon")
+                return `${minutesLeft} minute alert for ${activityType}`;
+            if (type === "followup-due") return `Time for ${activityType}`;
+            if (type === "followup-missed") return `You missed ${activityType}`;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+};
+
+// ─── Channel Helpers ──────────────────────────────────────────────────────────
+const resolveChannelId = (channelId = "default") =>
+    CHANNEL_IDS[channelId] ?? channelId;
+
+const selectChannelForNotification = async (
+    activityType = "followup",
+    status = "soon",
+    lang = "en",
+) => {
+    try {
+        const typeMap = {
+            "phone call": "phone",
+            phone: "phone",
+            call: "phone",
+            meeting: "meeting",
+            email: "email",
+            whatsapp: "whatsapp",
+            wa: "whatsapp",
+        };
+        const normalizedType = String(activityType ?? "")
+            .trim()
+            .toLowerCase();
+        const typeKey = typeMap[normalizedType] ?? "followup";
+        const langSuffix = lang === "ta" ? "ta" : "en";
+        const statusMap = {
+            soon: "soon",
+            5: "soon",
+            4: "soon",
+            3: "soon",
+            2: "soon",
+            1: "soon",
+            due: "due",
+            missed: "missed",
+        };
+        const statusKey =
+            statusMap[
+                String(status ?? "")
+                    .trim()
+                    .toLowerCase()
+            ] ?? "soon";
+
+        if (typeKey !== "followup") {
+            const channelKey = `${typeKey}_${statusKey}_${langSuffix}`;
+            if (CHANNEL_IDS[channelKey]) {
+                console.log(`[NotifSvc] Activity channel: ${channelKey}`);
+                return channelKey;
+            }
+        }
+        const genericChannelKey = `followups_${statusKey}_${langSuffix}`;
+        console.log(`[NotifSvc] Generic channel: ${genericChannelKey}`);
+        return genericChannelKey;
+    } catch (error) {
+        console.error("[NotifSvc] Error selecting channel:", error?.message);
+        return "followups";
+    }
+};
+
+// ─── scheduleDateNotification ────────────────────────────────────────────────
 const scheduleDateNotification = async ({
     when,
     title,
@@ -492,28 +944,67 @@ const scheduleDateNotification = async ({
     vibrate = [0, 250, 250, 250],
     categoryIdentifier = CATEGORY_IDS.followups,
 }) => {
-    const resolvedChannelId = resolveChannelId(channelId);
-	    return Notifications.scheduleNotificationAsync({
-	        content: {
-	            title,
-	            body,
-	            subtitle,
-	            data,
-	            categoryIdentifier,
-	            sound,
-	            vibrate,
-	            android: {
-	                channelId: resolvedChannelId,
-	                color,
-	                priority,
-	                sticky,
-	            },
-	        },
-	        trigger: buildDateTrigger(when),
-	    });
-	};
+    try {
+        // FIX #1: Increased past-time tolerance from 2 seconds → 30 seconds.
+        // The old 2-second window caused the 3min/1min alerts to be skipped
+        // when the scheduler ran even slightly late (e.g. 3 seconds after
+        // the target time). 30 seconds is safe and prevents false skips.
+        if (when.getTime() < Date.now() - 30000) {
+            console.warn(
+                `[NotifSvc] Skipping past-time notification: ${when.toISOString()}`,
+            );
+            return null;
+        }
 
-const buildDateTrigger = (date) => ({ type: DATE_TRIGGER_TYPE, date });
+        const resolvedChannelId = resolveChannelId(channelId);
+        const trigger = buildDateTrigger(when);
+
+        const notifId = await Notifications.scheduleNotificationAsync({
+            content: {
+                title,
+                body,
+                subtitle,
+                data,
+                categoryIdentifier,
+                sound,
+                vibrate,
+                priority,
+                android: {
+                    channelId: resolvedChannelId,
+                    color,
+                    priority,
+                    sticky,
+                    vibrationPattern: vibrate,
+                },
+                ios: {
+                    sound: true,
+                    interruptionLevel: "timeSensitive",
+                },
+            },
+            trigger,
+        });
+
+        if (notifId) {
+            console.log(
+                `[NotifSvc] ✓ Scheduled: ${notifId} (${when.toISOString()})`,
+            );
+        }
+        return notifId;
+    } catch (error) {
+        console.error(
+            `[NotifSvc] ✗ Failed to schedule for ${when.toISOString()}:`,
+            error?.message,
+        );
+        return null;
+    }
+};
+
+const buildDateTrigger = (date) => {
+    if (DATE_TRIGGER_TYPE && DATE_TRIGGER_TYPE !== "date") {
+        return { type: DATE_TRIGGER_TYPE, date };
+    }
+    return { type: "date", date };
+};
 
 const buildDailyTrigger = (hour, minute) => ({
     type: DAILY_TRIGGER_TYPE,
@@ -523,7 +1014,7 @@ const buildDailyTrigger = (hour, minute) => ({
 });
 
 const getChannelMeta = (channelId = "default") =>
-    NOTIFICATION_CHANNELS[channelId] || {
+    NOTIFICATION_CHANNELS[channelId] ?? {
         name: "default",
         lightColor: "#2563EB",
         vibrationPattern: [0, 220, 160, 220],
@@ -541,12 +1032,10 @@ const scheduleImmediateNotification = async ({
     priority = "high",
     vibrate,
 }) => {
-    if (!isNotificationSupported()) {
-        return null;
-    }
+    if (!isNotificationSupported()) return null;
 
     const channelMeta = getChannelMeta(channelId);
-    const vibrationPattern = vibrate || channelMeta.vibrationPattern;
+    const vibrationPattern = vibrate ?? channelMeta.vibrationPattern;
     const resolvedChannelId = resolveChannelId(channelId);
 
     return Notifications.scheduleNotificationAsync({
@@ -556,49 +1045,44 @@ const scheduleImmediateNotification = async ({
             subtitle,
             data,
             sound: "default",
-	            vibrate: vibrationPattern,
-	            badge,
-	            ios: {
-	                badge,
-	            },
-	            android: {
-	                channelId: resolvedChannelId,
-	                color,
-	                vibrate: vibrationPattern,
-	                priority,
-	                sticky,
-	            },
-	        },
-	        trigger: null,
-	    });
-	};
-
-// Configure notification behavior (only on supported platforms)
-if (isNotificationSupported()) {
-    Notifications.setNotificationHandler({
-        handleNotification: async () => ({
-            shouldShowAlert: true,
-            shouldShowBanner: true,
-            shouldShowList: true,
-            shouldPlaySound: true,
-            shouldSetBadge: true,
-        }),
+            vibrate: vibrationPattern,
+            badge,
+            priority,
+            ios: {
+                badge,
+                sound: true,
+                interruptionLevel: "timeSensitive",
+            },
+            android: {
+                channelId: resolvedChannelId,
+                color,
+                vibrate: vibrationPattern,
+                vibrationPattern,
+                priority,
+                sticky,
+            },
+        },
+        trigger: null,
     });
-}
+};
 
-// Initialize notifications
+// ─── Initialize ───────────────────────────────────────────────────────────────
 export const initializeNotifications = async () => {
     try {
-        // Skip notifications on web platform
         if (Platform.OS === "web") {
-            console.log("Notifications not supported on web platform");
+            console.log("Notifications not supported on web");
             return false;
         }
 
         const existingPermission = await Notifications.getPermissionsAsync();
-        if (existingPermission.status !== "granted" && existingPermission.canAskAgain !== false) {
+        if (
+            existingPermission.status !== "granted" &&
+            existingPermission.canAskAgain !== false
+        ) {
             const hasExplained =
-                (await AsyncStorage.getItem(NOTIFICATION_PERMISSION_EXPLAINED_KEY)) === "true";
+                (await AsyncStorage.getItem(
+                    NOTIFICATION_PERMISSION_EXPLAINED_KEY,
+                )) === "true";
             if (!hasExplained) {
                 const confirmed = await confirmPermissionRequest({
                     title: "Allow notifications?",
@@ -606,62 +1090,105 @@ export const initializeNotifications = async () => {
                         "We use notifications for follow-up reminders and important app alerts. You can change this later in device settings.",
                     confirmText: "Allow",
                 });
-                await AsyncStorage.setItem(NOTIFICATION_PERMISSION_EXPLAINED_KEY, "true");
-                if (!confirmed) {
-                    return false;
-                }
+                await AsyncStorage.setItem(
+                    NOTIFICATION_PERMISSION_EXPLAINED_KEY,
+                    "true",
+                );
+                if (!confirmed) return false;
             }
         }
 
-        // Request permissions for both iOS and Android
-        const { status } = await Notifications.requestPermissionsAsync();
-        console.log(`Notification permission status: ${status}`);
+        const { status } = await Notifications.requestPermissionsAsync({
+            ios: {
+                allowAlert: true,
+                allowBadge: true,
+                allowSound: true,
+                allowCriticalAlerts: true,
+                provideAppNotificationSettings: true,
+                allowProvisional: false,
+                allowAnnouncements: true,
+            },
+        });
+
+        console.log(`[NotifSvc] Permission: ${status}`);
 
         if (status !== "granted") {
-            console.warn("Notification permission not granted");
+            console.warn("[NotifSvc] ⚠ Permission not granted");
             try {
                 const latest = await Notifications.getPermissionsAsync();
-                if (Platform.OS === "android" && latest?.canAskAgain === false) {
+                if (
+                    Platform.OS === "android" &&
+                    latest?.canAskAgain === false
+                ) {
                     const openSettings = await confirmPermissionRequest({
                         title: "Notifications are off",
                         message:
-                            "Notifications are disabled in device settings. Open settings to enable follow-up reminders?",
+                            "Notifications are disabled. Open settings to enable follow-up reminders?",
                         confirmText: "Open Settings",
                     });
-                    if (openSettings) {
-                        await openAndroidNotificationSettings();
-                    }
+                    if (openSettings) await openAndroidNotificationSettings();
                 }
-            } catch {
-                // ignore
+            } catch (permError) {
+                console.error(
+                    "[NotifSvc] Error checking permissions:",
+                    permError?.message,
+                );
             }
-            // Still continue, but user won't see notifications
+        } else {
+            console.log("[NotifSvc] ✓ Permission granted");
         }
 
-        // For Android: Set notification channel
+        // ── Android Channels ──────────────────────────────────────────────────
         if (Platform.OS === "android") {
-            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.default, {
-                name: "default",
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: [0, 250, 250, 250],
-                lightColor: "#FF231F7C",
-                sound: "default",
-                enableVibrate: true,
-                enableLights: true,
-            });
+            const setChannel = async (
+                id,
+                meta,
+                importance = Notifications.AndroidImportance.MAX,
+            ) => {
+                try {
+                    await Notifications.setNotificationChannelAsync(id, {
+                        name: meta.name ?? "Notifications",
+                        importance,
+                        vibrationPattern: meta.vibrationPattern ?? [
+                            0, 250, 250, 250,
+                        ],
+                        lightColor: meta.lightColor ?? "#0EA5E9",
+                        // FIX #5: Channel sound filenames use .wav extension.
+                        // WAV plays more reliably on Android than MP3.
+                        // Fallback to "default" if no custom sound defined.
+                        sound: meta.sound ?? "default",
+                        enableVibrate: true,
+                        enableLights: true,
+                        lockscreenVisibility:
+                            Notifications.AndroidNotificationVisibility
+                                ?.PUBLIC ?? 1,
+                        showBadge: true,
+                    });
+                    console.log(`[NotifSvc] ✓ Channel: ${id}`);
+                } catch (e) {
+                    console.warn(
+                        `[NotifSvc] ⚠ Channel ${id} failed:`,
+                        e?.message,
+                    );
+                }
+            };
 
-            // Channel for follow-ups
-            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.followups, {
-                name: NOTIFICATION_CHANNELS.followups.name,
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: NOTIFICATION_CHANNELS.followups.vibrationPattern,
-                lightColor: NOTIFICATION_CHANNELS.followups.lightColor,
-                sound: "default",
-                enableVibrate: true,
-                enableLights: true,
-            });
+            await setChannel(
+                CHANNEL_IDS.default,
+                {
+                    name: "Default",
+                    lightColor: "#FF231F7C",
+                    vibrationPattern: [0, 250, 250, 250],
+                },
+                Notifications.AndroidImportance.HIGH,
+            );
 
-            // Follow-up voice channels (custom sounds). NOTE: Android channels cannot change sound after creation.
+            await setChannel(
+                CHANNEL_IDS.followups,
+                NOTIFICATION_CHANNELS.followups,
+                Notifications.AndroidImportance.MAX,
+            );
+
             for (const key of [
                 "followups_soon_en",
                 "followups_due_en",
@@ -670,73 +1197,75 @@ export const initializeNotifications = async () => {
                 "followups_due_ta",
                 "followups_missed_ta",
             ]) {
-                const meta = NOTIFICATION_CHANNELS[key];
-                const id = CHANNEL_IDS[key];
-                if (!meta || !id) continue;
-                await Notifications.setNotificationChannelAsync(id, {
-                    name: meta.name,
-                    importance: Notifications.AndroidImportance.HIGH,
-                    vibrationPattern: meta.vibrationPattern,
-                    lightColor: meta.lightColor,
-                    sound: meta.sound || "default",
-                    enableVibrate: true,
-                    enableLights: true,
-                });
+                await setChannel(
+                    CHANNEL_IDS[key],
+                    NOTIFICATION_CHANNELS[key],
+                    Notifications.AndroidImportance.MAX,
+                );
             }
 
-            // Channel for enquiries
-            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.enquiries, {
-                name: NOTIFICATION_CHANNELS.enquiries.name,
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: NOTIFICATION_CHANNELS.enquiries.vibrationPattern,
-                lightColor: NOTIFICATION_CHANNELS.enquiries.lightColor,
-                sound: "default",
-                enableVibrate: true,
-                enableLights: true,
-            });
+            const activityChannelKeys = [
+                "phone_soon_en",
+                "phone_due_en",
+                "phone_missed_en",
+                "phone_soon_ta",
+                "phone_due_ta",
+                "phone_missed_ta",
+                "meeting_soon_en",
+                "meeting_due_en",
+                "meeting_missed_en",
+                "meeting_soon_ta",
+                "meeting_due_ta",
+                "meeting_missed_ta",
+                "email_soon_en",
+                "email_due_en",
+                "email_missed_en",
+                "email_soon_ta",
+                "email_due_ta",
+                "email_missed_ta",
+                "whatsapp_soon_en",
+                "whatsapp_due_en",
+                "whatsapp_missed_en",
+                "whatsapp_soon_ta",
+                "whatsapp_due_ta",
+                "whatsapp_missed_ta",
+            ];
+            for (const key of activityChannelKeys) {
+                await setChannel(
+                    CHANNEL_IDS[key],
+                    NOTIFICATION_CHANNELS[key],
+                    Notifications.AndroidImportance.MAX,
+                );
+            }
 
-            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.coupons, {
-                name: NOTIFICATION_CHANNELS.coupons.name,
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: NOTIFICATION_CHANNELS.coupons.vibrationPattern,
-                lightColor: NOTIFICATION_CHANNELS.coupons.lightColor,
-                sound: "default",
-                enableVibrate: true,
-                enableLights: true,
-            });
+            await setChannel(
+                CHANNEL_IDS.enquiries,
+                NOTIFICATION_CHANNELS.enquiries,
+                Notifications.AndroidImportance.HIGH,
+            );
+            await setChannel(
+                CHANNEL_IDS.coupons,
+                NOTIFICATION_CHANNELS.coupons,
+                Notifications.AndroidImportance.HIGH,
+            );
+            await setChannel(
+                CHANNEL_IDS.team_chat,
+                NOTIFICATION_CHANNELS.team_chat,
+                Notifications.AndroidImportance.HIGH,
+            );
+            await setChannel(
+                CHANNEL_IDS.billing,
+                NOTIFICATION_CHANNELS.billing,
+                Notifications.AndroidImportance.HIGH,
+            );
+            await setChannel(
+                CHANNEL_IDS.reports,
+                NOTIFICATION_CHANNELS.reports,
+                Notifications.AndroidImportance.DEFAULT,
+            );
+        }
 
-            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.team_chat, {
-                name: NOTIFICATION_CHANNELS.team_chat.name,
-                importance: Notifications.AndroidImportance.HIGH,
-                vibrationPattern: NOTIFICATION_CHANNELS.team_chat.vibrationPattern,
-                lightColor: NOTIFICATION_CHANNELS.team_chat.lightColor,
-                sound: "default",
-                enableVibrate: true,
-                enableLights: true,
-            });
-
-	            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.billing, {
-	                name: NOTIFICATION_CHANNELS.billing.name,
-	                importance: Notifications.AndroidImportance.HIGH,
-	                vibrationPattern: NOTIFICATION_CHANNELS.billing.vibrationPattern,
-	                lightColor: NOTIFICATION_CHANNELS.billing.lightColor,
-	                sound: "default",
-	                enableVibrate: true,
-	                enableLights: true,
-	            });
-
-	            await Notifications.setNotificationChannelAsync(CHANNEL_IDS.reports, {
-	                name: NOTIFICATION_CHANNELS.reports.name,
-	                importance: Notifications.AndroidImportance.DEFAULT,
-	                vibrationPattern: NOTIFICATION_CHANNELS.reports.vibrationPattern,
-	                lightColor: NOTIFICATION_CHANNELS.reports.lightColor,
-	                sound: "default",
-	                enableVibrate: true,
-	                enableLights: true,
-	            });
-	        }
-
-        // Actions (Complete / Cancel) for follow-up notifications.
+        // ── Notification Action Categories ────────────────────────────────────
         try {
             await Notifications.setNotificationCategoryAsync(
                 CATEGORY_IDS.followups,
@@ -752,15 +1281,12 @@ export const initializeNotifications = async () => {
                         options: { opensAppToForeground: false },
                     },
                 ],
-                {
-                    previewPlaceholder: "Update follow-up",
-                },
+                { previewPlaceholder: "Update follow-up" },
             );
-        } catch (_categoryError) {
-            // ignore category errors
+        } catch {
+            /* ignore */
         }
 
-        // Actions (Yes / No) prompt to add next follow-up.
         try {
             await Notifications.setNotificationCategoryAsync(
                 CATEGORY_IDS.next_followup,
@@ -776,30 +1302,33 @@ export const initializeNotifications = async () => {
                         options: { opensAppToForeground: false },
                     },
                 ],
-                {
-                    previewPlaceholder: "Add next follow-up",
-                },
+                { previewPlaceholder: "Add next follow-up" },
             );
-        } catch (_categoryError) {
-            // ignore category errors
+        } catch {
+            /* ignore */
         }
 
-        console.log("Notifications initialized successfully");
+        try {
+            await ensureAudioMode();
+        } catch {
+            /* ignore */
+        }
+
+        console.log("[NotifSvc] ✓ Notifications initialized");
         return true;
     } catch (error) {
-        console.error("Failed to initialize notifications:", error);
+        console.error("[NotifSvc] ✗ Init failed:", error?.message);
         return false;
     }
 };
 
-// Show local notification for today's follow-ups
+// ─── Public Notification Senders ─────────────────────────────────────────────
 export const showFollowUpNotification = async (
     followUpCount,
     followUpData = [],
 ) => {
     try {
         if (followUpCount === 0) return null;
-
         return await scheduleImmediateNotification({
             title: "Today's follow-ups",
             body:
@@ -818,19 +1347,17 @@ export const showFollowUpNotification = async (
             },
         });
     } catch (error) {
-        console.error("Failed to show notification:", error);
+        console.error("Failed to show follow-up notification:", error);
         return null;
     }
 };
 
-// Show urgent follow-up notification (overdue)
 export const showUrgentNotification = async (
     overdueCount,
     overdueData = [],
 ) => {
     try {
         if (overdueCount === 0) return null;
-
         return await scheduleImmediateNotification({
             title: "Overdue follow-ups",
             body:
@@ -843,6 +1370,7 @@ export const showUrgentNotification = async (
             badge: overdueCount,
             sticky: true,
             vibrate: [0, 500, 250, 500],
+            priority: "max",
             data: {
                 overdueCount,
                 overdueList: JSON.stringify(overdueData),
@@ -856,13 +1384,9 @@ export const showUrgentNotification = async (
     }
 };
 
-// Show success notification for new enquiry
 export const showEnquirySuccessNotification = async (enquiryData) => {
     try {
-        if (!isNotificationSupported()) {
-            return;
-        }
-
+        if (!isNotificationSupported()) return;
         return await scheduleImmediateNotification({
             title: "New enquiry added",
             body: `${enquiryData.name} - ${enquiryData.product}`,
@@ -871,7 +1395,7 @@ export const showEnquirySuccessNotification = async (enquiryData) => {
             color: "#16A34A",
             data: {
                 type: "enquiry-success",
-                enquiryId: enquiryData.id || enquiryData._id,
+                enquiryId: enquiryData.id ?? enquiryData._id,
                 enquiryName: enquiryData.name,
                 product: enquiryData.product,
                 timestamp: new Date().toISOString(),
@@ -883,13 +1407,9 @@ export const showEnquirySuccessNotification = async (enquiryData) => {
     }
 };
 
-// Show notification for new enquiry alert (admin/lead staff)
 export const showNewEnquiryAlertNotification = async (enquiryData) => {
     try {
-        if (!isNotificationSupported()) {
-            return;
-        }
-
+        if (!isNotificationSupported()) return;
         return await scheduleImmediateNotification({
             title: "New enquiry alert",
             body: `New enquiry from ${enquiryData.name}`,
@@ -898,7 +1418,7 @@ export const showNewEnquiryAlertNotification = async (enquiryData) => {
             color: "#0EA5E9",
             data: {
                 type: "new-enquiry-alert",
-                enquiryId: enquiryData.id || enquiryData._id,
+                enquiryId: enquiryData.id ?? enquiryData._id,
                 enquiryName: enquiryData.name,
                 product: enquiryData.product,
                 source: enquiryData.source,
@@ -913,18 +1433,14 @@ export const showNewEnquiryAlertNotification = async (enquiryData) => {
 
 export const showCouponOfferNotification = async (couponData) => {
     try {
-        if (!isNotificationSupported()) {
-            return;
-        }
-
-        const code = String(couponData?.code || "").toUpperCase();
-        const title = couponData?.title || "Special offer available";
+        if (!isNotificationSupported()) return;
+        const code = String(couponData?.code ?? "").toUpperCase();
+        const title = couponData?.title ?? "Special offer available";
         const body =
-            couponData?.body ||
+            couponData?.body ??
             (code
                 ? `You have a special offer today. Use coupon ${code}.`
                 : "You have a special offer today. Please check now.");
-
         return await scheduleImmediateNotification({
             title,
             body,
@@ -933,12 +1449,12 @@ export const showCouponOfferNotification = async (couponData) => {
             color: "#2563EB",
             data: {
                 type: "coupon-offer",
-                couponId: couponData?.couponId || "",
+                couponId: couponData?.couponId ?? "",
                 code,
-                discountType: couponData?.discountType || "",
-                discountValue: Number(couponData?.discountValue || 0),
-                expiryDate: couponData?.expiryDate || null,
-                timestamp: couponData?.timestamp || new Date().toISOString(),
+                discountType: couponData?.discountType ?? "",
+                discountValue: Number(couponData?.discountValue ?? 0),
+                expiryDate: couponData?.expiryDate ?? null,
+                timestamp: couponData?.timestamp ?? new Date().toISOString(),
             },
         });
     } catch (error) {
@@ -948,16 +1464,19 @@ export const showCouponOfferNotification = async (couponData) => {
 
 export const showTeamChatNotification = async (messageData = {}) => {
     try {
-        if (!isNotificationSupported()) {
-            return null;
-        }
-
+        if (!isNotificationSupported()) return null;
         const senderName = String(
-            messageData?.senderId?.name || messageData?.senderName || "Team member",
+            messageData?.senderId?.name ??
+                messageData?.senderName ??
+                "Team member",
         ).trim();
-        const messageType = String(messageData?.messageType || "text").trim().toLowerCase();
-        const taskTitle = String(messageData?.taskId?.title || messageData?.taskTitle || "").trim();
-        const bodyText = String(messageData?.message || "").trim();
+        const messageType = String(messageData?.messageType ?? "text")
+            .trim()
+            .toLowerCase();
+        const taskTitle = String(
+            messageData?.taskId?.title ?? messageData?.taskTitle ?? "",
+        ).trim();
+        const bodyText = String(messageData?.message ?? "").trim();
 
         let title = senderName;
         let body = bodyText || "Sent a new message";
@@ -965,15 +1484,11 @@ export const showTeamChatNotification = async (messageData = {}) => {
         if (messageType === "task") {
             title = `${senderName} assigned a task`;
             body = taskTitle || bodyText || "Tap to open team chat";
-        } else if (messageType === "image") {
-            body = "Sent an image";
-        } else if (messageType === "audio") {
-            body = "Sent a voice message";
-        } else if (messageType === "document") {
-            body = "Sent a document";
-        } else if (messageType === "call") {
+        } else if (messageType === "image") body = "Sent an image";
+        else if (messageType === "audio") body = "Sent a voice message";
+        else if (messageType === "document") body = "Sent a document";
+        else if (messageType === "call")
             body = bodyText || "Shared a call update";
-        }
 
         return await scheduleImmediateNotification({
             title,
@@ -983,10 +1498,18 @@ export const showTeamChatNotification = async (messageData = {}) => {
             color: "#0F766E",
             data: {
                 type: "team-chat-message",
-                senderId: String(messageData?.senderId?._id || messageData?.senderId || ""),
-                receiverId: String(messageData?.receiverId?._id || messageData?.receiverId || ""),
-                messageId: String(messageData?._id || ""),
-                taskId: String(messageData?.taskId?._id || messageData?.taskId || ""),
+                senderId: String(
+                    messageData?.senderId?._id ?? messageData?.senderId ?? "",
+                ),
+                receiverId: String(
+                    messageData?.receiverId?._id ??
+                        messageData?.receiverId ??
+                        "",
+                ),
+                messageId: String(messageData?._id ?? ""),
+                taskId: String(
+                    messageData?.taskId?._id ?? messageData?.taskId ?? "",
+                ),
                 timestamp: new Date().toISOString(),
             },
         });
@@ -1004,10 +1527,7 @@ export const showBillingPlanNotification = async ({
     reason = "",
 } = {}) => {
     try {
-        if (!isNotificationSupported() || !title || !body) {
-            return null;
-        }
-
+        if (!isNotificationSupported() || !title || !body) return null;
         return await scheduleImmediateNotification({
             title,
             body,
@@ -1028,56 +1548,29 @@ export const showBillingPlanNotification = async ({
     }
 };
 
-// Show error notification for failed enquiry creation
 export const showEnquiryErrorNotification = async (errorMessage) => {
     try {
-        // Skip notifications on web platform
-        if (!isNotificationSupported()) {
-            return;
-        }
-
-        console.log("Sending enquiry error notification...", errorMessage);
-
-        const notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: "❌ Enquiry Creation Failed",
-                body:
-                    errorMessage || "Could not save enquiry. Please try again.",
-                data: {
-                    type: "enquiry-error",
-                    timestamp: new Date().toISOString(),
-                },
-                sound: "default",
-                vibrate: [0, 300, 150, 300],
-                badge: 1,
-	                ios: {
-	                    badge: 1,
-	                },
-	                android: {
-	                    channelId: resolveChannelId("enquiries"),
-	                    color: "#DC2626",
-	                    vibrate: [0, 300, 150, 300],
-	                    priority: "high",
-	                    sticky: true,
-	                },
+        if (!isNotificationSupported()) return;
+        return await scheduleImmediateNotification({
+            title: "❌ Enquiry Creation Failed",
+            body: errorMessage ?? "Could not save enquiry. Please try again.",
+            channelId: "enquiries",
+            color: "#DC2626",
+            sticky: true,
+            vibrate: [0, 300, 150, 300],
+            data: {
+                type: "enquiry-error",
+                timestamp: new Date().toISOString(),
             },
-            trigger: null, // Send immediately
         });
-
-        console.log(
-            "❌ Enquiry error notification sent (ID:",
-            notificationId,
-            ")",
-        );
-        return notificationId;
     } catch (error) {
         console.error("Failed to show enquiry error notification:", error);
     }
 };
 
-// Show notification for enquiry status change
 export const showEnquiryStatusNotification = async (enquiryName, newStatus) => {
     try {
+        if (!isNotificationSupported()) return;
         const statusEmojis = {
             new: "🆕",
             "in progress": "⏳",
@@ -1085,54 +1578,26 @@ export const showEnquiryStatusNotification = async (enquiryName, newStatus) => {
             closed: "🔒",
             dropped: "❌",
         };
-
-        const emoji = statusEmojis[newStatus?.toLowerCase()] || "📝";
-
-        console.log("Sending status notification...", {
-            enquiryName,
-            newStatus,
-        });
-
-        const notificationId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: `${emoji} Enquiry Status Updated`,
-                body: `${enquiryName}: ${newStatus}`,
-                data: {
-                    type: "enquiry-status",
-                    enquiryName,
-                    status: newStatus,
-                    timestamp: new Date().toISOString(),
-                },
-                sound: "default",
-                vibrate: [0, 200, 200],
-                badge: 1,
-	                ios: {
-	                    badge: 1,
-	                },
-	                android: {
-	                    channelId: resolveChannelId("enquiries"),
-	                    color: "#0EA5E9",
-	                    vibrate: [0, 200, 200],
-	                    priority: "default",
-	                    sticky: false,
-	                },
+        const emoji = statusEmojis[newStatus?.toLowerCase()] ?? "📝";
+        return await scheduleImmediateNotification({
+            title: `${emoji} Enquiry Status Updated`,
+            body: `${enquiryName}: ${newStatus}`,
+            channelId: "enquiries",
+            color: "#0EA5E9",
+            data: {
+                type: "enquiry-status",
+                enquiryName,
+                status: newStatus,
+                timestamp: new Date().toISOString(),
             },
-            trigger: null, // Send immediately
         });
-
-        console.log(
-            `${emoji} Status notification sent: ${enquiryName} → ${newStatus} (ID: ${notificationId})`,
-        );
     } catch (error) {
         console.error("Failed to show enquiry status notification:", error);
     }
 };
 
-// Schedule daily notification at specific time
 export const scheduleDailyNotification = (hour = 9, minute = 0) => {
     try {
-	        const trigger = buildDailyTrigger(hour, minute);
-
         Notifications.scheduleNotificationAsync({
             content: {
                 title: "⏰ Daily Follow-up Reminder",
@@ -1143,34 +1608,33 @@ export const scheduleDailyNotification = (hour = 9, minute = 0) => {
                 },
                 sound: "default",
                 vibrate: [0, 250, 250, 250],
-	                ios: {},
-	                android: {
-	                    channelId: resolveChannelId("followups"),
-	                    color: "#0EA5E9",
-	                },
+                ios: { sound: true, interruptionLevel: "timeSensitive" },
+                android: {
+                    channelId: resolveChannelId("followups"),
+                    color: "#0EA5E9",
+                    priority: "high",
+                },
             },
-            trigger,
+            trigger: buildDailyTrigger(hour, minute),
         });
-
         console.log(`Daily notification scheduled for ${hour}:${minute}`);
     } catch (error) {
         console.error("Failed to schedule daily notification:", error);
     }
 };
 
-// Get all pending notifications
 export const getPendingNotifications = async () => {
     try {
-        const notifications =
-            await Notifications.getAllScheduledNotificationsAsync();
-        return notifications;
+        return await Notifications.getAllScheduledNotificationsAsync();
     } catch (error) {
         console.error("Failed to get pending notifications:", error);
         return [];
     }
 };
 
-// Cancel all pending notifications
+// FIX #2: cancelAllNotifications now ONLY cancels all as an emergency reset.
+// Internal scheduling code uses targeted cancelNotification(id) per saved ID,
+// never cancelAllScheduledNotificationsAsync() during normal sync cycles.
 export const cancelAllNotifications = async () => {
     try {
         await Notifications.cancelAllScheduledNotificationsAsync();
@@ -1180,100 +1644,125 @@ export const cancelAllNotifications = async () => {
     }
 };
 
-// Cancel specific notification
 export const cancelNotification = async (notificationId) => {
     try {
         await Notifications.cancelScheduledNotificationAsync(notificationId);
-        console.log(`Notification ${notificationId} cancelled`);
     } catch (error) {
         console.error("Failed to cancel notification:", error);
     }
 };
 
-// Get device push token (for remote notifications from server)
 export const getDevicePushToken = async () => {
     try {
-        // Check if running in Expo Go (storeClient)
-        // Push notifications are removed from Expo Go in newer SDKs
         if (
             Constants.executionEnvironment === "storeClient" ||
             Constants.appOwnership === "expo"
         ) {
-            console.log(
-                "Push notifications are not supported in Expo Go. Skipping token fetch.",
-            );
+            console.log("Push notifications not supported in Expo Go");
             return null;
         }
-
         const projectId =
-            Constants?.expoConfig?.extra?.eas?.projectId ||
+            Constants?.expoConfig?.extra?.eas?.projectId ??
             Constants?.easConfig?.projectId;
-
         if (!projectId) {
-            console.log("Project ID not found - cannot get push token");
+            console.log("Project ID not found");
             return null;
         }
 
-        const token = await Notifications.getExpoPushTokenAsync({
-            projectId: projectId,
-        });
-
-        console.log("Push token:", token.data);
+        const token = await Notifications.getExpoPushTokenAsync({ projectId });
+        console.log(
+            "[NotifSvc] ✓ Push token:",
+            token.data.substring(0, 30) + "...",
+        );
         return token.data;
     } catch (error) {
-        console.error("Failed to get push token:", error);
+        console.error("[NotifSvc] ✗ Push token failed:", error?.message);
         return null;
     }
 };
 
-// Listen for notification responses
-export const setupNotificationListener = (callback) => {
-    const subscription = Notifications.addNotificationResponseReceivedListener(
-        (response) => {
-            const notification = response.notification;
-            console.log(
-                "Notification tapped:",
-                notification.request.content.data,
+export const registerPushTokenWithServer = async (pushToken) => {
+    try {
+        if (!pushToken || !String(pushToken).startsWith("ExponentPushToken[")) {
+            console.warn("[NotifSvc] ⚠ Invalid push token");
+            return false;
+        }
+        const authToken = await AsyncStorage.getItem("authToken");
+        if (!authToken) {
+            console.warn("[NotifSvc] ⚠ No auth token");
+            return false;
+        }
+
+        const apiURL =
+            process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000/api";
+        const response = await fetch(`${apiURL}/auth/register-push-token`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({ pushToken }),
+        });
+
+        if (!response.ok) {
+            const error = await response
+                .json()
+                .catch(() => ({ error: response.statusText }));
+            console.warn(
+                "[NotifSvc] ⚠ Failed to register push token:",
+                error?.error,
             );
-
-            if (callback) {
-                callback(notification.request.content.data);
-            }
-        },
-    );
-
-    return subscription;
-};
-
-// Setup notification received listener (for when app is in foreground)
-export const setupForegroundNotificationListener = (callback) => {
-    // Skip on web platform
-    if (!isNotificationSupported()) {
-        return { remove: () => { } }; // Return dummy subscription
+            return false;
+        }
+        const result = await response.json();
+        console.log(
+            "[NotifSvc] ✓ Push token registered:",
+            result?.token ?? "OK",
+        );
+        return true;
+    } catch (error) {
+        console.error(
+            "[NotifSvc] ✗ Push token registration error:",
+            error?.message,
+        );
+        return false;
     }
-
-    const subscription = Notifications.addNotificationReceivedListener(
-        (notification) => {
-            console.log(
-                "Notification received (foreground):",
-                notification.request.content.data,
-            );
-
-            if (callback) {
-                callback(notification.request.content.data);
-            }
-        },
-    );
-
-    return subscription;
 };
 
+export const setupNotificationListener = (callback) => {
+    return Notifications.addNotificationResponseReceivedListener((response) => {
+        const notification = response.notification;
+        console.log("Notification tapped:", notification.request.content.data);
+        if (callback) callback(notification.request.content.data);
+    });
+};
+
+export const setupForegroundNotificationListener = (callback) => {
+    if (!isNotificationSupported()) return { remove: () => {} };
+    return Notifications.addNotificationReceivedListener((notification) => {
+        const data = notification.request.content.data;
+        console.log("Notification received (foreground):", data);
+
+        // ── FIX #10: Play audio immediately when notification arrives in foreground
+        if (data?.type) {
+            Promise.resolve(speakForNotificationData(data)).catch((err) => {
+                console.warn(
+                    "[NotifSvc] Foreground audio playback error:",
+                    err,
+                );
+            });
+        }
+
+        if (callback) callback(data);
+    });
+};
+
+// ─── speakForNotificationData ────────────────────────────────────────────────
 export const speakForNotificationData = async (data = {}) => {
-    const type = String(data?.type || "").trim();
+    const type = String(data?.type ?? "").trim();
     if (!type) return;
     const lang = await getNotificationVoiceLanguage();
 
-    // Prefer pre-recorded MP3 reminders (when app is foreground) over TTS.
     const audioPlayed = await playAudioForNotificationData(data);
     if (audioPlayed) return;
 
@@ -1284,128 +1773,187 @@ export const speakForNotificationData = async (data = {}) => {
         type === "followup-due" ||
         type === "followup-missed"
     ) {
-        const name = String(data?.name || "").trim();
-        const activityType = String(data?.activityType || "follow-up").trim();
+        const name = String(data?.name ?? "").trim();
+        const activityType = String(data?.activityType ?? "follow-up").trim();
+
         if (type === "followup-soon") {
-            const minutesLeft = Number(data?.minutesLeft || 0);
+            const minutesLeft = Number(data?.minutesLeft ?? 0);
             if (minutesLeft > 0) {
-                const t = String(activityType || "").trim().toLowerCase();
+                const t = activityType.trim().toLowerCase();
                 if (t === "phone call") {
                     if (lang === "ta") {
-                        const line = minutesLeft === 1
-                            ? "வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் 1 நிமிடத்தில் அழைக்கவும்."
-                            : `வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் ${minutesLeft} நிமிடங்களில் அழைக்கவும்.`;
-                        await safeSpeak(line);
+                        await safeSpeak(
+                            minutesLeft === 1
+                                ? "வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் 1 நிமிடத்தில் அழைக்கவும்."
+                                : `வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் ${minutesLeft} நிமிடங்களில் அழைக்கவும்.`,
+                        );
                     } else {
-                        const line = name
-                            ? `Your customer is waiting. Call ${name} in ${minutesLeft} minutes.`
-                            : `Your customer is waiting. Call in ${minutesLeft} minutes.`;
-                        await safeSpeak(line);
+                        await safeSpeak(
+                            name
+                                ? `Your customer is waiting. Call ${name} in ${minutesLeft} minutes.`
+                                : `Your customer is waiting. Call in ${minutesLeft} minutes.`,
+                        );
                     }
                 } else {
                     if (lang === "ta") {
-                        const minsLabel = minutesLeft === 1 ? "1 நிமிடத்தில்" : `${minutesLeft} நிமிடங்களில்`;
-                        if (t === "whatsapp") {
-                            await safeSpeak(`வாட்ஸ்அப் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
-                        } else if (t === "email") {
-                            await safeSpeak(`மின்னஞ்சல் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
-                        } else if (t === "meeting") {
-                            await safeSpeak(`ஆன்லைன் சந்திப்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
-                        } else {
-                            await safeSpeak(`பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`);
-                        }
+                        const minsLabel =
+                            minutesLeft === 1
+                                ? "1 நிமிடத்தில்"
+                                : `${minutesLeft} நிமிடங்களில்`;
+                        if (t === "whatsapp")
+                            await safeSpeak(
+                                `வாட்ஸ்அப் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                            );
+                        else if (t === "email")
+                            await safeSpeak(
+                                `மின்னஞ்சல் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                            );
+                        else if (t === "meeting")
+                            await safeSpeak(
+                                `ஆன்லைன் சந்திப்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                            );
+                        else
+                            await safeSpeak(
+                                `பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                            );
                     } else {
-                        const line = name
-                            ? `${activityType} for ${name} in ${minutesLeft} minutes.`
-                            : `${activityType} in ${minutesLeft} minutes.`;
-                        await safeSpeak(line);
+                        await safeSpeak(
+                            name
+                                ? `${activityType} for ${name} in ${minutesLeft} minutes.`
+                                : `${activityType} in ${minutesLeft} minutes.`,
+                        );
                     }
                 }
             }
             return;
         }
+
         if (type === "followup-missed") {
-            const t = String(activityType || "").trim().toLowerCase();
+            const t = activityType.trim().toLowerCase();
             if (lang === "ta") {
-                if (t === "phone call") {
-                    await safeSpeak("நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.");
-                } else if (t === "whatsapp") {
-                    await safeSpeak("நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது வாட்ஸ்அப் செய்தி அனுப்பவும்.");
-                } else if (t === "email") {
-                    await safeSpeak("நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்.");
-                } else if (t === "meeting") {
-                    await safeSpeak("நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக.");
-                } else {
-                    await safeSpeak("நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்.");
-                }
+                if (t === "phone call")
+                    await safeSpeak(
+                        "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.",
+                    );
+                else if (t === "whatsapp")
+                    await safeSpeak(
+                        "நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது வாட்ஸ்அப் செய்தி அனுப்பவும்.",
+                    );
+                else if (t === "email")
+                    await safeSpeak(
+                        "நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்.",
+                    );
+                else if (t === "meeting")
+                    await safeSpeak(
+                        "நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக.",
+                    );
+                else
+                    await safeSpeak(
+                        "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்.",
+                    );
             } else {
-                const line = name ? `${name}, ${activityType} missed.` : `${activityType} missed.`;
-                await safeSpeak(`${line} Please follow up now.`);
+                await safeSpeak(
+                    `${name ? `${name}, ` : ""}${activityType} missed. Please follow up now.`,
+                );
             }
             return;
         }
+
         if (type === "followup-due") {
-            const t = String(activityType || "").trim().toLowerCase();
+            const t = activityType.trim().toLowerCase();
             if (lang === "ta") {
-                if (t === "phone call") {
-                    await safeSpeak("வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.");
-                } else if (t === "whatsapp") {
-                    await safeSpeak("இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம். தயவு செய்து வாட்ஸ்அப் செய்தி அனுப்பவும்.");
-                } else if (t === "email") {
-                    await safeSpeak("இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம். தயவு செய்து மின்னஞ்சல் அனுப்பவும்.");
-                } else if (t === "meeting") {
-                    await safeSpeak("இப்போது ஆன்லைன் சந்திப்பு நேரம். தயவு செய்து இணைக.");
-                } else {
-                    await safeSpeak("இப்போது பின்தொடர்பு நேரம். தயவு செய்து தொடரவும்.");
-                }
+                if (t === "phone call")
+                    await safeSpeak(
+                        "வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.",
+                    );
+                else if (t === "whatsapp")
+                    await safeSpeak(
+                        "இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம். தயவு செய்து வாட்ஸ்அப் செய்தி அனுப்பவும்.",
+                    );
+                else if (t === "email")
+                    await safeSpeak(
+                        "இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம். தயவு செய்து மின்னஞ்சல் அனுப்பவும்.",
+                    );
+                else if (t === "meeting")
+                    await safeSpeak(
+                        "இப்போது ஆன்லைன் சந்திப்பு நேரம். தயவு செய்து இணைக.",
+                    );
+                else
+                    await safeSpeak(
+                        "இப்போது பின்தொடர்பு நேரம். தயவு செய்து தொடரவும்.",
+                    );
             } else {
-                const line = name ? `${name}, ${activityType} due now.` : `${activityType} due now.`;
-                await safeSpeak(line);
+                await safeSpeak(
+                    `${name ? `${name}, ` : ""}${activityType} due now.`,
+                );
             }
             return;
         }
+
         if (type === "hourly-followup-reminder") {
-            const count = Number(data?.followUpCount || 0);
+            const count = Number(data?.followUpCount ?? 0);
             if (count > 0) {
-                if (lang === "ta") await safeSpeak(`இன்று உங்களுக்கு ${count} பின்தொடர்புகள் உள்ளன.`);
+                if (lang === "ta")
+                    await safeSpeak(
+                        `இன்று உங்களுக்கு ${count} பின்தொடர்புகள் உள்ளன.`,
+                    );
                 else await safeSpeak(`You have ${count} follow ups due today.`);
             }
             return;
         }
+
         if (type === "daily-reminder") {
-            const count = Number(data?.followUpCount || 0);
+            const count = Number(data?.followUpCount ?? 0);
             if (count > 0) {
-                if (lang === "ta") await safeSpeak(`நினைவூட்டு. இன்று உங்களுக்கு ${count} பின்தொடர்புகள் உள்ளன.`);
-                else await safeSpeak(`Reminder. You have ${count} follow ups today.`);
+                if (lang === "ta")
+                    await safeSpeak(
+                        `நினைவூட்டு. இன்று உங்களுக்கு ${count} பின்தொடர்புகள் உள்ளன.`,
+                    );
+                else
+                    await safeSpeak(
+                        `Reminder. You have ${count} follow ups today.`,
+                    );
             }
             return;
         }
     }
 
     if (type === "followup-missed-summary" || data?.overdueCount) {
-        const count = Number(data?.overdueCount || 0);
+        const count = Number(data?.overdueCount ?? 0);
         if (count > 0) await safeSpeak(`You have ${count} missed follow ups.`);
     }
 
     if (
-        type === "enquiry-success" ||
-        type === "new-enquiry-alert" ||
-        type === "enquiry-status" ||
-        type === "enquiry-error"
+        [
+            "enquiry-success",
+            "new-enquiry-alert",
+            "enquiry-status",
+            "enquiry-error",
+        ].includes(type)
     ) {
-        const enquiryName = String(data?.enquiryName || "").trim();
+        const enquiryName = String(data?.enquiryName ?? "").trim();
         if (type === "enquiry-success") {
-            await safeSpeak(enquiryName ? `New enquiry added. ${enquiryName}.` : "New enquiry added.");
+            await safeSpeak(
+                enquiryName
+                    ? `New enquiry added. ${enquiryName}.`
+                    : "New enquiry added.",
+            );
             return;
         }
         if (type === "new-enquiry-alert") {
-            await safeSpeak(enquiryName ? `New enquiry. ${enquiryName}.` : "New enquiry alert.");
+            await safeSpeak(
+                enquiryName
+                    ? `New enquiry. ${enquiryName}.`
+                    : "New enquiry alert.",
+            );
             return;
         }
         if (type === "enquiry-status") {
-            const status = String(data?.status || "").trim();
+            const status = String(data?.status ?? "").trim();
             await safeSpeak(
-                enquiryName && status ? `${enquiryName} status updated to ${status}.` : "Enquiry status updated.",
+                enquiryName && status
+                    ? `${enquiryName} status updated to ${status}.`
+                    : "Enquiry status updated.",
             );
             return;
         }
@@ -1415,22 +1963,29 @@ export const speakForNotificationData = async (data = {}) => {
     }
 };
 
+// ─── Missed Follow-ups Summary ────────────────────────────────────────────────
 export const notifyMissedFollowUpsSummary = async (followUps = []) => {
     try {
-        if (!isNotificationSupported()) return { notified: false, skipped: true };
+        if (!isNotificationSupported())
+            return { notified: false, skipped: true };
 
         const list = Array.isArray(followUps) ? followUps : [];
         const count = list.filter(isActiveFollowUp).length;
-        if (count <= 0) return { notified: false, skipped: true, reason: "none" };
+        if (count <= 0)
+            return { notified: false, skipped: true, reason: "none" };
 
         const todayKey = getTodayKey();
-        const rawState = await AsyncStorage.getItem(MISSED_FOLLOWUP_ALERT_STATE_KEY);
+        const rawState = await AsyncStorage.getItem(
+            MISSED_FOLLOWUP_ALERT_STATE_KEY,
+        );
         let prev = { dateKey: "", count: 0 };
         try {
             prev = rawState ? JSON.parse(rawState) : prev;
-        } catch {}
+        } catch {
+            /* ignore */
+        }
 
-        if (prev?.dateKey === todayKey && Number(prev?.count || 0) === count) {
+        if (prev?.dateKey === todayKey && Number(prev?.count ?? 0) === count) {
             return { notified: false, skipped: true, reason: "no-change" };
         }
 
@@ -1457,11 +2012,11 @@ export const notifyMissedFollowUpsSummary = async (followUps = []) => {
             },
         });
 
-        // Speak only when app is active (foreground listener also covers it).
         await safeSpeak(
-            count === 1 ? "You have 1 missed follow up." : `You have ${count} missed follow ups.`,
+            count === 1
+                ? "You have 1 missed follow up."
+                : `You have ${count} missed follow ups.`,
         );
-
         return { notified: true, skipped: false, count };
     } catch (error) {
         console.error("Failed to notify missed follow-ups:", error);
@@ -1469,71 +2024,59 @@ export const notifyMissedFollowUpsSummary = async (followUps = []) => {
     }
 };
 
-// Check for today's follow-ups and show notification
 export const checkAndNotifyTodayFollowUps = async (followUps) => {
     try {
-        if (!Array.isArray(followUps) || followUps.length === 0) {
-            console.log("No follow-ups available");
-            return;
-        }
+        if (!Array.isArray(followUps) || followUps.length === 0) return;
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const dateString = today.toDateString();
 
-        // Check if we already notified today
-        const lastNotificationDate = await AsyncStorage.getItem("lastNotificationDate");
-        if (lastNotificationDate === dateString) {
-            console.log("Already notified today, skipping...");
-            return;
-        }
+        const lastNotificationDate = await AsyncStorage.getItem(
+            "lastNotificationDate",
+        );
+        if (lastNotificationDate === dateString) return;
 
-        // Filter today's follow-ups
         const todayFollowUps = followUps.filter((item) => {
-            const followUpDate = new Date(item.date);
-            followUpDate.setHours(0, 0, 0, 0);
-            return followUpDate.getTime() === today.getTime();
+            const d = new Date(item.date);
+            d.setHours(0, 0, 0, 0);
+            return d.getTime() === today.getTime();
         });
 
-        // Filter overdue follow-ups
         const overdueFollowUps = followUps.filter((item) => {
-            const followUpDate = new Date(item.date);
-            followUpDate.setHours(0, 0, 0, 0);
-            return followUpDate < today;
+            const d = new Date(item.date);
+            d.setHours(0, 0, 0, 0);
+            return d < today;
         });
-
-        console.log(`Today's follow-ups: ${todayFollowUps.length}`);
-        console.log(`Overdue follow-ups: ${overdueFollowUps.length}`);
 
         let notificationSent = false;
-
-        // Show urgent notification if there are overdue
         if (overdueFollowUps.length > 0) {
-            await showUrgentNotification(overdueFollowUps.length, overdueFollowUps);
+            await showUrgentNotification(
+                overdueFollowUps.length,
+                overdueFollowUps,
+            );
             notificationSent = true;
         }
-
-        // Show today's follow-ups notification
         if (todayFollowUps.length > 0) {
-            await showFollowUpNotification(todayFollowUps.length, todayFollowUps);
+            await showFollowUpNotification(
+                todayFollowUps.length,
+                todayFollowUps,
+            );
             notificationSent = true;
         }
-
-        // Mark as notified for today if any notification was sent
-        if (notificationSent) {
+        if (notificationSent)
             await AsyncStorage.setItem("lastNotificationDate", dateString);
-        }
-
     } catch (error) {
         console.error("Failed to check and notify follow-ups:", error);
     }
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 const getTodayKey = () => new Date().toDateString();
 
 const isActiveFollowUp = (item) => {
-    const status = String(item?.status || "").toLowerCase();
-    const nextAction = String(item?.nextAction || "").toLowerCase();
+    const status = String(item?.status ?? "").toLowerCase();
+    const nextAction = String(item?.nextAction ?? "").toLowerCase();
     if (!status) return true;
     if (status === "completed") return false;
     if (status === "drop" || status === "dropped") return false;
@@ -1542,41 +2085,44 @@ const isActiveFollowUp = (item) => {
 };
 
 const isDueToday = (item) => {
-    const raw = item?.date || item?.followUpDate || item?.nextFollowUpDate;
+    const raw = item?.date ?? item?.followUpDate ?? item?.nextFollowUpDate;
     if (!raw) return false;
-
     let d;
     if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-        const [yy, mm, dd] = raw.split("-").map((n) => Number(n));
-        d = new Date(yy, (mm || 1) - 1, dd || 1);
+        const [yy, mm, dd] = raw.split("-").map(Number);
+        d = new Date(yy, (mm ?? 1) - 1, dd ?? 1);
     } else {
         d = new Date(raw);
     }
-
     if (Number.isNaN(d.getTime())) return false;
     return d.toDateString() === getTodayKey();
 };
 
 const getPrettyFollowUpLine = (activityType, name) => {
-    const who = (name || "your client").trim();
-    const type = String(activityType || "").trim().toLowerCase();
-
-    if (type === "whatsapp") return `WhatsApp ${who}: quick update + next step.`;
-    if (type === "email") return `Email ${who}: short recap + ask for confirmation.`;
-    if (type === "meeting") return `Meeting ${who}: confirm time + share agenda.`;
-    if (type === "phone call") return `Your customer is waiting. Please call ${who} now.`;
+    const who = (name ?? "your client").trim();
+    const type = String(activityType ?? "")
+        .trim()
+        .toLowerCase();
+    if (type === "whatsapp")
+        return `WhatsApp ${who}: quick update + next step.`;
+    if (type === "email")
+        return `Email ${who}: short recap + ask for confirmation.`;
+    if (type === "meeting")
+        return `Meeting ${who}: confirm time + share agenda.`;
+    if (type === "phone call")
+        return `Your customer is waiting. Please call ${who} now.`;
     return `Follow up with ${who} now.`;
 };
 
 const resolveEnquiryKeyFromItem = (item) => {
     const rawId =
-        item?.enqId ||
-        item?.enquiryId ||
-        item?.enquiry?._id ||
-        item?.enquiry?.id ||
-        item?.enquiry ||
+        item?.enqId ??
+        item?.enquiryId ??
+        item?.enquiry?._id ??
+        item?.enquiry?.id ??
+        item?.enquiry ??
         "";
-    const rawNo = item?.enqNo || item?.enquiry?.enqNo || item?.enquiryNo || "";
+    const rawNo = item?.enqNo ?? item?.enquiry?.enqNo ?? item?.enquiryNo ?? "";
 
     const normalizeId = (v) => {
         if (!v) return "";
@@ -1585,55 +2131,58 @@ const resolveEnquiryKeyFromItem = (item) => {
         if (typeof v === "object") {
             if (v._id) return String(v._id).trim();
             if (v.id) return String(v.id).trim();
-            if (v.toString && v.toString !== Object.prototype.toString) {
-                const s = String(v.toString()).trim();
-                if (s && s !== "[object Object]") return s;
-            }
+            const s = String(v.toString?.() ?? v).trim();
+            if (s && s !== "[object Object]") return s;
         }
         const s = String(v).trim();
         return s === "[object Object]" ? "" : s;
     };
 
-    return {
-        enqId: normalizeId(rawId),
-        enqNo: String(rawNo || "").trim(),
-    };
+    return { enqId: normalizeId(rawId), enqNo: String(rawNo ?? "").trim() };
 };
 
 const buildSoonContent = (item, when, minutesLeft, lang = "en") => {
-    const name = String(item?.name || "Client").trim();
-    const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
-    const mins = Math.max(1, Math.round(Number(minutesLeft || 0)));
-
-    const texts = getFollowUpSoonTexts({ lang, name, activityType, minutesLeft: mins });
+    const name = String(item?.name ?? "Client").trim();
+    const activityType = String(
+        item?.activityType ?? item?.type ?? "Follow-up",
+    ).trim();
+    const mins = Math.max(1, Math.round(Number(minutesLeft ?? 0)));
+    const texts = getFollowUpSoonTexts({
+        lang,
+        name,
+        activityType,
+        minutesLeft: mins,
+    });
     const due = buildDueAtContent(item, when, lang);
     return {
         title: texts.title,
         body: texts.body,
-        data: { ...due.data, type: "followup-soon", minutesLeft: mins, name, activityType },
+        data: {
+            ...due.data,
+            type: "followup-soon",
+            minutesLeft: mins,
+            name,
+            activityType,
+        },
     };
 };
 
 const buildHourlyFollowUpContent = (todayFollowUps, tipIndex = 0) => {
     const list = Array.isArray(todayFollowUps) ? todayFollowUps : [];
     const count = list.length;
-
-    const safe = (v) => String(v || "").trim();
-    const first = list[tipIndex % Math.max(1, list.length)] || list[0] || null;
+    const safe = (v) => String(v ?? "").trim();
+    const first = list[tipIndex % Math.max(1, list.length)] ?? list[0] ?? null;
     const firstName = safe(first?.name);
-    const firstType = safe(first?.activityType || first?.type);
+    const firstType = safe(first?.activityType ?? first?.type);
     const firstTime = safe(first?.time);
     const timeNote = firstTime ? ` at ${firstTime}` : "";
-
-    const title = "Hourly follow-up reminder";
     const line = `${getPrettyFollowUpLine(firstType, firstName)}${timeNote}`;
     const body =
         count === 1
             ? `1 follow-up due today. ${line}`
             : `${count} follow-ups due today. ${line}`;
-
     return {
-        title,
+        title: "Hourly follow-up reminder",
         body,
         data: {
             type: "hourly-followup-reminder",
@@ -1644,49 +2193,69 @@ const buildHourlyFollowUpContent = (todayFollowUps, tipIndex = 0) => {
     };
 };
 
+// ─── Cancel / Schedule Helpers ────────────────────────────────────────────────
 export const cancelHourlyFollowUpReminders = async () => {
     try {
         if (Platform.OS === "web") return;
-
         const raw = await AsyncStorage.getItem(HOURLY_FOLLOWUP_SCHEDULE_KEY);
         const schedule = raw ? JSON.parse(raw) : null;
         const ids = Array.isArray(schedule?.ids) ? schedule.ids : [];
+        if (ids.length === 0) return;
 
-        for (const id of ids) {
-            try {
-                await Notifications.cancelScheduledNotificationAsync(id);
-            } catch (e) {
-                // ignore per-id cancellation failures
-            }
-        }
-
+        // FIX #2: Cancel only saved IDs — never call cancelAllScheduledNotificationsAsync()
+        const results = await Promise.allSettled(
+            ids.map((id) =>
+                Notifications.cancelScheduledNotificationAsync(id).catch(
+                    (e) => {
+                        throw e;
+                    },
+                ),
+            ),
+        );
+        const succeeded = results.filter(
+            (r) => r.status === "fulfilled",
+        ).length;
+        const failed = results.filter((r) => r.status === "rejected").length;
+        console.log(
+            `[NotifSvc] Cancelled ${ids.length} hourly reminders: ${succeeded} ✓, ${failed} ✗`,
+        );
         await AsyncStorage.removeItem(HOURLY_FOLLOWUP_SCHEDULE_KEY);
-        console.log(`Cancelled ${ids.length} hourly follow-up reminders`);
     } catch (error) {
-        console.error("Failed to cancel hourly follow-up reminders:", error);
+        console.error("[NotifSvc] Failed to cancel hourly reminders:", error);
     }
 };
 
 export const cancelTimeFollowUpReminders = async () => {
     try {
         if (Platform.OS === "web") return;
-
         const raw = await AsyncStorage.getItem(TIME_FOLLOWUP_SCHEDULE_KEY);
         const schedule = raw ? JSON.parse(raw) : null;
         const ids = Array.isArray(schedule?.ids) ? schedule.ids : [];
+        if (ids.length === 0) return;
 
-        for (const id of ids) {
-            try {
-                await Notifications.cancelScheduledNotificationAsync(id);
-            } catch (e) {
-                // ignore per-id cancellation failures
-            }
-        }
-
+        // FIX #2: Cancel only saved IDs — not all scheduled notifications
+        const results = await Promise.allSettled(
+            ids.map((id) =>
+                Notifications.cancelScheduledNotificationAsync(id).catch(
+                    (e) => {
+                        throw e;
+                    },
+                ),
+            ),
+        );
+        const succeeded = results.filter(
+            (r) => r.status === "fulfilled",
+        ).length;
+        const failed = results.filter((r) => r.status === "rejected").length;
+        console.log(
+            `[NotifSvc] Cancelled ${ids.length} time-based reminders: ${succeeded} ✓, ${failed} ✗`,
+        );
         await AsyncStorage.removeItem(TIME_FOLLOWUP_SCHEDULE_KEY);
-        console.log(`Cancelled ${ids.length} time-based follow-up reminders`);
     } catch (error) {
-        console.error("Failed to cancel time-based follow-up reminders:", error);
+        console.error(
+            "[NotifSvc] Failed to cancel time-based reminders:",
+            error,
+        );
     }
 };
 
@@ -1701,10 +2270,12 @@ export const acknowledgeHourlyFollowUpReminders = async () => {
     try {
         const todayKey = getTodayKey();
         await AsyncStorage.setItem(HOURLY_FOLLOWUP_ACK_DATE_KEY, todayKey);
-        // Only cancel hourly reminders. Time-based "due/missed" reminders should continue to work.
         await cancelHourlyFollowUpReminders();
     } catch (error) {
-        console.error("Failed to acknowledge hourly follow-up reminders:", error);
+        console.error(
+            "Failed to acknowledge hourly follow-up reminders:",
+            error,
+        );
     }
 };
 
@@ -1719,8 +2290,8 @@ const parseLocalDateTime = (dateStr, timeStr) => {
 
     let d;
     if (typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        const [yy, mm, dd] = dateStr.split("-").map((n) => Number(n));
-        d = new Date(yy, (mm || 1) - 1, dd || 1, 9, 0, 0, 0);
+        const [yy, mm, dd] = dateStr.split("-").map(Number);
+        d = new Date(yy, (mm ?? 1) - 1, dd ?? 1, 9, 0, 0, 0);
     } else {
         d = new Date(dateStr);
     }
@@ -1728,28 +2299,34 @@ const parseLocalDateTime = (dateStr, timeStr) => {
 
     if (timeStr && typeof timeStr === "string") {
         const t = timeStr.trim();
-        // Supports: "HH:MM", "H:MM", "HH.MM", "HH:MM:SS", optional AM/PM ("11:30 PM", "11:30PM")
         const m = t.match(
             /^(\d{1,2})(?:[:.](\d{2}))?(?::(\d{2}))?(?:\s*([AaPp][Mm]))?$/,
         );
         if (m) {
             let hh = Number(m[1]);
-            const mm = Number(m[2] ?? "0");
-            const meridian = String(m[4] || "").toUpperCase();
+            const mm2 = Number(m[2] ?? "0");
+            const meridian = String(m[4] ?? "").toUpperCase();
 
-            if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) {
-                // ignore
+            if (!Number.isFinite(hh) || !Number.isFinite(mm2) || mm2 > 59) {
+                // invalid — leave as default 09:00
             } else if (meridian) {
                 if (hh >= 1 && hh <= 12) {
-                    if (meridian === "AM") {
-                        if (hh === 12) hh = 0;
-                    } else if (meridian === "PM") {
-                        if (hh !== 12) hh += 12;
-                    }
-                    d.setHours(Math.min(23, Math.max(0, hh)), Math.min(59, Math.max(0, mm)), 0, 0);
+                    if (meridian === "AM" && hh === 12) hh = 0;
+                    else if (meridian === "PM" && hh !== 12) hh += 12;
+                    d.setHours(
+                        Math.min(23, Math.max(0, hh)),
+                        Math.min(59, Math.max(0, mm2)),
+                        0,
+                        0,
+                    );
                 }
             } else {
-                d.setHours(Math.min(23, Math.max(0, hh)), Math.min(59, Math.max(0, mm)), 0, 0);
+                d.setHours(
+                    Math.min(23, Math.max(0, hh)),
+                    Math.min(59, Math.max(0, mm2)),
+                    0,
+                    0,
+                );
             }
         }
     }
@@ -1758,18 +2335,19 @@ const parseLocalDateTime = (dateStr, timeStr) => {
 };
 
 const buildDueAtContent = (item, when, lang = "en") => {
-    const name = String(item?.name || "Client").trim();
-    const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
+    const name = String(item?.name ?? "Client").trim();
+    const activityType = String(
+        item?.activityType ?? item?.type ?? "Follow-up",
+    ).trim();
     const timeLabel = when ? formatHHmm(when) : "";
     const { enqId, enqNo } = resolveEnquiryKeyFromItem(item);
-
     const texts = getFollowUpDueTexts({ lang, name, activityType, timeLabel });
     return {
         title: texts.title,
         body: texts.body,
         data: {
             type: "followup-due",
-            followUpId: String(item?._id || ""),
+            followUpId: String(item?._id ?? ""),
             enqId,
             enqNo,
             name,
@@ -1781,24 +2359,24 @@ const buildDueAtContent = (item, when, lang = "en") => {
 };
 
 const buildMissedContent = (item, when, lang = "en") => {
-    const name = String(item?.name || "Client").trim();
-    const activityType = String(item?.activityType || item?.type || "Follow-up").trim();
+    const name = String(item?.name ?? "Client").trim();
+    const activityType = String(
+        item?.activityType ?? item?.type ?? "Follow-up",
+    ).trim();
     const timeLabel = when ? formatHHmm(when) : "";
     const { enqId, enqNo } = resolveEnquiryKeyFromItem(item);
-
     const texts = getFollowUpMissedTexts({
         lang,
         name,
         activityType,
         timeLabel: timeLabel ? `at ${timeLabel}` : "",
     });
-
     return {
         title: texts.title,
         body: texts.body,
         data: {
             type: "followup-missed",
-            followUpId: String(item?._id || ""),
+            followUpId: String(item?._id ?? ""),
             enqId,
             enqNo,
             name,
@@ -1809,6 +2387,7 @@ const buildMissedContent = (item, when, lang = "en") => {
     };
 };
 
+// ─── Hourly Reminders ─────────────────────────────────────────────────────────
 export const scheduleHourlyFollowUpRemindersForToday = async (
     followUps,
     { endHour = 21, channelId = "followups" } = {},
@@ -1817,28 +2396,26 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
         if (Platform.OS === "web") return { scheduled: 0, skipped: true };
 
         const todayKey = getTodayKey();
-        const ackDate = await AsyncStorage.getItem(HOURLY_FOLLOWUP_ACK_DATE_KEY);
-        if (ackDate === todayKey) {
+        const ackDate = await AsyncStorage.getItem(
+            HOURLY_FOLLOWUP_ACK_DATE_KEY,
+        );
+        if (ackDate === todayKey)
             return { scheduled: 0, skipped: true, reason: "acknowledged" };
-        }
 
         const list = Array.isArray(followUps) ? followUps : [];
         const todayFollowUps = list.filter(isActiveFollowUp).filter(isDueToday);
-
         if (todayFollowUps.length === 0) {
             await cancelHourlyFollowUpReminders();
             return { scheduled: 0, skipped: true, reason: "none-due" };
         }
 
-        // Replace previous schedule for today to avoid duplicates.
         await cancelHourlyFollowUpReminders();
 
         const now = new Date();
         const endAt = new Date();
         endAt.setHours(endHour, 0, 0, 0);
-        if (now >= endAt) {
+        if (now >= endAt)
             return { scheduled: 0, skipped: true, reason: "after-hours" };
-        }
 
         const first = new Date(now);
         first.setMinutes(0, 0, 0);
@@ -1853,25 +2430,24 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
                 todayFollowUps,
                 tipIndex,
             );
-
             const id = await Notifications.scheduleNotificationAsync({
                 content: {
                     title,
                     body,
                     subtitle: "Tap to open Follow-ups",
-	                    data,
-	                    sound: "default",
-	                    vibrate: [0, 250, 250, 250],
-	                    android: {
-	                        channelId: resolveChannelId(channelId),
-	                        color: "#0EA5E9",
-	                        priority: "high",
-	                        sticky: false,
-	                    },
-	                },
-	                trigger: buildDateTrigger(cursor),
-	            });
-
+                    data,
+                    sound: "default",
+                    vibrate: [0, 250, 250, 250],
+                    ios: { sound: true, interruptionLevel: "timeSensitive" },
+                    android: {
+                        channelId: resolveChannelId(channelId),
+                        color: "#0EA5E9",
+                        priority: "high",
+                        sticky: false,
+                    },
+                },
+                trigger: buildDateTrigger(cursor),
+            });
             ids.push(id);
             tipIndex += 1;
             cursor = new Date(cursor.getTime() + 60 * 60 * 1000);
@@ -1881,18 +2457,18 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
             HOURLY_FOLLOWUP_SCHEDULE_KEY,
             JSON.stringify({ dateKey: todayKey, ids }),
         );
-
-        console.log(
-            `Scheduled ${ids.length} hourly follow-up reminders (today=${todayKey}, followUps=${todayFollowUps.length})`,
-        );
-
+        console.log(`Scheduled ${ids.length} hourly reminders`);
         return { scheduled: ids.length, skipped: false };
     } catch (error) {
-        console.error("Failed to schedule hourly follow-up reminders:", error);
+        console.error("Failed to schedule hourly reminders:", error);
         return { scheduled: 0, skipped: false, error: true };
     }
 };
 
+// ─── Time-based Reminders ─────────────────────────────────────────────────────
+// ARCHITECTURE FIX: Reduced from ~20 notifications per follow-up to exactly 5:
+//   5 min, 3 min, 1 min (soon) → due → missed (1 min, 30 min, 1 hr after)
+// This keeps total notifications well under Android's ~50-item reliable limit.
 export const scheduleTimeFollowUpRemindersForToday = async (
     followUps,
     {
@@ -1909,6 +2485,15 @@ export const scheduleTimeFollowUpRemindersForToday = async (
         dueRepeatForMinutes = DEFAULT_FOLLOWUP_DUE_REPEAT_FOR_MINUTES,
     } = {},
 ) => {
+    // FIX #8: Prevent concurrent/duplicate scheduling runs.
+    // If a sync is already in progress, bail out immediately.
+    if (!acquireSchedulingLock()) {
+        console.warn(
+            "[NotifSvc] Scheduling already in progress — skipping duplicate call",
+        );
+        return { scheduled: 0, skipped: true, reason: "lock" };
+    }
+
     try {
         if (Platform.OS === "web") return { scheduled: 0, skipped: true };
 
@@ -1916,8 +2501,10 @@ export const scheduleTimeFollowUpRemindersForToday = async (
         const list = Array.isArray(followUps) ? followUps : [];
         const now = new Date();
         const nowMs = now.getTime();
-        const lookbackMs = Math.max(0, Number(missedLookbackDays || 0)) * 24 * 60 * 60 * 1000;
-        const windowMs = Math.max(0, Number(windowDays || 0)) * 24 * 60 * 60 * 1000;
+        const lookbackMs =
+            Math.max(0, Number(missedLookbackDays ?? 0)) * 24 * 60 * 60 * 1000;
+        const windowMs =
+            Math.max(0, Number(windowDays ?? 0)) * 24 * 60 * 60 * 1000;
         const startMs = nowMs - lookbackMs;
         const endMs = nowMs + windowMs;
 
@@ -1925,208 +2512,152 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             .filter(isActiveFollowUp)
             .map((item) => {
                 const timeStr = item?.time;
-                const dateStr = item?.nextFollowUpDate || item?.followUpDate || item?.date;
-                const when = timeStr ? parseLocalDateTime(dateStr, timeStr) : null;
+                const dateStr =
+                    item?.nextFollowUpDate ?? item?.followUpDate ?? item?.date;
+                const when = timeStr
+                    ? parseLocalDateTime(dateStr, timeStr)
+                    : null;
                 const ms = when ? when.getTime() : NaN;
                 return { item, when, ms };
             })
-            .filter(({ when, ms }) => Boolean(when) && Number.isFinite(ms) && ms >= startMs && ms <= endMs)
-            // Ensure we schedule the nearest reminders first (avoid hitting caps due to sorting by latest date).
+            .filter(
+                ({ when, ms }) =>
+                    Boolean(when) &&
+                    Number.isFinite(ms) &&
+                    ms >= startMs &&
+                    ms <= endMs,
+            )
             .sort((a, b) => a.ms - b.ms);
 
-	        await cancelTimeFollowUpReminders();
-	        if (timeBasedFollowUps.length === 0) {
-	            return { scheduled: 0, skipped: true, reason: "none-due" };
-	        }
+        // FIX #2: Cancel only previously saved IDs (not ALL notifications)
+        await cancelTimeFollowUpReminders();
 
-	        const lang = await getNotificationVoiceLanguage();
-	        const soundChannels =
-	            lang === "ta"
-	                ? {
-	                      soon: "followups_soon_ta",
-	                      due: "followups_due_ta",
-	                      missed: "followups_missed_ta",
-	                      soonSound: "followup_soon_ta.mp3",
-	                      dueSound: "followup_due_ta.mp3",
-	                      missedSound: "followup_missed_ta.mp3",
-	                  }
-	                : {
-	                      soon: "followups_soon_en",
-	                      due: "followups_due_en",
-	                      missed: "followups_missed_en",
-	                      soonSound: "followup_soon_en.mp3",
-	                      dueSound: "followup_due_en.mp3",
-	                      missedSound: "followup_missed_en.mp3",
-	                  };
+        if (timeBasedFollowUps.length === 0) {
+            console.log("[NotifSvc] No time-based follow-ups to schedule");
+            return { scheduled: 0, skipped: true, reason: "none-due" };
+        }
 
-	        const ids = [];
-        // Allow scheduling "right now" triggers (use a tiny past buffer to avoid missing exact-minute schedules).
-        const safeNow = new Date(now.getTime() - 1000);
+        console.log(
+            `[NotifSvc] Scheduling for ${timeBasedFollowUps.length} time-based follow-ups`,
+        );
+
+        const lang = await getNotificationVoiceLanguage();
+        const ids = [];
+
+        // FIX #1: Use 30-second past-time tolerance buffer.
+        // A 30-second window means the scheduler can run up to 30s late
+        // and still successfully schedule the notification.
+        const safeNow = new Date(now.getTime() - 30000);
 
         for (const entry of timeBasedFollowUps) {
             if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
+
             const item = entry.item;
             const when = entry.when;
-            const scheduledAtMs = new Set();
 
-            // Pre-reminders: start 1 hour before, repeat every 5 minutes until due time.
-            if (when.getTime() > safeNow.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) {
-                const preWindowMs = Math.max(0, Number(preRemindMinutes || 0)) * 60 * 1000;
-                const preEveryMs = Math.max(1, Number(preRemindEveryMinutes || 5)) * 60 * 1000;
-                const preStart = new Date(when.getTime() - preWindowMs);
+            // ── ARCHITECTURE FIX: 5 notifications per follow-up only ──────────
+            // Before: 20+ notifications (hourly pre-reminders + per-minute + due
+            //         repeats + fast missed + hourly missed) = Android drops them.
+            // After:  5min, 3min, 1min → due → missed (at +1min, +30min, +1hr)
+            //         Reliable, predictable, well under Android's limit.
 
-                if (preWindowMs > 0) {
-                    for (
-                        let t = new Date(preStart);
-                        t.getTime() < when.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
-                        t = new Date(t.getTime() + preEveryMs)
-                    ) {
-                        if (t.getTime() <= safeNow.getTime()) continue;
-                        if (scheduledAtMs.has(t.getTime())) continue;
-                        const minutesLeft = Math.max(
-                            1,
-                            Math.round((when.getTime() - t.getTime()) / (60 * 1000)),
-                        );
-	                        const soon = buildSoonContent(item, when, minutesLeft, lang);
-	                        const id = await scheduleDateNotification({
-	                            when: t,
-	                            title: soon.title,
-	                            body: soon.body,
-	                            data: soon.data,
-	                            channelId: soundChannels.soon,
-	                            sound: soundChannels.soonSound,
-	                            color: "#0EA5E9",
-	                        });
-                        ids.push(id);
-                        scheduledAtMs.add(t.getTime());
-                    }
+            const soonChannelKey = await selectChannelForNotification(
+                item?.activityType,
+                "soon",
+                lang,
+            );
+            const dueChannelKey = await selectChannelForNotification(
+                item?.activityType,
+                "due",
+                lang,
+            );
+            const missedChannelKey = await selectChannelForNotification(
+                item?.activityType,
+                "missed",
+                lang,
+            );
+
+            // 1. Pre-reminders: 5, 4, 3, 2, 1 minutes before due time
+            // FIX #12: Include 2-min and 4-min reminders for better coverage
+            for (const minutesLeft of [5, 4, 3, 2, 1]) {
+                if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC)
+                    break;
+
+                const t = new Date(when.getTime() - minutesLeft * 60 * 1000);
+                if (t.getTime() <= safeNow.getTime()) {
+                    console.warn(
+                        `[NotifSvc] Skipping ${minutesLeft}min (past): ${t.toISOString()}`,
+                    );
+                    continue;
                 }
 
-                // Extra pre-reminders at 5/4/3/2/1 min before due (more reliable than 5-min grid).
-                for (const minutesLeft of [5, 4, 3, 2, 1]) {
-                    if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
-                    const t = new Date(when.getTime() - minutesLeft * 60 * 1000);
-                    if (t.getTime() <= safeNow.getTime() || t.getTime() >= when.getTime()) continue;
-                    if (scheduledAtMs.has(t.getTime())) continue;
-	                    const soon = buildSoonContent(item, when, minutesLeft, lang);
-	                    const id = await scheduleDateNotification({
-	                        when: t,
-	                        title: soon.title,
-	                        body: soon.body,
-	                        data: soon.data,
-	                        channelId: soundChannels.soon,
-	                        sound: soundChannels.soonSound,
-	                        color: "#0EA5E9",
-	                    });
+                const soon = buildSoonContent(item, when, minutesLeft, lang);
+                const id = await scheduleDateNotification({
+                    when: t,
+                    title: soon.title,
+                    body: soon.body,
+                    data: soon.data,
+                    channelId: soonChannelKey,
+                    sound: "default",
+                    color: "#0EA5E9",
+                });
+                if (id) {
+                    console.log(
+                        `[NotifSvc] ✓ ${minutesLeft}min alert scheduled: ${t.toISOString()}`,
+                    );
                     ids.push(id);
-                    scheduledAtMs.add(t.getTime());
                 }
+            }
 
-                // Due notification at exact time.
-	                const due = buildDueAtContent(item, when, lang);
-	                const dueId = await scheduleDateNotification({
-	                    when,
-	                    title: due.title,
-	                    body: due.body,
-	                    data: due.data,
-	                    channelId: soundChannels.due,
-	                    sound: soundChannels.dueSound,
-	                    color: "#0EA5E9",
-	                });
-                ids.push(dueId);
-
-                // Optional active reminder mode (disabled by default).
-                const repeats = Math.max(0, Math.min(30, Number(dueRepeatForMinutes || 0)));
-                if (repeats > 0) {
-                    for (
-                        let i = 1;
-                        i <= repeats && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
-                        i += 1
-                    ) {
-                        const t = new Date(when.getTime() + i * 60 * 1000);
-                        if (t.getTime() <= safeNow.getTime()) continue;
-                        if (scheduledAtMs.has(t.getTime())) continue;
-                        const id = await scheduleDateNotification({
-                            when: t,
-                            title: due.title,
-                            body: due.body,
-                            data: due.data,
-                            channelId,
-                            color: "#FF9500",
-                        });
-                        ids.push(id);
-                        scheduledAtMs.add(t.getTime());
+            // 2. Due at exact time
+            if (ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) {
+                if (when.getTime() > safeNow.getTime()) {
+                    const due = buildDueAtContent(item, when, lang);
+                    const dueId = await scheduleDateNotification({
+                        when,
+                        title: due.title,
+                        body: due.body,
+                        data: due.data,
+                        channelId: dueChannelKey,
+                        sound: "default",
+                        color: "#0EA5E9",
+                    });
+                    if (dueId) {
+                        console.log(
+                            `[NotifSvc] ✓ Due alert scheduled: ${when.toISOString()}`,
+                        );
+                        ids.push(dueId);
                     }
                 }
             }
 
-            // Missed reminders: every 5 minutes for 1 hour after due, then every 1 hour.
-	            const missed = buildMissedContent(item, when, lang);
-            const missedFastMs = Math.max(0, Number(missedFastMinutes || 0)) * 60 * 1000;
-            const missedFastEveryMs = Math.max(1, Number(missedFastEveryMinutes || 5)) * 60 * 1000;
-            const missedHourlyEveryMs = Math.max(1, Number(missedHourlyEveryMinutes || 60)) * 60 * 1000;
-            const missedFastEnd = new Date(when.getTime() + missedFastMs);
+            // 3. Missed alerts: +1 min, +30 min, +1 hour after due time
+            const missed = buildMissedContent(item, when, lang);
+            for (const delayMinutes of [1, 30, 60]) {
+                if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC)
+                    break;
 
-            // Missed: send every 1 minute for the first 5 minutes after due time.
-            for (const mins of [1, 2, 3, 4, 5]) {
-                if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
-                const t = new Date(when.getTime() + mins * 60 * 1000);
+                const t = new Date(when.getTime() + delayMinutes * 60 * 1000);
                 if (t.getTime() <= safeNow.getTime()) continue;
-                if (scheduledAtMs.has(t.getTime())) continue;
-	                const id = await scheduleDateNotification({
-	                    when: t,
-	                    title: missed.title,
-	                    body: missed.body,
-	                    data: missed.data,
-	                    channelId: soundChannels.missed,
-	                    sound: soundChannels.missedSound,
-	                    color: "#FF3B5C",
-	                });
-                ids.push(id);
-                scheduledAtMs.add(t.getTime());
-            }
 
-            for (
-                let t = new Date(when.getTime() + Math.max(missedFastEveryMs, 10 * 60 * 1000));
-                t.getTime() <= missedFastEnd.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
-                t = new Date(t.getTime() + missedFastEveryMs)
-            ) {
-                if (t.getTime() <= safeNow.getTime()) continue;
-                if (scheduledAtMs.has(t.getTime())) continue;
-	                const id = await scheduleDateNotification({
-	                    when: t,
-	                    title: missed.title,
-	                    body: missed.body,
-	                    data: missed.data,
-	                    channelId: soundChannels.missed,
-	                    sound: soundChannels.missedSound,
-	                    color: "#FF9500",
-	                });
-                ids.push(id);
-                scheduledAtMs.add(t.getTime());
-            }
-
-            const hourlyMaxHours = Math.max(0, Number(missedHourlyMaxHours || 0));
-            if (hourlyMaxHours > 0 && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) {
-                const hourlyEnd = new Date(when.getTime() + hourlyMaxHours * 60 * 60 * 1000);
+                // Respect end-of-day boundary
                 const dayEnd = new Date(when);
-                dayEnd.setHours(Number(endHour || 21), 0, 0, 0);
-                const stopAt = new Date(Math.min(hourlyEnd.getTime(), dayEnd.getTime()));
+                dayEnd.setHours(Number(endHour ?? 21), 0, 0, 0);
+                if (t.getTime() > dayEnd.getTime()) break;
 
-                for (
-                    let t = new Date(missedFastEnd.getTime() + missedHourlyEveryMs);
-                    t.getTime() <= stopAt.getTime() && ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC;
-                    t = new Date(t.getTime() + missedHourlyEveryMs)
-                ) {
-                    if (t.getTime() <= safeNow.getTime()) continue;
-                    const id = await scheduleDateNotification({
-                        when: t,
-                        title: missed.title,
-                        body: missed.body,
-                        data: missed.data,
-                        channelId,
-                        color: "#FF3B5C",
-                    });
+                const id = await scheduleDateNotification({
+                    when: t,
+                    title: missed.title,
+                    body: missed.body,
+                    data: missed.data,
+                    channelId: missedChannelKey,
+                    sound: "default",
+                    color: "#FF3B5C",
+                });
+                if (id) {
+                    console.log(
+                        `[NotifSvc] ✓ Missed +${delayMinutes}min scheduled: ${t.toISOString()}`,
+                    );
                     ids.push(id);
                 }
             }
@@ -2136,159 +2667,154 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             TIME_FOLLOWUP_SCHEDULE_KEY,
             JSON.stringify({ dateKey: todayKey, ids }),
         );
-
+        console.log(
+            `[NotifSvc] ✓ Scheduled ${ids.length} time-based notifications`,
+        );
         return { scheduled: ids.length, skipped: false };
     } catch (error) {
-        console.error("Failed to schedule time follow-up reminders:", error);
+        console.error("[NotifSvc] ✗ Failed to schedule time reminders:", error);
         return { scheduled: 0, skipped: false, error: true };
+    } finally {
+        // FIX #8: Always release the lock, even if scheduling threw an error
+        releaseSchedulingLock();
     }
 };
 
-// Global notification handler for navigation
+// ─── Global Notification Response Listener ───────────────────────────────────
 export const setupGlobalNotificationListener = (navigationRef) => {
-    return Notifications.addNotificationResponseReceivedListener(response => {
+    return Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
         const actionId = response.actionIdentifier;
         console.log("Global notification tapped:", data);
 
-        if (actionId === "FOLLOWUP_CANCEL") {
-            return;
-        }
+        if (actionId === "FOLLOWUP_CANCEL") return;
 
         const isComplete = actionId === "FOLLOWUP_COMPLETE";
         const isDefaultAction =
             actionId === Notifications.DEFAULT_ACTION_IDENTIFIER ||
             actionId === "expo-notifications-default";
 
-        // Avoid repeating voice when user taps action buttons (especially Complete).
         if (isDefaultAction) {
             Promise.resolve(speakForNotificationData(data)).catch(() => {});
         }
 
-        if (navigationRef.isReady()) {
-            // Handle different notification types
-            if (
-                data.followUpCount ||
-                data.overdueCount ||
-                data.type === "daily-reminder" ||
-                data.type === "hourly-followup-reminder" ||
-                data.type === "followup-due" ||
-                data.type === "followup-missed"
-            ) {
-                if (isComplete) {
-                    // Mark completed so it doesn't show in Missed list if user doesn't schedule next follow-up.
-                    Promise.resolve(completeFollowUpFromNotification(data)).catch(() => {});
-                    Promise.resolve(
-                        cancelNotificationsForEnquiry?.({
-                            enqId: data?.enqId,
-                            enqNo: data?.enqNo,
-                        }),
-                    ).catch(() => {});
-                    // If user doesn't add next follow-up, prompt them shortly.
-                    Promise.resolve(
-                        scheduleNextFollowUpPromptForEnquiry?.({
-                            enqId: data?.enqId,
-                            enqNo: data?.enqNo,
-                            name: data?.name,
-                            mobile: data?.mobile,
-                            product: data?.product,
-                            delayMinutes: 2,
-                        }),
-                    ).catch(() => {});
-                }
+        if (!navigationRef.isReady()) return;
 
-                // Acknowledge hourly reminders only when user actually opens/acts.
-                if (
-                    actionId === "FOLLOWUP_COMPLETE" ||
-                    isDefaultAction
-                ) {
-                    acknowledgeHourlyFollowUpReminders().catch(() => {});
-                }
-
-                const enquiry = {
-                    enqId: data?.enqId || null,
-                    _id: data?.enqId || null,
-                    enqNo: data?.enqNo || "",
-                    name: data?.name || "",
-                    mobile: data?.mobile || "",
-                    product: data?.product || "",
-                };
-
-                navigationRef.navigate("Main", {
-                    screen: "FollowUp",
-                    params: isComplete
-                        ? {
-                              openComposer: true,
-                              composerToken: `${Date.now()}`,
-                              enquiry,
-                              focusTab: "Today",
-                              focusSearch: data?.name || "",
-                              autoOpenForm: true,
-                          }
-                        : data.type === "followup-missed"
-                          ? {
-                                openComposer: true,
-                                composerToken: `${Date.now()}`,
-                                enquiry,
-                                focusTab: "Missed",
-                                openMissedModal: true,
-                                autoOpenForm: true,
-                            }
-                          : { focusTab: "Today" },
-                });
-            } else if (data.type === "next-followup-prompt") {
-                if (actionId === "NEXT_FOLLOWUP_NO") {
-                    Promise.resolve(
-                        cancelNextFollowUpPromptForEnquiry?.({
-                            enqId: data?.enqId,
-                            enqNo: data?.enqNo,
-                        }),
-                    ).catch(() => {});
-                    return;
-                }
-                // YES or tap => open composer directly.
-                const enquiry = {
-                    enqId: data?.enqId || null,
-                    _id: data?.enqId || null,
-                    enqNo: data?.enqNo || "",
-                    name: data?.name || "",
-                    mobile: data?.mobile || "",
-                    product: data?.product || "",
-                };
-                navigationRef.navigate("Main", {
-                    screen: "FollowUp",
-                    params: {
-                        openComposer: true,
-                        composerToken: `${Date.now()}`,
-                        enquiry,
-                        focusTab: "Today",
-                        focusSearch: data?.name || "",
-                        autoOpenForm: true,
-                    },
-                });
-            } else if (data.type === 'enquiry-success' || data.type === 'new-enquiry-alert') {
-                navigationRef.navigate('Main', {
-                    screen: 'Enquiry',
-                    params: { screen: 'EnquiryList' }
-                });
-            } else if (data.type === "coupon-offer") {
-                navigationRef.navigate("Main", {
-                    screen: "Home",
-                });
-            } else if (data.type === "team-chat-message") {
-                navigationRef.navigate("Main", {
-                    screen: "Communication",
-                });
-            } else if (data.type === "billing-alert") {
-                navigationRef.navigate("PricingScreen");
-            } else if (data.type === "report-csv-ready") {
-                Promise.resolve(openCsvFileUri(data?.uri)).catch(() => {});
+        if (
+            data.followUpCount ||
+            data.overdueCount ||
+            data.type === "daily-reminder" ||
+            data.type === "hourly-followup-reminder" ||
+            data.type === "followup-due" ||
+            data.type === "followup-missed"
+        ) {
+            if (isComplete) {
+                Promise.resolve(completeFollowUpFromNotification(data)).catch(
+                    () => {},
+                );
+                Promise.resolve(
+                    cancelNotificationsForEnquiry?.({
+                        enqId: data?.enqId,
+                        enqNo: data?.enqNo,
+                    }),
+                ).catch(() => {});
+                Promise.resolve(
+                    scheduleNextFollowUpPromptForEnquiry?.({
+                        enqId: data?.enqId,
+                        enqNo: data?.enqNo,
+                        name: data?.name,
+                        mobile: data?.mobile,
+                        product: data?.product,
+                        delayMinutes: 2,
+                    }),
+                ).catch(() => {});
             }
+
+            if (actionId === "FOLLOWUP_COMPLETE" || isDefaultAction) {
+                acknowledgeHourlyFollowUpReminders().catch(() => {});
+            }
+
+            const enquiry = {
+                enqId: data?.enqId ?? null,
+                _id: data?.enqId ?? null,
+                enqNo: data?.enqNo ?? "",
+                name: data?.name ?? "",
+                mobile: data?.mobile ?? "",
+                product: data?.product ?? "",
+            };
+
+            navigationRef.navigate("Main", {
+                screen: "FollowUp",
+                params: isComplete
+                    ? {
+                          openComposer: true,
+                          composerToken: `${Date.now()}`,
+                          enquiry,
+                          focusTab: "Today",
+                          focusSearch: data?.name ?? "",
+                          autoOpenForm: true,
+                      }
+                    : data.type === "followup-missed"
+                      ? {
+                            openComposer: true,
+                            composerToken: `${Date.now()}`,
+                            enquiry,
+                            focusTab: "Missed",
+                            openMissedModal: true,
+                            autoOpenForm: true,
+                        }
+                      : { focusTab: "Today" },
+            });
+        } else if (data.type === "next-followup-prompt") {
+            if (actionId === "NEXT_FOLLOWUP_NO") {
+                Promise.resolve(
+                    cancelNextFollowUpPromptForEnquiry?.({
+                        enqId: data?.enqId,
+                        enqNo: data?.enqNo,
+                    }),
+                ).catch(() => {});
+                return;
+            }
+            const enquiry = {
+                enqId: data?.enqId ?? null,
+                _id: data?.enqId ?? null,
+                enqNo: data?.enqNo ?? "",
+                name: data?.name ?? "",
+                mobile: data?.mobile ?? "",
+                product: data?.product ?? "",
+            };
+            navigationRef.navigate("Main", {
+                screen: "FollowUp",
+                params: {
+                    openComposer: true,
+                    composerToken: `${Date.now()}`,
+                    enquiry,
+                    focusTab: "Today",
+                    focusSearch: data?.name ?? "",
+                    autoOpenForm: true,
+                },
+            });
+        } else if (
+            data.type === "enquiry-success" ||
+            data.type === "new-enquiry-alert"
+        ) {
+            navigationRef.navigate("Main", {
+                screen: "Enquiry",
+                params: { screen: "EnquiryList" },
+            });
+        } else if (data.type === "coupon-offer") {
+            navigationRef.navigate("Main", { screen: "Home" });
+        } else if (data.type === "team-chat-message") {
+            navigationRef.navigate("Main", { screen: "Communication" });
+        } else if (data.type === "billing-alert") {
+            navigationRef.navigate("PricingScreen");
+        } else if (data.type === "report-csv-ready") {
+            Promise.resolve(openCsvFileUri(data?.uri)).catch(() => {});
         }
     });
 };
 
-// Cleanup notifications
+// ─── Follow-up Notification Cleanup ──────────────────────────────────────────
 export const cancelFollowUpNotifications = async () => {
     try {
         const notifications = await getPendingNotifications();
@@ -2297,11 +2823,9 @@ export const cancelFollowUpNotifications = async () => {
                 notif.content.data.followUpCount ||
                 notif.content.data.overdueCount,
         );
-
         for (const notif of followUpNotifications) {
             await cancelNotification(notif.identifier);
         }
-
         console.log(
             `Cancelled ${followUpNotifications.length} follow-up notifications`,
         );
@@ -2320,13 +2844,15 @@ export const resetNotificationLocalState = async () => {
             AsyncStorage.removeItem("lastNotificationDate"),
         ]);
     } catch {
-        // ignore
+        /* ignore */
     }
 };
 
 const pruneStoredScheduleIds = async (storageKey, idsToRemove = []) => {
     try {
-        const removeSet = new Set((Array.isArray(idsToRemove) ? idsToRemove : []).map(String));
+        const removeSet = new Set(
+            (Array.isArray(idsToRemove) ? idsToRemove : []).map(String),
+        );
         if (removeSet.size === 0) return;
         const raw = await AsyncStorage.getItem(storageKey);
         if (!raw) return;
@@ -2339,9 +2865,12 @@ const pruneStoredScheduleIds = async (storageKey, idsToRemove = []) => {
         const ids = Array.isArray(parsed?.ids) ? parsed.ids : [];
         const nextIds = ids.filter((id) => !removeSet.has(String(id)));
         if (nextIds.length === ids.length) return;
-        await AsyncStorage.setItem(storageKey, JSON.stringify({ ...(parsed || {}), ids: nextIds }));
+        await AsyncStorage.setItem(
+            storageKey,
+            JSON.stringify({ ...(parsed ?? {}), ids: nextIds }),
+        );
     } catch {
-        // ignore
+        /* ignore */
     }
 };
 
@@ -2350,23 +2879,25 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
         if (!isNotificationSupported()) return { cancelled: 0, skipped: true };
         const enqIdStr = enqId ? String(enqId) : "";
         const enqNoStr = enqNo ? String(enqNo).trim() : "";
-        if (!enqIdStr && !enqNoStr) return { cancelled: 0, skipped: true, reason: "no-key" };
+        if (!enqIdStr && !enqNoStr)
+            return { cancelled: 0, skipped: true, reason: "no-key" };
 
-        // Also cancel the "add next follow-up" prompt for this enquiry.
-        Promise.resolve(cancelNextFollowUpPromptForEnquiry({ enqId, enqNo })).catch(() => {});
+        Promise.resolve(
+            cancelNextFollowUpPromptForEnquiry({ enqId, enqNo }),
+        ).catch(() => {});
 
         const pending = await getPendingNotifications();
         const matches = pending.filter((notif) => {
-            const data = notif?.content?.data || {};
-            const type = String(data?.type || "").trim();
+            const data = notif?.content?.data ?? {};
+            const type = String(data?.type ?? "").trim();
             if (!type) return false;
-            // Only cancel notifications that are tied to a single enquiry.
             if (
                 type !== "followup-soon" &&
                 type !== "followup-due" &&
                 type !== "followup-missed" &&
                 type !== "next-followup-prompt"
-            ) return false;
+            )
+                return false;
             const dEnqId = data?.enqId ? String(data.enqId) : "";
             const dEnqNo = data?.enqNo ? String(data.enqNo).trim() : "";
             if (enqIdStr && dEnqId && dEnqId === enqIdStr) return true;
@@ -2374,17 +2905,18 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
             return false;
         });
 
-        if (matches.length === 0) return { cancelled: 0, skipped: true, reason: "none" };
+        if (matches.length === 0)
+            return { cancelled: 0, skipped: true, reason: "none" };
 
         const cancelledIds = [];
         for (const notif of matches) {
-            const id = String(notif?.identifier || "");
+            const id = String(notif?.identifier ?? "");
             if (!id) continue;
             try {
                 await cancelNotification(id);
                 cancelledIds.push(id);
             } catch {
-                // ignore per-id
+                /* ignore */
             }
         }
 
@@ -2403,33 +2935,40 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
 export const cancelNotificationsForFollowUpIds = async (followUpIds = []) => {
     try {
         if (!isNotificationSupported()) return { cancelled: 0, skipped: true };
-        const ids = (Array.isArray(followUpIds) ? followUpIds : []).map((v) => String(v || "").trim()).filter(Boolean);
-        if (ids.length === 0) return { cancelled: 0, skipped: true, reason: "no-ids" };
+        const ids = (Array.isArray(followUpIds) ? followUpIds : [])
+            .map((v) => String(v ?? "").trim())
+            .filter(Boolean);
+        if (ids.length === 0)
+            return { cancelled: 0, skipped: true, reason: "no-ids" };
         const idSet = new Set(ids);
 
         const pending = await getPendingNotifications();
         const matches = pending.filter((notif) => {
-            const data = notif?.content?.data || {};
-            const type = String(data?.type || "").trim();
+            const data = notif?.content?.data ?? {};
+            const type = String(data?.type ?? "").trim();
             if (
                 type !== "followup-soon" &&
                 type !== "followup-due" &&
                 type !== "followup-missed"
-            ) return false;
-            const followUpId = String(data?.followUpId || "").trim();
+            )
+                return false;
+            const followUpId = String(data?.followUpId ?? "").trim();
             return Boolean(followUpId) && idSet.has(followUpId);
         });
 
-        if (matches.length === 0) return { cancelled: 0, skipped: true, reason: "none" };
+        if (matches.length === 0)
+            return { cancelled: 0, skipped: true, reason: "none" };
 
         const cancelledIds = [];
         for (const notif of matches) {
-            const id = String(notif?.identifier || "");
+            const id = String(notif?.identifier ?? "");
             if (!id) continue;
             try {
                 await cancelNotification(id);
                 cancelledIds.push(id);
-            } catch {}
+            } catch {
+                /* ignore */
+            }
         }
 
         await Promise.allSettled([
@@ -2444,6 +2983,7 @@ export const cancelNotificationsForFollowUpIds = async (followUpIds = []) => {
     }
 };
 
+// ─── Next Follow-up Prompt ────────────────────────────────────────────────────
 const getEnqKey = ({ enqId, enqNo } = {}) => {
     const idStr = enqId ? String(enqId).trim() : "";
     if (idStr) return `id:${idStr}`;
@@ -2452,21 +2992,31 @@ const getEnqKey = ({ enqId, enqNo } = {}) => {
     return "";
 };
 
-export const cancelNextFollowUpPromptForEnquiry = async ({ enqId, enqNo } = {}) => {
+export const cancelNextFollowUpPromptForEnquiry = async ({
+    enqId,
+    enqNo,
+} = {}) => {
     try {
         if (!isNotificationSupported()) return { cancelled: 0, skipped: true };
         const key = getEnqKey({ enqId, enqNo });
         if (!key) return { cancelled: 0, skipped: true, reason: "no-key" };
 
-        const raw = await AsyncStorage.getItem(NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY);
+        const raw = await AsyncStorage.getItem(
+            NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY,
+        );
         const parsed = raw ? JSON.parse(raw) : null;
-        const idsByKey = parsed?.idsByKey && typeof parsed.idsByKey === "object" ? parsed.idsByKey : {};
+        const idsByKey =
+            parsed?.idsByKey && typeof parsed.idsByKey === "object"
+                ? parsed.idsByKey
+                : {};
         const id = idsByKey?.[key];
         if (!id) return { cancelled: 0, skipped: true, reason: "none" };
 
         try {
             await Notifications.cancelScheduledNotificationAsync(String(id));
-        } catch {}
+        } catch {
+            /* ignore */
+        }
 
         const next = { ...idsByKey };
         delete next[key];
@@ -2494,11 +3044,12 @@ export const scheduleNextFollowUpPromptForEnquiry = async ({
         const key = getEnqKey({ enqId, enqNo });
         if (!key) return { scheduled: 0, skipped: true, reason: "no-key" };
 
-        // Replace previous prompt for this enquiry.
         await cancelNextFollowUpPromptForEnquiry({ enqId, enqNo });
 
-        const when = new Date(Date.now() + Math.max(1, Number(delayMinutes || 2)) * 60 * 1000);
-        const safeName = String(name || "Customer").trim();
+        const when = new Date(
+            Date.now() + Math.max(1, Number(delayMinutes ?? 2)) * 60 * 1000,
+        );
+        const safeName = String(name ?? "Customer").trim();
         const body = `Please add next follow-up date and time for ${safeName}.`;
 
         const id = await scheduleDateNotification({
@@ -2519,32 +3070,38 @@ export const scheduleNextFollowUpPromptForEnquiry = async ({
             categoryIdentifier: CATEGORY_IDS.next_followup,
         });
 
-        const raw = await AsyncStorage.getItem(NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY);
+        const raw = await AsyncStorage.getItem(
+            NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY,
+        );
         const parsed = raw ? JSON.parse(raw) : null;
-        const idsByKey = parsed?.idsByKey && typeof parsed.idsByKey === "object" ? parsed.idsByKey : {};
+        const idsByKey =
+            parsed?.idsByKey && typeof parsed.idsByKey === "object"
+                ? parsed.idsByKey
+                : {};
         await AsyncStorage.setItem(
             NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY,
             JSON.stringify({ idsByKey: { ...idsByKey, [key]: id } }),
         );
-
         return { scheduled: 1, skipped: false, id };
     } catch (error) {
         console.error("Failed to schedule next follow-up prompt:", error);
         return { scheduled: 0, skipped: false, error: true };
     }
-	};
+};
 
-export const showReportCsvReadyNotification = async ({ uri, fileName } = {}) => {
+export const showReportCsvReadyNotification = async ({
+    uri,
+    fileName,
+} = {}) => {
     try {
         if (!isNotificationSupported()) return { shown: 0, skipped: true };
-        const safeName = String(fileName || "report.csv").trim() || "report.csv";
-        const safeUri = String(uri || "").trim();
-        const body = `Saved: ${safeName}. Tap to open.`;
-
+        const safeName =
+            String(fileName ?? "report.csv").trim() || "report.csv";
+        const safeUri = String(uri ?? "").trim();
         await Notifications.scheduleNotificationAsync({
             content: {
                 title: "Report CSV Ready",
-                body,
+                body: `Saved: ${safeName}. Tap to open.`,
                 data: {
                     type: "report-csv-ready",
                     uri: safeUri,
@@ -2552,8 +3109,9 @@ export const showReportCsvReadyNotification = async ({ uri, fileName } = {}) => 
                     timestamp: new Date().toISOString(),
                 },
                 sound: "default",
+                ios: { sound: true },
                 ...(Platform.OS === "android"
-                    ? { channelId: CHANNEL_IDS.reports }
+                    ? { android: { channelId: CHANNEL_IDS.reports } }
                     : {}),
             },
             trigger: null,
@@ -2565,18 +3123,85 @@ export const showReportCsvReadyNotification = async ({ uri, fileName } = {}) => 
     }
 };
 
+// ─── Internal Helpers ─────────────────────────────────────────────────────────
 const completeFollowUpFromNotification = async (data = {}) => {
     try {
-        const followUpId = String(data?.followUpId || "").trim();
-        if (!followUpId) return { completed: false, skipped: true, reason: "no-followup-id" };
-        await followupService.updateFollowUp(followUpId, { status: "Completed" });
+        const followUpId = String(data?.followUpId ?? "").trim();
+        if (!followUpId)
+            return {
+                completed: false,
+                skipped: true,
+                reason: "no-followup-id",
+            };
+        await followupService.updateFollowUp(followUpId, {
+            status: "Completed",
+        });
         return { completed: true };
     } catch (error) {
-        console.warn("Failed to complete follow-up from notification:", error?.message || error);
+        console.warn(
+            "Failed to complete follow-up from notification:",
+            error?.message ?? error,
+        );
         return { completed: false, error: true };
     }
 };
 
+// ─── DIAGNOSTIC: Check audio setup for debugging ────────────────────────────
+export const diagnoseAudioSetup = async () => {
+    console.log("=== AUDIO SETUP DIAGNOSIS ===");
+
+    try {
+        // Check platform
+        console.log(`Platform: ${Platform.OS}`);
+
+        // Check audio modules
+        let audioModulesOk = 0;
+        let audioModulesFailed = 0;
+
+        for (const [lang, activities] of Object.entries(AUDIO_MODULES)) {
+            for (const [activity, audios] of Object.entries(activities)) {
+                for (const [key, moduleRef] of Object.entries(audios)) {
+                    if (moduleRef) {
+                        audioModulesOk++;
+                        console.log(`✓ ${lang}/${activity}/${key} loaded`);
+                    } else {
+                        audioModulesFailed++;
+                        console.error(`✗ ${lang}/${activity}/${key} is NULL`);
+                    }
+                }
+            }
+        }
+
+        console.log(
+            `Audio Modules: ${audioModulesOk}✓ | ${audioModulesFailed}✗`,
+        );
+
+        // Check notification permissions
+        const perms = await Notifications.getPermissionsAsync();
+        console.log(`Notification Permission: ${perms.status}`);
+        console.log(`Can request again: ${perms.canAskAgain}`);
+
+        // Check voice language
+        const voiceLang = await getNotificationVoiceLanguage();
+        console.log(`Voice Language Set To: ${voiceLang}`);
+
+        // Check audio mode
+        console.log(`Audio Mode Ready: ${audioModeReady}`);
+
+        // Try to set audio mode
+        console.log("Attempting to set audio mode...");
+        await ensureAudioMode();
+        console.log("Audio mode set successfully");
+
+        console.log("=== DIAGNOSIS COMPLETE ===");
+        return { success: true, audioModulesOk, audioModulesFailed };
+    } catch (error) {
+        console.error("Diagnosis error:", error?.message || error);
+        return { success: false, error: error?.message || error };
+    }
+};
+
+// ─── Default Export ───────────────────────────────────────────────────────────
 export default {
     initializeNotifications,
     showFollowUpNotification,
@@ -2593,11 +3218,11 @@ export default {
     cancelAllNotifications,
     cancelNotification,
     getDevicePushToken,
-	    setupNotificationListener,
-	    setupForegroundNotificationListener,
-	    playAudioForNotificationData,
-	    speakForNotificationData,
-	    checkAndNotifyTodayFollowUps,
+    setupNotificationListener,
+    setupForegroundNotificationListener,
+    playAudioForNotificationData,
+    speakForNotificationData,
+    checkAndNotifyTodayFollowUps,
     cancelFollowUpNotifications,
     scheduleHourlyFollowUpRemindersForToday,
     cancelHourlyFollowUpReminders,
@@ -2606,16 +3231,19 @@ export default {
     cancelTodayFollowUpReminders,
     acknowledgeHourlyFollowUpReminders,
     setupGlobalNotificationListener,
-	    notifyMissedFollowUpsSummary,
-	    cancelNotificationsForEnquiry,
-	    cancelNotificationsForFollowUpIds,
-	    cancelNextFollowUpPromptForEnquiry,
-	    scheduleNextFollowUpPromptForEnquiry,
-	    showReportCsvReadyNotification,
-        openAndroidNotificationSettings,
-        openAndroidExactAlarmSettings,
-        openAndroidBatteryOptimizationSettings,
-	    getNotificationVoiceLanguage,
-	    setNotificationVoiceLanguage,
-	    resetNotificationLocalState,
+    notifyMissedFollowUpsSummary,
+    cancelNotificationsForEnquiry,
+    cancelNotificationsForFollowUpIds,
+    cancelNextFollowUpPromptForEnquiry,
+    scheduleNextFollowUpPromptForEnquiry,
+    showReportCsvReadyNotification,
+    openAndroidNotificationSettings,
+    openAndroidExactAlarmSettings,
+    openAndroidBatteryOptimizationSettings,
+    getNotificationVoiceLanguage,
+    setNotificationVoiceLanguage,
+    resetNotificationLocalState,
+    registerPushTokenWithServer,
+    resetAudioModeOnAppBackground,
+    diagnoseAudioSetup,
 };

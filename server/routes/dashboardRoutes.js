@@ -20,6 +20,30 @@ const parseIsoDate = (value) => {
     return Number.isNaN(dt.getTime()) ? null : dt;
 };
 
+const parseTimeToMinutes = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const m = raw.match(/^(\d{1,2})(?:[:.](\d{2}))?(?:\s*([AaPp][Mm]))?$/);
+    if (!m) return null;
+    let hh = Number(m[1]);
+    const mm = Number(m[2] ?? "0");
+    const meridian = String(m[3] || "").toUpperCase();
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm > 59) return null;
+
+    if (meridian) {
+        if (hh < 1 || hh > 12) return null;
+        if (meridian === "AM") {
+            if (hh === 12) hh = 0;
+        } else if (meridian === "PM") {
+            if (hh !== 12) hh += 12;
+        }
+    } else if (hh > 23) {
+        return null;
+    }
+
+    return hh * 60 + mm;
+};
+
 const getRangeBounds = ({ range = "day", date = new Date() } = {}) => {
     const dt = date instanceof Date ? date : new Date(date);
     if (Number.isNaN(dt.getTime())) {
@@ -161,6 +185,58 @@ router.get("/summary", verifyToken, async (req, res) => {
             const isRealToday = today === realToday;
             const now = new Date();
 
+            // Keep missed status fresh for today, including legacy rows that don't have `dueAt` yet.
+            // (Many screens depend on Missed counts/lists to update without opening FollowUp first.)
+            if (isRealToday) {
+                try {
+                    await FollowUp.updateMany(
+                        {
+                            ...query,
+                            date: today,
+                            dueAt: { $lte: now },
+                            status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
+                        },
+                        { $set: { status: "Missed" } },
+                    );
+
+                    const legacyRows = await FollowUp.find({
+                        ...query,
+                        date: today,
+                        time: { $exists: true, $ne: null, $ne: "" },
+                        status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
+                        $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
+                    })
+                        .select("_id time")
+                        .lean();
+
+                    if (Array.isArray(legacyRows) && legacyRows.length > 0) {
+                        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                        const ids = legacyRows
+                            .filter((row) => {
+                                const mins = parseTimeToMinutes(row?.time);
+                                return mins != null && mins <= nowMinutes;
+                            })
+                            .map((row) => row?._id)
+                            .filter(Boolean);
+
+                        if (ids.length > 0) {
+                            // Set dueAt slightly in the past so `$lt: now` matches immediately.
+                            await FollowUp.updateMany(
+                                { _id: { $in: ids } },
+                                {
+                                    $set: {
+                                        status: "Missed",
+                                        dueAt: new Date(now.getTime() - 1000),
+                                    },
+                                },
+                            );
+                        }
+                    }
+                } catch (_missedSyncError) {
+                    // ignore sync errors; dashboard should still load
+                }
+            }
+
             const todayOpenFollowUpQuery = {
                 ...query,
                 date: today,
@@ -183,7 +259,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                     ? {
                           $or: [
                               { date: { $lt: today } },
-                              { date: today, dueAt: { $lt: now } },
+	                              { date: today, dueAt: { $lte: now } },
                           ],
                       }
                     : { date: { $lt: today } }),
