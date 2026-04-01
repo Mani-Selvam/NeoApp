@@ -35,5 +35,12 @@ callLogSchema.index({ staffId: 1, callTime: -1 });
 callLogSchema.index({ phoneNumber: 1 });
 callLogSchema.index({ contactName: "text", phoneNumber: "text" }); // For text search if needed later
 callLogSchema.index({ enquiryId: 1 });
+callLogSchema.index(
+    { userId: 1, id: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { id: { $type: "string", $ne: "" } },
+    },
+);
 
 module.exports = mongoose.model("CallLog", callLogSchema);

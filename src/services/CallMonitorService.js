@@ -147,6 +147,18 @@ const pickEntryDurationSeconds = (entry) => {
     return Number.isFinite(asNum) && asNum >= 0 ? asNum : 0;
 };
 
+const pickEntryDeviceCallId = (entry) => {
+    const raw =
+        entry?.id ??
+        entry?._id ??
+        entry?.callId ??
+        entry?.callID ??
+        entry?.callLogId ??
+        null;
+    const value = raw == null ? "" : String(raw).trim();
+    return value || null;
+};
+
 const isSameNumberLoose = (a, b) => {
     const da = normalizeDigits(a);
     const db = normalizeDigits(b);
@@ -219,6 +231,7 @@ export const getLatestDeviceCallLogForNumber = async ({
             callType: best.callType,
             duration: best.duration,
             callTime: best.ts ? new Date(best.ts) : new Date(),
+            deviceCallId: pickEntryDeviceCallId(best.entry),
         };
     } catch (_e) {
         return null;
@@ -500,12 +513,30 @@ const handleCallEnd = async (phoneNumber) => {
     // Emit CALL_ENDED event with all detected data.
     // If an enquiry screen is listening (user initiated the call from UI),
     // it will handle the modal. Otherwise, we auto-log it.
+    let deviceInfo = null;
+    try {
+        const since =
+            callStartTime ||
+            dialStartTime ||
+            Math.max(0, Date.now() - 10 * 60 * 1000);
+        deviceInfo = await getLatestDeviceCallLogForNumber({
+            phoneNumber: finalNumber,
+            sinceMs: since,
+            limit: 10,
+        });
+    } catch (_e) {
+        deviceInfo = null;
+    }
+
     const callEndData = {
         phoneNumber: finalNumber,
-        callType: finalCallType,
-        duration: duration,
+        callType: deviceInfo?.callType || finalCallType,
+        duration: Number.isFinite(Number(deviceInfo?.duration))
+            ? Number(deviceInfo.duration)
+            : duration,
         note: statusNote,
-        callTime: new Date(),
+        callTime: deviceInfo?.callTime || new Date(),
+        deviceCallId: deviceInfo?.deviceCallId || null,
     };
 
     // Emit the event — screens listening will set a flag

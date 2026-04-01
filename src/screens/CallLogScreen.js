@@ -7,6 +7,7 @@ import {
     ActivityIndicator,
     Alert,
     Animated,
+    AppState,
     DeviceEventEmitter,
     FlatList,
     Linking,
@@ -30,7 +31,6 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { PostCallModal } from "../components/PostCallModal";
 import { useAuth } from "../contexts/AuthContext";
 import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import * as callLogService from "../services/callLogService";
@@ -43,6 +43,7 @@ import {
 } from "../services/inCallControlService";
 import {
   ensureCallLogPermissions,
+  getLatestDeviceCallLogForNumber,
   isRestrictedCallMonitoringEnabled,
 } from "../services/CallMonitorService";
 
@@ -793,11 +794,13 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
   const [callMinimized, setCallMinimized] = useState(false);
   const [callTick, setCallTick] = useState(0);
 
-  const [callModalVisible, setCallModalVisible] = useState(false);
-  const [callEnquiry, setCallEnquiry] = useState(null);
-  const [autoCallData, setAutoCallData] = useState(null);
-  const [autoDuration, setAutoDuration] = useState(0);
   const [pendingCall, setPendingCall] = useState(null);
+  const pendingCallRef = useRef(null);
+  const pendingCallSavingRef = useRef(false);
+
+  useEffect(() => {
+    pendingCallRef.current = pendingCall;
+  }, [pendingCall]);
 
   useEffect(() => {
     activeCallRef.current = activeCall;
@@ -914,20 +917,103 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     setCallMinimized(false);
   }, []);
 
-  const handleSaveCallLog = async (data) => {
-    try {
-      const saved = await callLogService.createCallLog(data);
-      if (!saved?._id) return;
-      setCallModalVisible(false);
-      setCallEnquiry(null);
-      setAutoCallData(null);
-      setAutoDuration(0);
-      DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-      fetchData({ refresh: true });
-    } catch (e) {
-      console.error(e);
-    }
+  const buildDefaultNote = (callType, durationSeconds) => {
+    const dur = Number(durationSeconds || 0);
+    const safeDur = Number.isFinite(dur) ? Math.max(0, Math.floor(dur)) : 0;
+    if (callType === "Incoming")
+      return safeDur > 0 ? `Incoming call • ${safeDur}s` : "Incoming call";
+    if (callType === "Outgoing")
+      return safeDur > 0 ? `Outgoing call • ${safeDur}s` : "Outgoing call";
+    if (callType === "Missed") return "Missed call";
+    if (callType === "Not Attended") return "Outgoing not attended";
+    return "Call auto-logged";
   };
+
+  const handleSaveCallLog = useCallback(
+    async (data) => {
+      try {
+        const saved = await callLogService.createCallLog(data);
+        if (!saved?._id) return;
+        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+        fetchData({ refresh: true });
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [fetchData],
+  );
+
+	  const autoSavePendingCall = useCallback(
+	    async (pc, payload = {}) => {
+	      if (!pc?.phoneNumber) return;
+	      if (pendingCallSavingRef.current) return;
+	      pendingCallSavingRef.current = true;
+
+	      try {
+	        const enquiry = pc?.enquiry || null;
+	        const phoneNumber = pc.phoneNumber;
+	        const sinceMs = pc.startedAtMs || null;
+
+	        const device = await getLatestDeviceCallLogForNumber({
+	          phoneNumber,
+	          sinceMs,
+	          limit: 10,
+	        });
+
+	        const fallbackDur =
+	          sinceMs != null
+	            ? Math.max(0, Math.floor((Date.now() - Number(sinceMs)) / 1000) - 5)
+	            : Number(payload?.duration || 0);
+
+	        const callType =
+	          device?.callType ||
+	          payload?.callType ||
+	          (fallbackDur > 3 ? "Outgoing" : "Not Attended");
+
+	        const duration = Number.isFinite(Number(device?.duration))
+	          ? Number(device.duration)
+	          : Number.isFinite(Number(payload?.duration))
+	            ? Number(payload.duration)
+	            : fallbackDur;
+
+	        const callTime = device?.callTime || payload?.callTime || new Date();
+	        const deviceCallId = device?.deviceCallId || device?.id || null;
+
+	        const linkedEnquiryId =
+	          enquiry?._id ||
+	          enquiry?.enquiryId?._id ||
+	          enquiry?.enquiryId ||
+	          enquiry?.enqId;
+	        const contactName =
+	          enquiry?.name || enquiry?.contactName || pc?.contactName;
+
+		        await handleSaveCallLog({
+		          phoneNumber,
+		          callType,
+		          duration,
+		          note: buildDefaultNote(callType, duration),
+		          callTime,
+		          deviceCallId,
+		          enquiryId: linkedEnquiryId,
+		          contactName,
+		        });
+	      } finally {
+	        pendingCallSavingRef.current = false;
+	      }
+	    },
+	    [handleSaveCallLog],
+	  );
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", async (next) => {
+      if (next !== "active") return;
+      const pc = pendingCallRef.current;
+      if (!pc?.phoneNumber) return;
+      await autoSavePendingCall(pc, {});
+      setPendingCall(null);
+    });
+    return () => sub.remove();
+  }, [autoSavePendingCall]);
 
   useEffect(() => {
     const s1 = DeviceEventEmitter.addListener(
@@ -949,19 +1035,10 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     );
     const s2 = DeviceEventEmitter.addListener("CALL_ENDED", (payload) => {
       const endedDigits = fmtPhone(payload?.phoneNumber);
-      if (
-        pendingCall &&
-        endedDigits &&
-        endedDigits === fmtPhone(pendingCall.phoneNumber)
-      ) {
+      const pc = pendingCallRef.current;
+      if (pc && endedDigits && endedDigits === fmtPhone(pc.phoneNumber)) {
         global.__callClaimedByScreen = true;
-        setAutoCallData({
-          callType: payload.callType,
-          duration: payload.duration,
-        });
-        setAutoDuration(payload.duration || 0);
-        setCallEnquiry(pendingCall.enquiry);
-        setCallModalVisible(true);
+        autoSavePendingCall(pc, payload || {}).catch(() => {});
         setPendingCall(null);
         return;
       }
@@ -975,7 +1052,7 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
       s1.remove();
       s2.remove();
     };
-  }, [closeSession, updateCall, pendingCall]);
+  }, [closeSession, updateCall, autoSavePendingCall]);
 
   // ── Call controls ─────────────────────────────────────────────────────────
   const warnFallback = () => {
@@ -1034,7 +1111,7 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
       "",
     );
     if (!digits) return;
-    setPendingCall({ phoneNumber: digits, enquiry: item });
+    setPendingCall({ phoneNumber: digits, enquiry: item, startedAtMs: Date.now() });
     try {
       if (Platform.OS === "android" && RNImmediatePhoneCall?.immediatePhoneCall)
         return RNImmediatePhoneCall.immediatePhoneCall(digits);
@@ -1645,20 +1722,7 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
       )}
 
       {/* ── Post-call modal ── */}
-      <PostCallModal
-        visible={callModalVisible}
-        enquiry={callEnquiry}
-        onSave={handleSaveCallLog}
-        autoCallData={autoCallData}
-        initialDuration={autoDuration}
-        onCancel={() => {
-          setCallModalVisible(false);
-          setCallEnquiry(null);
-          setAutoCallData(null);
-          setAutoDuration(0);
-          setPendingCall(null);
-        }}
-      />
+
 
       {/* ── Call history modal ── */}
       <Modal

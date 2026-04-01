@@ -181,6 +181,20 @@ const pickDeviceLogId = (entry, digits, callTimeMs, callType) => {
     return `${digits}:${callTimeMs}:${callType || ""}`;
 };
 
+const normalizeDeviceCallId = (raw) => {
+    if (raw == null) return undefined;
+    const value = String(raw).trim();
+    return value ? value : undefined;
+};
+
+const pickRequestDeviceCallId = (req) =>
+    normalizeDeviceCallId(
+        req.body?.deviceCallId ??
+            req.body?.deviceLogId ??
+            req.body?.callLogId ??
+            req.body?.id,
+    );
+
 const getOwnerId = (req) =>
     req.user.role === "Staff" && req.user.parentUserId
         ? req.user.parentUserId
@@ -703,20 +717,34 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
 
 // LOG A NEW CALL
 router.post("/", verifyToken, async (req, res) => {
-    try {
-        const { phoneNumber, callType, duration, note, enquiryId, callTime } =
-            req.body;
+	    try {
+	        const { phoneNumber, callType, duration, note, enquiryId, callTime } =
+	            req.body;
 
-        const ownerId = getOwnerId(req);
+	        const ownerId = getOwnerId(req);
 
-        const cleanNum = (phoneNumber || "").replace(/\D/g, "");
-        if (!cleanNum)
-            return res.status(400).json({ message: "Invalid phone number" });
+	        const cleanNum = (phoneNumber || "").replace(/\D/g, "");
+	        if (!cleanNum)
+	            return res.status(400).json({ message: "Invalid phone number" });
 
-        // Try to find an existing enquiry for this phone number if not provided
-        let linkedEnquiryId = enquiryId;
-        let contactName = req.body.contactName;
-        const normalizedCallType = normalizeCallType(callType) || callType;
+	        const deviceCallId = pickRequestDeviceCallId(req);
+	        if (deviceCallId) {
+	            const existingByDeviceId = await CallLog.findOne({
+	                userId: ownerId,
+	                id: deviceCallId,
+	            }).lean();
+	            if (existingByDeviceId) {
+	                return res.status(200).json({
+	                    ...existingByDeviceId,
+	                    deduped: true,
+	                });
+	            }
+	        }
+
+	        // Try to find an existing enquiry for this phone number if not provided
+	        let linkedEnquiryId = enquiryId;
+	        let contactName = req.body.contactName;
+	        const normalizedCallType = normalizeCallType(callType) || callType;
 
         if (!linkedEnquiryId) {
             const existingEnquiry = await findEnquiryByPhone(
@@ -740,14 +768,45 @@ router.post("/", verifyToken, async (req, res) => {
             });
         }
 
-        const newCallLog = new CallLog({
-            userId: ownerId,
-            staffId: req.userId,
-            phoneNumber: cleanNum,
-            contactName,
-            enquiryId: linkedEnquiryId,
-            callType: normalizedCallType,
-            duration: duration || 0,
+        // De-dupe: avoid double entries when both CallMonitorService auto-logs and a screen logs the same call
+        try {
+            const rawCallTime = callTime ? new Date(callTime) : new Date();
+            const callTimeMs = Number.isFinite(rawCallTime?.getTime?.())
+                ? rawCallTime.getTime()
+                : Date.now();
+            const windowMs = 2 * 60 * 1000;
+
+            const existing = await CallLog.findOne({
+                userId: ownerId,
+                enquiryId: linkedEnquiryId,
+                phoneNumber: cleanNum,
+                callType: normalizedCallType,
+                callTime: {
+                    $gte: new Date(callTimeMs - windowMs),
+                    $lte: new Date(callTimeMs + windowMs),
+                },
+                isPersonal: { $ne: true },
+            }).sort({ callTime: -1 });
+
+            if (existing) {
+                return res.status(200).json({
+                    ...existing.toObject(),
+                    deduped: true,
+                });
+            }
+        } catch (_dedupeErr) {
+            // do not block logging on dedupe failures
+        }
+
+	        const newCallLog = new CallLog({
+	            userId: ownerId,
+	            staffId: req.userId,
+	            id: deviceCallId,
+	            phoneNumber: cleanNum,
+	            contactName,
+	            enquiryId: linkedEnquiryId,
+	            callType: normalizedCallType,
+	            duration: duration || 0,
             businessNumber:
                 req.user.mobile ||
                 req.body.businessNumber ||
@@ -755,13 +814,30 @@ router.post("/", verifyToken, async (req, res) => {
             note,
             callTime: callTime || new Date(),
             followUpCreated: req.body.followUpCreated || false,
-            isPendingCallback: normalizedCallType === "Missed",
-            isPersonal: false,
-        });
+	            isPendingCallback: normalizedCallType === "Missed",
+	            isPersonal: false,
+	        });
 
-        const savedLog = await newCallLog.save();
+	        let savedLog;
+	        try {
+	            savedLog = await newCallLog.save();
+	        } catch (e) {
+	            if (deviceCallId && e?.code === 11000) {
+	                const existingByDeviceId = await CallLog.findOne({
+	                    userId: ownerId,
+	                    id: deviceCallId,
+	                });
+	                if (existingByDeviceId) {
+	                    return res.status(200).json({
+	                        ...existingByDeviceId.toObject(),
+	                        deduped: true,
+	                    });
+	                }
+	            }
+	            throw e;
+	        }
 
-        emitCallLogCreated(req, savedLog, ownerId, req.userId);
+	        emitCallLogCreated(req, savedLog, ownerId, req.userId);
 
         // If linked to an enquiry, update the enquiry's last contacted timestamp
         if (linkedEnquiryId) {
