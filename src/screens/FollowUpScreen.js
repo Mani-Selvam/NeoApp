@@ -1040,6 +1040,7 @@ const displayStatusLabel = (status) => {
 const getRecommendedNextStatus = (currentStatus) => {
     const current = normalizeStatus(currentStatus);
     if (current === "New") return "Contacted";
+    if (current === "Missed") return "Contacted";
     if (current === "Contacted") return "Interested";
     if (current === "Interested") return "Converted";
     return current;
@@ -1109,12 +1110,15 @@ const mapFollowUpItemToEnquiryCard = (item = {}) => {
     const displayStatus = normalizeStatus(
         item?.enquiryStatus || item?.status || "New",
     );
+    const followUpId = item?._id || item?.id || null;
     return {
+        // NOTE: `_id` is used by edit/update actions; keep it as follow-up id when available.
         _id:
+            followUpId ||
             item?.enqId ||
             item?.enqNo ||
-            item?._id ||
             `${item?.name || "lead"}-${item?.date || ""}`,
+        followUpId: followUpId,
         enqId: item?.enqId || null,
         enqNo: item?.enqNo || "",
         name: item?.name || "Unknown",
@@ -3894,6 +3898,8 @@ export default function FollowUpScreen({ navigation, route }) {
     const fetchIdRef = useRef(0);
     const lastFetch = useRef(0);
     const lastToken = useRef(null);
+    const detailSourceFollowUpIdRef = useRef(null);
+    const detailSourceWasMissedRef = useRef(false);
     const lastFocusDate = useRef(null);
     const lastFocusKey = useRef(null);
     const missedTimeCheckRef = useRef(null);
@@ -4290,9 +4296,10 @@ export default function FollowUpScreen({ navigation, route }) {
                 showIndicator: false,
                 allowCache: true,
             });
+            fetchTabCounts(selectedDate).catch(() => {});
         });
         return () => sub.remove();
-    }, [activeTab]);
+    }, [activeTab, selectedDate]);
 
     useEffect(() => {
         const unsub = navigation.addListener("blur", () => {
@@ -4498,6 +4505,13 @@ export default function FollowUpScreen({ navigation, route }) {
                 total = res.pagination?.pages || 1;
             }
             if (rid !== fetchIdRef.current) return;
+            if (tab === "All") {
+                data = data.filter((item) => {
+                    const s = String(item?.status || "").trim();
+                    const es = String(item?.enquiryStatus || "").trim();
+                    return !(s === "Completed" && es === "Missed");
+                });
+            }
             data = data.map(mapFollowUpItemToEnquiryCard);
             if (refresh && tab === "All") {
                 try {
@@ -4585,6 +4599,10 @@ export default function FollowUpScreen({ navigation, route }) {
     const openDetail = useCallback(async (item) => {
         setDetailHistory([]);
         setHistoryLoading(true);
+        detailSourceFollowUpIdRef.current =
+            item?.followUpId || item?._id || null;
+        detailSourceWasMissedRef.current =
+            normalizeStatus(item?.status) === "Missed";
         const fb = {
             _id: item.enqId || item._id,
             enqId: item.enqId || item._id,
@@ -4709,7 +4727,7 @@ export default function FollowUpScreen({ navigation, route }) {
             return;
         }
         if (
-            ["New", "Contacted", "Interested"].includes(editStatus) &&
+            ["New", "Contacted", "Interested", "Missed"].includes(editStatus) &&
             !editNextDate
         ) {
             Alert.alert("Required", "Enter next follow-up date");
@@ -4721,6 +4739,13 @@ export default function FollowUpScreen({ navigation, route }) {
         }
         setIsSavingEdit(true);
         try {
+            const sourceFollowUpId = detailSourceFollowUpIdRef.current;
+            const isRescheduleFromMissed =
+                detailSourceWasMissedRef.current &&
+                Boolean(sourceFollowUpId) &&
+                Boolean(editNextDate) &&
+                ["New", "Contacted", "Interested"].includes(editStatus);
+            const effectiveStatus = editStatus;
             const remarks =
                 editStatus === "Converted"
                     ? editRemarks
@@ -4735,14 +4760,14 @@ export default function FollowUpScreen({ navigation, route }) {
                 "New",
                 "Contacted",
                 "Interested",
-            ].includes(editStatus);
+            ].includes(effectiveStatus);
             const effDate = usesScheduledDate
                 ? editNextDate || todayIso
                 : todayIso;
             const nextAction =
-                editStatus === "Converted"
+                effectiveStatus === "Converted"
                     ? "Sales"
-                    : ["Not Interested", "Closed"].includes(editStatus)
+                    : ["Not Interested", "Closed"].includes(effectiveStatus)
                       ? "Drop"
                       : "Followup";
             const fuState =
@@ -4761,7 +4786,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 ...(atId ? { assignedTo: atId } : {}),
                 activityType: editActivityType,
                 type: editActivityType,
-                enquiryStatus: editStatus,
+                enquiryStatus: effectiveStatus,
                 note: remarks,
                 remarks,
                 date: effDate,
@@ -4770,7 +4795,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 nextFollowUpDate: effDate,
                 nextAction,
                 status: fuState,
-                ...(editStatus === "Converted"
+                ...(effectiveStatus === "Converted"
                     ? {
                           amount:
                               Number(
@@ -4779,7 +4804,15 @@ export default function FollowUpScreen({ navigation, route }) {
                       }
                     : {}),
             };
-            if (editFollowUpId) {
+            if (isRescheduleFromMissed) {
+                // Create the new follow-up first (so the new timeline always exists),
+                // then archive the old missed schedule so it no longer appears in Today/Missed.
+                await followupService.createFollowUp(payload);
+                await followupService.updateFollowUp(sourceFollowUpId, {
+                    status: "Completed",
+                    enquiryStatus: "Missed",
+                });
+            } else if (editFollowUpId) {
                 await followupService.updateFollowUp(editFollowUpId, payload);
             } else {
                 await followupService.createFollowUp(payload);
@@ -4787,8 +4820,8 @@ export default function FollowUpScreen({ navigation, route }) {
             await enquiryService.updateEnquiry(
                 selectedEnquiry._id || selectedEnquiry.enqNo,
                 {
-                    status: editStatus,
-                    ...(editStatus === "Converted"
+                    status: effectiveStatus,
+                    ...(effectiveStatus === "Converted"
                         ? {
                               cost:
                                   Number(
@@ -4801,8 +4834,30 @@ export default function FollowUpScreen({ navigation, route }) {
                         : {}),
                 },
             );
+
+            Promise.resolve(
+                notificationService.cancelNotificationsForEnquiry?.({
+                    enqId: selectedEnquiry._id,
+                    enqNo: selectedEnquiry.enqNo,
+                }),
+            ).catch(() => {});
             // FIX #15b: Emit event so listeners refresh the list
             DeviceEventEmitter.emit("ENQUIRY_UPDATED");
+
+            const focusDate = effDate || toIso(new Date());
+            const today = toIso(new Date());
+            const focusTab =
+                focusDate === today
+                    ? "Today"
+                    : tabUsesExactDateFilter(activeTab)
+                      ? activeTab
+                      : "All";
+
+            if (isRescheduleFromMissed) {
+                setShowMissedModal(false);
+                setSelectedDate(focusDate);
+                setActiveTab(focusTab);
+            }
             // FIX #14: Clear entire list and refresh to properly handle status changes
             // across tabs (e.g., drop → contacted). Old approach only refreshed activeTab,
             // but item stayed in old section if status changed to different category.
@@ -4813,7 +4868,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 showIndicator: false,
                 allowCache: true,
             });
-            if (["Contacted", "Interested", "Converted"].includes(editStatus))
+            if (["Contacted", "Interested", "Converted"].includes(effectiveStatus))
                 confettiRef.current?.play?.();
             resetFollowUpComposer();
             setSelectedEnquiry(null);
@@ -4825,7 +4880,12 @@ export default function FollowUpScreen({ navigation, route }) {
                     : "Follow-up saved successfully.",
             );
         } catch (e) {
-            Alert.alert("Error", e.response?.data?.message || "Could not save");
+            const message =
+                e?.response?.data?.message ||
+                e?.response?.data?.error ||
+                e?.message ||
+                "Could not save";
+            Alert.alert("Error", String(message));
         } finally {
             setIsSavingEdit(false);
         }

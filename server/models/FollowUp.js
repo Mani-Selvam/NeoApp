@@ -48,6 +48,11 @@ const followUpSchema = new mongoose.Schema({
         required: true,
     },
     status: { type: String, default: "Scheduled" }, // Scheduled, Missed, Completed
+    // Only one follow-up per enquiry should be considered "current"/priority at a time.
+    // When a new follow-up is created for the same enquiry, older ones are marked isCurrent=false
+    // so they don't keep showing in Today/Missed/Dashboard lists.
+    isCurrent: { type: Boolean, default: true },
+    supersededAt: { type: Date },
     amount: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
 });
@@ -61,6 +66,7 @@ followUpSchema.index({ enqId: 1 });
 followUpSchema.index({ enqNo: 1 });
 followUpSchema.index({ userId: 1, nextFollowUpDate: 1, status: 1 });
 followUpSchema.index({ assignedTo: 1, nextFollowUpDate: 1, status: 1 });
+followUpSchema.index({ userId: 1, enqNo: 1, isCurrent: 1, date: -1 });
 
 followUpSchema.pre("validate", function syncLegacyFields() {
   if (!this.activityType) this.activityType = this.type || "WhatsApp";
@@ -70,6 +76,7 @@ followUpSchema.pre("validate", function syncLegacyFields() {
   if (!this.followUpDate && this.date) this.followUpDate = this.date;
   if (!this.nextFollowUpDate && this.date) this.nextFollowUpDate = this.date;
   if (!this.activityTime) this.activityTime = new Date();
+  if (this.isCurrent === undefined) this.isCurrent = true;
 
   const dateStr = this.nextFollowUpDate || this.followUpDate || this.date;
   const timeStr = this.time;

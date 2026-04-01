@@ -229,6 +229,7 @@ const buildFollowUpScopedFilter = (scope) => {
 const SALES_REGEX = /^(sales|converted)$/i;
 const DROP_REGEX = /^(drop|dropped|closed|not interested)$/i;
 const COMPLETED_REGEX = /^completed$/i;
+const CURRENT_FOLLOWUP_CLAUSE = { isCurrent: { $ne: false } };
 
 const emitFollowUpChanged = async (req, payload = {}) => {
     try {
@@ -361,6 +362,7 @@ router.get("/", verifyToken, async (req, res) => {
                         const missedResult = await FollowUp.updateMany(
                             {
                                 ...query,
+                                ...CURRENT_FOLLOWUP_CLAUSE,
                                 date: referenceDate,
                                 dueAt: { $lte: now },
                                 status: {
@@ -432,6 +434,7 @@ router.get("/", verifyToken, async (req, res) => {
                         // Backfill missed status for legacy rows missing `dueAt` but having a past `time` today.
                         const legacy = await FollowUp.find({
                             ...query,
+                            ...CURRENT_FOLLOWUP_CLAUSE,
                             date: referenceDate,
                             $or: [
                                 { dueAt: null },
@@ -545,6 +548,7 @@ router.get("/", verifyToken, async (req, res) => {
                                   },
                               ]
                             : []),
+                        CURRENT_FOLLOWUP_CLAUSE,
                         {
                             $nor: [
                                 { status: SALES_REGEX },
@@ -563,6 +567,10 @@ router.get("/", verifyToken, async (req, res) => {
                         date: { $gt: referenceDate },
                         ...activeFilter,
                     });
+                    query.$and = [
+                        ...(Array.isArray(query.$and) ? query.$and : []),
+                        CURRENT_FOLLOWUP_CLAUSE,
+                    ];
                 } else if (tab === "Missed") {
                     // Missed items: must have status="Missed" OR be past due (for backcompat)
                     Object.assign(query, {
@@ -609,6 +617,7 @@ router.get("/", verifyToken, async (req, res) => {
                                     : []),
                             ],
                         },
+                        CURRENT_FOLLOWUP_CLAUSE,
                         {
                             $nor: [
                                 { status: SALES_REGEX },
@@ -640,7 +649,13 @@ router.get("/", verifyToken, async (req, res) => {
                         ],
                     });
                 } else if (tab === "All") {
-                    // No additional filters
+                    // "All" is still a priority list (not timeline history).
+                    // Keep only the latest/current follow-up per enquiry to avoid old missed items
+                    // affecting calendar/dashboard priority.
+                    query.$and = [
+                        ...(Array.isArray(query.$and) ? query.$and : []),
+                        CURRENT_FOLLOWUP_CLAUSE,
+                    ];
                 } else if (tab === "Completed") {
                     Object.assign(query, { status: "Completed" });
                 }
@@ -879,6 +894,22 @@ router.post("/", verifyToken, async (req, res) => {
 
         const saved = await newFollowUp.save();
 
+        // Make the newly created follow-up the only "current"/priority one for this enquiry.
+        // Older items (including Missed) stay in History but won't show in Today/Missed/Dashboard.
+        try {
+            const supersedeFilter = {
+                userId: ownerId,
+                enqNo,
+                _id: { $ne: saved._id },
+                isCurrent: { $ne: false },
+            };
+            await FollowUp.updateMany(supersedeFilter, {
+                $set: { isCurrent: false, supersededAt: new Date() },
+            });
+        } catch (_supersedeError) {
+            // Don't fail creation if we can't supersede older rows.
+        }
+
         if (saved?.enqId) {
             const nextAction = String(saved.nextAction || "").toLowerCase();
             const activityType = String(
@@ -1042,6 +1073,38 @@ router.delete("/:id", verifyToken, async (req, res) => {
                 .json({ message: "Follow-up not found or unauthorized" });
         }
 
+        // If the current/priority follow-up is deleted, restore priority to the most recent previous one
+        // for the same enquiry (so old items aren't "ignored forever").
+        let restored = null;
+        try {
+            const ownerId = followUp?.userId;
+            const enqNo = String(followUp?.enqNo || "").trim();
+            const deletedWasCurrent = followUp?.isCurrent !== false;
+            if (deletedWasCurrent && ownerId && enqNo) {
+                const candidate = await FollowUp.findOne({
+                    userId: ownerId,
+                    enqNo,
+                })
+                    .sort({ activityTime: -1, createdAt: -1 })
+                    .select("_id enqId enqNo assignedTo userId")
+                    .lean();
+
+                if (candidate?._id) {
+                    await FollowUp.updateMany(
+                        { userId: ownerId, enqNo, _id: { $ne: candidate._id } },
+                        { $set: { isCurrent: false } },
+                    );
+                    restored = await FollowUp.findByIdAndUpdate(
+                        candidate._id,
+                        { $set: { isCurrent: true }, $unset: { supersededAt: 1 } },
+                        { returnDocument: "after" },
+                    ).lean();
+                }
+            }
+        } catch (_restoreError) {
+            // ignore priority restoration errors
+        }
+
         cache.invalidate("followups");
         cache.invalidate("dashboard");
         cache.invalidate("enquiries");
@@ -1052,6 +1115,15 @@ router.delete("/:id", verifyToken, async (req, res) => {
             enqNo: followUp?.enqNo || "",
             assignedTo: followUp?.assignedTo || null,
         });
+        if (restored?._id) {
+            await emitFollowUpChanged(req, {
+                action: "priorityRestored",
+                followUpId: String(restored?._id || ""),
+                enqId: String(restored?.enqId || ""),
+                enqNo: restored?.enqNo || followUp?.enqNo || "",
+                assignedTo: restored?.assignedTo || null,
+            });
+        }
         res.json({ message: "Follow-up deleted", data: followUp });
     } catch (err) {
         console.error("Delete error:", err);

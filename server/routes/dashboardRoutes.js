@@ -203,6 +203,9 @@ router.get("/summary", verifyToken, async (req, res) => {
                 nextAction: { $nin: ["Drop", "Dropped", "dropped", "drop"] },
                 activityType: { $ne: "System" },
                 type: { $ne: "System" },
+                // Only show the latest follow-up per enquiry as the priority item.
+                // Legacy rows without `isCurrent` should still be treated as current.
+                isCurrent: { $ne: false },
                 // Hide call-log derived follow-ups (calls should appear only in Call Log screen).
                 note: { $ne: "Enquiry created", $not: /^Call:/i },
                 remarks: { $ne: "Enquiry created", $not: /^Call:/i },
@@ -220,6 +223,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                     await FollowUp.updateMany(
                         {
                             ...query,
+                            isCurrent: { $ne: false },
                             date: today,
                             dueAt: { $lte: now },
                             status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
@@ -229,6 +233,7 @@ router.get("/summary", verifyToken, async (req, res) => {
 
                     const legacyRows = await FollowUp.find({
                         ...query,
+                        isCurrent: { $ne: false },
                         date: today,
                         time: { $exists: true, $ne: null, $ne: "" },
                         status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },

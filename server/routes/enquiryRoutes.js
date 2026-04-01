@@ -308,12 +308,13 @@ router.get("/", verifyToken, async (req, res) => {
         query.assignedTo = assignedTo;
       }
 
-      if (followUpDate) {
-        const followUpScope = {
-          userId: query.userId,
-          date: followUpDate,
-        };
-        if (query.assignedTo) followUpScope.assignedTo = query.assignedTo;
+        if (followUpDate) {
+          const followUpScope = {
+            userId: query.userId,
+            isCurrent: { $ne: false },
+            date: followUpDate,
+          };
+          if (query.assignedTo) followUpScope.assignedTo = query.assignedTo;
 
         const matchingFollowUps = await FollowUp.find(followUpScope)
           .select("enqId")
@@ -381,6 +382,7 @@ router.get("/", verifyToken, async (req, res) => {
         const followUpScope = {
           userId: query.userId,
           enqId: { $in: enquiryIds },
+          isCurrent: { $ne: false },
         };
         if (query.assignedTo) followUpScope.assignedTo = query.assignedTo;
         if (followUpDate) followUpScope.date = followUpDate;
@@ -682,7 +684,7 @@ router.get("/:id/detail", verifyToken, async (req, res) => {
       })
       .sort({ activityTime: 1, createdAt: 1 })
       .select(
-        "activityType type note remarks followUpDate nextFollowUpDate date staffName assignedTo status nextAction createdAt activityTime",
+        "activityType type note remarks followUpDate nextFollowUpDate date staffName assignedTo status nextAction createdAt activityTime isCurrent",
       )
       .populate("assignedTo", "name")
       .lean();
@@ -691,7 +693,7 @@ router.get("/:id/detail", verifyToken, async (req, res) => {
     const upcomingReminders = timeline.filter((item) => {
       const nextDate = item.nextFollowUpDate || item.followUpDate || item.date;
       const isClosed = ["Completed", "Drop", "Dropped"].includes(item.status);
-      return nextDate && nextDate >= today && !isClosed;
+      return nextDate && nextDate >= today && !isClosed && item?.isCurrent !== false;
     });
 
     res.json({
@@ -747,6 +749,7 @@ router.get("/meta/reminders", verifyToken, async (req, res) => {
     const today = new Date().toISOString().split("T")[0];
     const reminders = await FollowUp.find({
       ...baseFilter,
+      isCurrent: { $ne: false },
       status: { $nin: ["Completed", "Drop", "Dropped"] },
       $or: [
         { nextFollowUpDate: { $gte: today } },
@@ -787,6 +790,7 @@ router.get("/meta/followup-status-summary", verifyToken, async (req, res) => {
 
     const followUps = await FollowUp.find({
       ...baseFilter,
+      isCurrent: { $ne: false },
       date: selectedDate,
     })
       .select("enqId")
@@ -840,11 +844,13 @@ router.get("/meta/report-summary", verifyToken, async (req, res) => {
       Enquiry.countDocuments({ ...enquiryFilter, status: "Converted" }),
       FollowUp.countDocuments({
         ...followFilter,
+        isCurrent: { $ne: false },
         status: { $nin: ["Completed", "Drop", "Dropped"] },
         $or: [{ nextFollowUpDate: { $gte: today } }, { date: { $gte: today } }],
       }),
       FollowUp.countDocuments({
         ...followFilter,
+        isCurrent: { $ne: false },
         status: { $nin: ["Completed", "Drop", "Dropped"] },
         $or: [{ nextFollowUpDate: { $lt: today } }, { date: { $lt: today } }],
       }),

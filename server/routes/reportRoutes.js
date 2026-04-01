@@ -42,8 +42,8 @@ router.get("/stats", verifyToken, async (req, res) => {
         });
 
         // Followup stats
-        const todayFollowups = await FollowUp.countDocuments({ ...query, date: today });
-        const upcomingFollowups = await FollowUp.countDocuments({ ...query, date: { $gt: today } });
+        const todayFollowups = await FollowUp.countDocuments({ ...query, isCurrent: { $ne: false }, date: today });
+        const upcomingFollowups = await FollowUp.countDocuments({ ...query, isCurrent: { $ne: false }, date: { $gt: today } });
         const completedFollowups = await FollowUp.countDocuments({ ...query, status: "Completed" });
 
         // Conversion rate
@@ -104,6 +104,7 @@ router.get("/list", verifyToken, async (req, res) => {
             if (filter === "today") query.date = today;
             else if (filter === "completed") query.status = "Completed";
 
+            if (filter !== "completed") query.isCurrent = { $ne: false };
             data = await FollowUp.find(query).sort({ date: -1 }).populate("enqId").lean();
         } else if (type === "conversion") {
             data = await Enquiry.find({ ...baseQuery, status: "Converted" }).sort({ createdAt: -1 }).lean();
