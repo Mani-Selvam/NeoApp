@@ -8,6 +8,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -47,6 +48,12 @@ import { HomeSkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
 import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
 import { getImageUrl } from "../services/apiConfig";
+import {
+  buildCacheKey,
+  getCacheEntry,
+  isFresh,
+  setCacheEntry,
+} from "../services/appCache";
 import * as dashboardService from "../services/dashboardService";
 import { getBillingCoupons } from "../services/userService";
 import notificationService from "../services/notificationService";
@@ -131,6 +138,8 @@ const fmtWeekday3 = (iso) => {
   if (!dt) return "";
   return dt.toLocaleDateString(undefined, { weekday: "short" }); // Mon, Tue...
 };
+
+const HOME_CACHE_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_HOME_MS || 60000);
 
 // Hook: returns { bp, w, h, isTablet, isDesktop, isSmallPhone }
 const useResponsive = () => {
@@ -1058,9 +1067,59 @@ export default function HomeScreen({ navigation }) {
     return `${pct > 0 ? "+" : ""}${pct}%`;
   })();
 
-  const fetchData = useCallback(async () => {
+  const dashboardCacheKey = useMemo(
+    () =>
+      buildCacheKey(
+        "homeDashboard:v1",
+        user?.id || user?._id || "",
+        rangeType,
+        rangeAnchor,
+      ),
+    [rangeAnchor, rangeType, user?.id, user?._id],
+  );
+
+  const hydrateDashboard = useCallback((payload) => {
+    const data = payload?.dashboard;
+    const couponData = payload?.coupons;
+    if (data) {
+      setStats({
+        totalEnquiry: data.totalEnquiry || 0,
+        todayFollowup: Number(data.todayFollowUps || 0),
+        missedFollowup: Number(data.missedFollowUps || 0),
+        salesMonthly: data.salesMonthly || 0,
+        monthlyRevenue: data.monthlyRevenue || 0,
+        overallSalesAmount: data.overallSalesAmount || 0,
+        prevRevenue: Number(data.prevRevenue || 0),
+        revenueChangePct:
+          data.revenueChangePct === null || data.revenueChangePct === undefined
+            ? null
+            : Number(data.revenueChangePct),
+        weekSales: Array.isArray(data.weekSales) ? data.weekSales : [],
+        drops: data.counts?.dropped || 0,
+        new: data.counts?.new || 0,
+        ip: data.counts?.inProgress || 0,
+        conv: data.counts?.converted || 0,
+      });
+      setTodayTasks(data.todayList || []);
+      setMissedTasks(data.missedList || []);
+    }
+    if (Array.isArray(couponData)) setCoupons(couponData);
+  }, []);
+
+  const fetchData = useCallback(async ({ force = false, showLoading = true } = {}) => {
     try {
-      setLoading(true);
+      let usedCache = false;
+      const cached = await getCacheEntry(dashboardCacheKey).catch(() => null);
+      if (cached?.value) {
+        hydrateDashboard(cached.value);
+        usedCache = true;
+        setLoading(false);
+      }
+
+      const shouldFetch = force || !isFresh(cached, HOME_CACHE_TTL_MS);
+      if (!shouldFetch) return;
+
+      if (showLoading && !usedCache) setLoading(true);
       const [data, couponData] = await Promise.all([
         dashboardService.getDashboardSummary({
           range: rangeType,
@@ -1068,29 +1127,12 @@ export default function HomeScreen({ navigation }) {
         }),
         getBillingCoupons().catch(() => ({ coupons: [] })),
       ]);
-      if (data) {
-        setStats({
-          totalEnquiry: data.totalEnquiry || 0,
-          todayFollowup: Number(data.todayFollowUps || 0),
-          missedFollowup: Number(data.missedFollowUps || 0),
-          salesMonthly: data.salesMonthly || 0,
-          monthlyRevenue: data.monthlyRevenue || 0,
-          overallSalesAmount: data.overallSalesAmount || 0,
-          prevRevenue: Number(data.prevRevenue || 0),
-          revenueChangePct:
-            data.revenueChangePct === null || data.revenueChangePct === undefined
-              ? null
-              : Number(data.revenueChangePct),
-          weekSales: Array.isArray(data.weekSales) ? data.weekSales : [],
-          drops: data.counts?.dropped || 0,
-          new: data.counts?.new || 0,
-          ip: data.counts?.inProgress || 0,
-          conv: data.counts?.converted || 0,
-        });
-        setTodayTasks(data.todayList || []);
-        setMissedTasks(data.missedList || []);
-      }
-      setCoupons(couponData?.coupons || []);
+      const payload = {
+        dashboard: data || null,
+        coupons: couponData?.coupons || [],
+      };
+      hydrateDashboard(payload);
+      await setCacheEntry(dashboardCacheKey, payload).catch(() => {});
     } catch (err) {
       const status = err?.response?.status;
       const code = err?.response?.data?.code;
@@ -1113,7 +1155,7 @@ export default function HomeScreen({ navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [rangeType, rangeAnchor]);
+  }, [dashboardCacheKey, hydrateDashboard, rangeType, rangeAnchor]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -1127,13 +1169,13 @@ export default function HomeScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
+      fetchData({ force: false, showLoading: true });
     }, [fetchData]),
   );
 
   useEffect(() => {
     const refreshCoupons = () => {
-      fetchData();
+      fetchData({ force: true, showLoading: false });
     };
     const announcementSub = DeviceEventEmitter.addListener(
       "COUPON_ANNOUNCEMENT",
@@ -1507,7 +1549,7 @@ export default function HomeScreen({ navigation }) {
             refreshing={refreshing}
             onRefresh={() => {
               setRefreshing(true);
-              fetchData();
+              fetchData({ force: true, showLoading: false });
             }}
             tintColor={C.blue}
             colors={[C.blue]}

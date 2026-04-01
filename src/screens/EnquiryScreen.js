@@ -43,6 +43,12 @@ import AppSideMenu from "../components/AppSideMenu";
 import { EnquirySkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
 import { API_URL as GLOBAL_API_URL } from "../services/apiConfig";
+import {
+    buildCacheKey,
+    getCacheEntry,
+    isFresh,
+    setCacheEntry,
+} from "../services/appCache";
 import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
@@ -64,6 +70,9 @@ const AUTO_SAVE_CALL_LOGS =
     String(process.env.EXPO_PUBLIC_CALL_AUTO_SAVE ?? "false")
         .trim()
         .toLowerCase() === "true";
+const ENQUIRIES_CACHE_TTL_MS = Number(
+    process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000,
+);
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -1009,9 +1018,36 @@ export default function EnquiryListScreen({ navigation, route }) {
 
     // ── Data fetching ──────────────────────────────────────────────────────────
     const fetchEnquiries = useCallback(
-        async (refresh = false) => {
+        async (refresh = false, opts = {}) => {
+            const { showIndicator = false, force = false, allowCache = true } =
+                opts || {};
+
+            const cacheKey = buildCacheKey(
+                "enquiries:list:v1",
+                user?.id || user?._id || "",
+                selectedDate || "",
+                String(searchQuery || "").trim().toLowerCase(),
+            );
+
+            let cached = null;
+            if (refresh && allowCache) {
+                cached = await getCacheEntry(cacheKey).catch(() => null);
+                if (cached?.value?.items) {
+                    const cachedItems = Array.isArray(cached.value.items)
+                        ? cached.value.items
+                        : [];
+                    setEnquiries(dedupeEnquiries(cachedItems));
+                    setHasMore(Boolean(cached.value.hasMore));
+                    setPage(Number(cached.value.page || 1));
+                    if (!showIndicator) setIsLoading(false);
+                }
+            }
+
             if (refresh) {
-                setIsLoading(true);
+                const shouldFetch =
+                    force || !isFresh(cached, ENQUIRIES_CACHE_TTL_MS);
+                if (!shouldFetch) return;
+                if (showIndicator) setIsLoading(true);
             } else {
                 if (!hasMore || isLoadingMore) return;
                 setIsLoadingMore(true);
@@ -1058,13 +1094,22 @@ export default function EnquiryListScreen({ navigation, route }) {
                         if (loadedPages >= totalPages) break;
                     }
 
-                    setEnquiries(dedupeEnquiries(merged));
-                    setHasMore(totalPages ? loadedPages < totalPages : false);
-                    setPage(
-                        totalPages
-                            ? Math.min(loadedPages + 1, totalPages + 1)
-                            : 1,
-                    );
+                    const nextItems = dedupeEnquiries(merged);
+                    const nextHasMore = totalPages
+                        ? loadedPages < totalPages
+                        : false;
+                    const nextPage = totalPages
+                        ? Math.min(loadedPages + 1, totalPages + 1)
+                        : 1;
+
+                    setEnquiries(nextItems);
+                    setHasMore(nextHasMore);
+                    setPage(nextPage);
+                    await setCacheEntry(cacheKey, {
+                        items: nextItems,
+                        hasMore: nextHasMore,
+                        page: nextPage,
+                    }).catch(() => {});
                 } else {
                     const pg = page;
                     const res = await enquiryService.getAllEnquiries(
@@ -1084,10 +1129,23 @@ export default function EnquiryListScreen({ navigation, route }) {
                         totalPages = res.pagination?.pages || 1;
                         setHasMore(pg < totalPages);
                     }
-                    setEnquiries((p) =>
-                        dedupeEnquiries([...(p || []), ...data]),
-                    );
-                    setPage((p) => p + 1);
+                    const nextItems = dedupeEnquiries([
+                        ...(enquiries || []),
+                        ...data,
+                    ]);
+                    const nextHasMore = Array.isArray(res)
+                        ? false
+                        : pg < totalPages;
+                    const nextPage = pg + 1;
+
+                    setEnquiries(nextItems);
+                    setHasMore(nextHasMore);
+                    setPage(nextPage);
+                    await setCacheEntry(cacheKey, {
+                        items: nextItems,
+                        hasMore: nextHasMore,
+                        page: nextPage,
+                    }).catch(() => {});
                 }
             } catch (e) {
                 console.error(e);
@@ -1104,6 +1162,8 @@ export default function EnquiryListScreen({ navigation, route }) {
             searchQuery,
             selectedDate,
             dedupeEnquiries,
+            user?.id,
+            user?._id,
         ],
     );
 
@@ -1111,14 +1171,22 @@ export default function EnquiryListScreen({ navigation, route }) {
         fetchRef.current = fetchEnquiries;
     }, [fetchEnquiries]);
     useEffect(() => {
-        fetchEnquiries(true);
+        fetchEnquiries(true, {
+            showIndicator: false,
+            force: false,
+            allowCache: true,
+        });
     }, []);
     useEffect(() => {
         if (isInitialMount.current) {
             isInitialMount.current = false;
             return;
         }
-        fetchEnquiries(true);
+        fetchEnquiries(true, {
+            showIndicator: false,
+            force: false,
+            allowCache: true,
+        });
     }, [selectedDate]);
     useEffect(() => {
         if (isInitialMount.current) return;
@@ -1126,7 +1194,15 @@ export default function EnquiryListScreen({ navigation, route }) {
             skipNextSearch.current = false;
             return;
         }
-        const t = setTimeout(() => fetchEnquiries(true), 500);
+        const t = setTimeout(
+            () =>
+                fetchEnquiries(true, {
+                    showIndicator: false,
+                    force: false,
+                    allowCache: true,
+                }),
+            500,
+        );
         return () => clearTimeout(t);
     }, [searchQuery]);
 
@@ -1165,7 +1241,11 @@ export default function EnquiryListScreen({ navigation, route }) {
 	                        .then((saved) => {
 	                            if (!saved?._id) return;
 	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-	                            fetchEnquiries(true);
+	                            fetchEnquiries(true, {
+	                                showIndicator: false,
+	                                force: true,
+	                                allowCache: true,
+	                            });
 	                        })
 	                        .catch(() => {});
 
@@ -1253,7 +1333,11 @@ export default function EnquiryListScreen({ navigation, route }) {
 	                        });
 	                        if (saved?._id) {
 	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-	                            fetchEnquiries(true);
+	                            fetchEnquiries(true, {
+	                                showIndicator: false,
+	                                force: true,
+	                                allowCache: true,
+	                            });
 	                        }
 	                    } catch (_e) {}
 
@@ -1276,28 +1360,44 @@ export default function EnquiryListScreen({ navigation, route }) {
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () =>
-            fetchEnquiries(true),
+            fetchEnquiries(true, {
+                showIndicator: false,
+                force: true,
+                allowCache: true,
+            }),
         );
         return () => sub.remove();
     }, []);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("ENQUIRY_CREATED", () =>
-            fetchEnquiries(true),
+            fetchEnquiries(true, {
+                showIndicator: false,
+                force: true,
+                allowCache: true,
+            }),
         );
         return () => sub.remove();
     }, [fetchEnquiries]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () =>
-            fetchEnquiries(true),
+            fetchEnquiries(true, {
+                showIndicator: false,
+                force: true,
+                allowCache: true,
+            }),
         );
         return () => sub.remove();
     }, [fetchEnquiries]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () =>
-            fetchEnquiries(true),
+            fetchEnquiries(true, {
+                showIndicator: false,
+                force: true,
+                allowCache: true,
+            }),
         );
         return () => sub.remove();
     }, [fetchEnquiries]);
@@ -1386,7 +1486,11 @@ export default function EnquiryListScreen({ navigation, route }) {
             setCallEnquiry(null);
             setAutoCallData(null);
             DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-            fetchEnquiries(true);
+            fetchEnquiries(true, {
+                showIndicator: false,
+                force: true,
+                allowCache: true,
+            });
             if (data?.followUpCreated && pendingEnquiry) {
                 setTimeout(() => {
                     navigation.navigate("FollowUp", {
@@ -1704,7 +1808,13 @@ export default function EnquiryListScreen({ navigation, route }) {
                     listEnquiries.length === 0 && { flex: 1 },
                 ]}
                 refreshing={isLoading && listEnquiries.length > 0}
-                onRefresh={() => fetchEnquiries(true)}
+                onRefresh={() =>
+                    fetchEnquiries(true, {
+                        showIndicator: true,
+                        force: true,
+                        allowCache: false,
+                    })
+                }
                 onEndReached={() => {
                     if (!isLoading && !isLoadingMore && hasMore)
                         fetchEnquiries(false);

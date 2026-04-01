@@ -46,6 +46,12 @@ import ConfettiBurst from "../components/ConfettiBurst";
 import { PostCallModal } from "../components/PostCallModal";
 import { FollowUpSkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
+import {
+    buildCacheKey,
+    getCacheEntry,
+    isFresh,
+    setCacheEntry,
+} from "../services/appCache";
 import * as callLogService from "../services/callLogService";
 import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
@@ -63,6 +69,9 @@ const AUTO_SAVE_CALL_LOGS =
     String(process.env.EXPO_PUBLIC_CALL_AUTO_SAVE ?? "false")
         .trim()
         .toLowerCase() === "true";
+const FOLLOWUPS_CACHE_TTL_MS = Number(
+    process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 60000,
+);
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -3968,7 +3977,11 @@ export default function FollowUpScreen({ navigation, route }) {
             );
 
             // Server also auto-marks Missed on /followups, so refresh both list + counts.
-            fetchFollowUps(activeTab, true);
+            fetchFollowUps(activeTab, true, {
+                force: true,
+                showIndicator: false,
+                allowCache: true,
+            });
             fetchTabCounts(selectedDate).catch(() => {});
             if (showMissedModal) loadMissedModalItems(selectedDate);
         };
@@ -4122,7 +4135,11 @@ export default function FollowUpScreen({ navigation, route }) {
 	                            if (!saved?._id) return;
 	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
 	                            lastFetch.current = 0;
-	                            fetchFollowUps(activeTab, true);
+	                            fetchFollowUps(activeTab, true, {
+	                                force: true,
+	                                showIndicator: false,
+	                                allowCache: true,
+	                            });
 	                        })
 	                        .catch(() => {});
 
@@ -4211,7 +4228,11 @@ export default function FollowUpScreen({ navigation, route }) {
 	                        if (saved?._id) {
 	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
 	                            lastFetch.current = 0;
-	                            fetchFollowUps(activeTab, true);
+	                            fetchFollowUps(activeTab, true, {
+	                                force: true,
+	                                showIndicator: false,
+	                                allowCache: true,
+	                            });
 	                        }
 	                    } catch (_e) {}
 
@@ -4235,7 +4256,11 @@ export default function FollowUpScreen({ navigation, route }) {
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
             lastFetch.current = 0;
-            fetchFollowUps(activeTab, true);
+            fetchFollowUps(activeTab, true, {
+                force: true,
+                showIndicator: false,
+                allowCache: true,
+            });
         });
         return () => sub.remove();
     }, [activeTab]);
@@ -4243,7 +4268,11 @@ export default function FollowUpScreen({ navigation, route }) {
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () => {
             lastFetch.current = 0;
-            fetchFollowUps(activeTab, true);
+            fetchFollowUps(activeTab, true, {
+                force: true,
+                showIndicator: false,
+                allowCache: true,
+            });
             if (showMissedModal) loadMissedModalItems(selectedDate);
             if (showDroppedModal) loadDroppedModalItems();
         });
@@ -4256,7 +4285,11 @@ export default function FollowUpScreen({ navigation, route }) {
             // status changes across tabs (prevents stale items from old sections)
             setFollowUps([]);
             lastFetch.current = 0;
-            fetchFollowUps(activeTab, true);
+            fetchFollowUps(activeTab, true, {
+                force: true,
+                showIndicator: false,
+                allowCache: true,
+            });
         });
         return () => sub.remove();
     }, [activeTab]);
@@ -4353,13 +4386,41 @@ export default function FollowUpScreen({ navigation, route }) {
         }
     };
 
-    const fetchFollowUps = async (tab, refresh = false) => {
+    const fetchFollowUps = async (tab, refresh = false, opts = {}) => {
         const rid = ++fetchIdRef.current;
+        const { force = false, allowCache = true } = opts || {};
+        const showIndicator =
+            opts?.showIndicator ?? (refresh && followUps.length > 0);
+
+        const cacheKey = buildCacheKey(
+            "followups:list:v1",
+            user?.id || user?._id || "",
+            tab,
+            selectedDate || "",
+            String(searchQuery || "").trim().toLowerCase(),
+        );
+
+        let cached = null;
+        if (refresh && allowCache) {
+            cached = await getCacheEntry(cacheKey).catch(() => null);
+            if (cached?.value?.items) {
+                const cachedItems = Array.isArray(cached.value.items)
+                    ? cached.value.items
+                    : [];
+                setFollowUps(cachedItems);
+                setHasMore(Boolean(cached.value.hasMore));
+                setPage(Number(cached.value.page || 1));
+                if (typeof cached.t === "number") lastFetch.current = cached.t;
+                if (!showIndicator) setIsLoading(false);
+            }
+        }
+
         if (refresh) {
-            setIsLoading(true);
+            const shouldFetch = force || !isFresh(cached, FOLLOWUPS_CACHE_TTL_MS);
+            if (!shouldFetch) return;
+            if (showIndicator) setIsLoading(true);
             setPage(1);
             setHasMore(true);
-            if (followUps.length === 0) setFollowUps([]);
         } else {
             if (!hasMore || isLoadingMore) return;
             setIsLoadingMore(true);
@@ -4396,13 +4457,28 @@ export default function FollowUpScreen({ navigation, route }) {
                         allowedStatuses.includes(normalizeStatus(item?.status)),
                     );
                 data = dedupeByLatestActivity(data);
-                setHasMore(Array.isArray(enquiryRes) ? false : pg < total);
-                if (refresh) setFollowUps(data);
-                else setFollowUps((p) => mergeUniqueFollowUpCards(p, data));
+                const nextHasMore = Array.isArray(enquiryRes)
+                    ? false
+                    : pg < total;
+                const nextItems = refresh
+                    ? data
+                    : mergeUniqueFollowUpCards(followUps, data);
+                const nextPage = refresh
+                    ? data.length > 0 && pg < total
+                        ? 2
+                        : 1
+                    : pg + 1;
+
+                setHasMore(nextHasMore);
+                setFollowUps(nextItems);
                 if (refresh) fetchTabCounts(selectedDate);
                 lastFetch.current = Date.now();
-                if (!refresh) setPage((p) => p + 1);
-                else if (data.length > 0 && pg < total) setPage(2);
+                setPage(nextPage);
+                await setCacheEntry(cacheKey, {
+                    items: nextItems,
+                    hasMore: nextHasMore,
+                    page: nextPage,
+                }).catch(() => {});
                 return;
             }
             const requestParams = tab === "All" ? monthRange : {};
@@ -4463,13 +4539,26 @@ export default function FollowUpScreen({ navigation, route }) {
                 );
             }
             data = dedupeByLatestActivity(data);
-            setHasMore(Array.isArray(res) ? false : pg < total);
-            if (refresh) setFollowUps(data);
-            else setFollowUps((p) => mergeUniqueFollowUpCards(p, data));
+            const nextHasMore = Array.isArray(res) ? false : pg < total;
+            const nextItems = refresh
+                ? data
+                : mergeUniqueFollowUpCards(followUps, data);
+            const nextPage = refresh
+                ? data.length > 0 && pg < total
+                    ? 2
+                    : 1
+                : pg + 1;
+
+            setHasMore(nextHasMore);
+            setFollowUps(nextItems);
             if (refresh) fetchTabCounts(filterDate || selectedDate);
             lastFetch.current = Date.now();
-            if (!refresh) setPage((p) => p + 1);
-            else if (data.length > 0 && pg < total) setPage(2);
+            setPage(nextPage);
+            await setCacheEntry(cacheKey, {
+                items: nextItems,
+                hasMore: nextHasMore,
+                page: nextPage,
+            }).catch(() => {});
         } catch (e) {
             console.error(e);
         } finally {
@@ -4719,7 +4808,11 @@ export default function FollowUpScreen({ navigation, route }) {
             // but item stayed in old section if status changed to different category.
             setFollowUps([]);
             lastFetch.current = 0;
-            fetchFollowUps(activeTab, true);
+            fetchFollowUps(activeTab, true, {
+                force: true,
+                showIndicator: false,
+                allowCache: true,
+            });
             if (["Contacted", "Interested", "Converted"].includes(editStatus))
                 confettiRef.current?.play?.();
             resetFollowUpComposer();
@@ -4747,7 +4840,11 @@ export default function FollowUpScreen({ navigation, route }) {
             setCallEnquiry(null);
             setAutoCallData(null);
             DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-            fetchFollowUps(activeTab, true);
+            fetchFollowUps(activeTab, true, {
+                force: true,
+                showIndicator: false,
+                allowCache: true,
+            });
         } catch (e) {
             console.error(e);
         }
@@ -5236,7 +5333,13 @@ export default function FollowUpScreen({ navigation, route }) {
                     followUps.length === 0 && { flex: 1 },
                 ]}
                 refreshing={isLoading && followUps.length > 0}
-                onRefresh={() => fetchFollowUps(activeTab, true)}
+                onRefresh={() =>
+                    fetchFollowUps(activeTab, true, {
+                        force: true,
+                        showIndicator: true,
+                        allowCache: false,
+                    })
+                }
                 onEndReached={() => {
                     if (!isLoading && !isLoadingMore && hasMore)
                         fetchFollowUps(activeTab, false);

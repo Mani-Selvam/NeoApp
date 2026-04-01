@@ -598,12 +598,14 @@ const ensureAudioMode = async () => {
     if (audioModeReady) return;
     try {
         // ── FIX #11: Force audio to play even in silent/vibration mode
+        // ── FIX #12: Use DUCK_OTHERS instead of DO_NOT_MIX to avoid AudioFocusNotAcquiredException
+        // DO_NOT_MIX requires exclusive audio focus which OS may deny. DUCK_OTHERS is more permissive.
         await Audio.setAudioModeAsync({
             playsInSilentModeIOS: true, // iOS: override silent switch
             staysActiveInBackground: true,
-            shouldDuckAndroid: false, // Don't lower volume during playback
+            shouldDuckAndroid: true, // Allow lowering other app's volume instead of failing
             playThroughEarpieceAndroid: false,
-            interruptionModeAndroid: Audio.INTERRUPTION_MODE_DO_NOT_MIX ?? 1,
+            interruptionModeAndroid: Audio.INTERRUPTION_MODE_DUCK_OTHERS ?? 2,
             interruptionModeIOS: Audio.INTERRUPTION_MODE_DUCK_OTHERS ?? 2,
         });
         audioModeReady = true;
@@ -725,7 +727,8 @@ const AUDIO_MODULES = {
 // FIX #4/#6: playAudioModule — uses loadAsync + playAsync separately for
 // clearer error surfaces. Also sets _isPlayingAudio flag so the AppState
 // listener never resets audio mode during active playback.
-const playAudioModule = async (moduleRef, retries = 2) => {
+// FIX #12: Improved audio focus handling with longer delays and mode reset between attempts
+const playAudioModule = async (moduleRef, retries = 3) => {
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         let sound = null;
@@ -737,6 +740,14 @@ const playAudioModule = async (moduleRef, retries = 2) => {
                 return false;
             }
             if (Platform.OS === "web") return false;
+
+            // Reset audio mode on retry to ensure fresh audio focus acquisition
+            if (attempt > 0) {
+                audioModeReady = false;
+                console.log(
+                    `[NotifSvc] Resetting audio mode for retry ${attempt + 1}`,
+                );
+            }
 
             await ensureAudioMode();
             await stopActiveFollowupSound();
@@ -780,7 +791,12 @@ const playAudioModule = async (moduleRef, retries = 2) => {
             }
             audioModeReady = false;
             if (attempt < retries) {
-                await new Promise((resolve) => setTimeout(resolve, 300));
+                // FIX #12: Use exponential backoff: 500ms, 1000ms, 1500ms
+                const delayMs = 500 * (attempt + 1);
+                console.log(
+                    `[NotifSvc] Retrying audio playback in ${delayMs}ms...`,
+                );
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
             }
         }
     }

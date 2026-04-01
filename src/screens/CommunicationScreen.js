@@ -463,6 +463,10 @@ export default function CommunicationScreen({ navigation }) {
   // ── Android hardware back ──────────────────────────────────────────────────
   useEffect(() => {
     const onBack = () => {
+      if (previewImageUri) {
+        closeImagePreview();
+        return true;
+      }
       if (view === "chat") {
         unloadCurrentSound().catch(() => {});
         setAudioDraft(null);
@@ -474,7 +478,7 @@ export default function CommunicationScreen({ navigation }) {
     };
     const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
     return () => sub.remove();
-  }, [unloadCurrentSound, view]);
+  }, [closeImagePreview, previewImageUri, unloadCurrentSound, view]);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const adminRoleLabelMap = useMemo(() => {
@@ -1273,6 +1277,15 @@ export default function CommunicationScreen({ navigation }) {
       }
 
       const isMine = isOwnChatMessage(item, selfId);
+      const attachmentMime = String(item?.attachmentMimeType || "")
+        .trim()
+        .toLowerCase();
+      const attachmentUri = item?.attachmentUrl
+        ? getImageUrl(item.attachmentUrl)
+        : "";
+      const isImageMessage =
+        String(item?.messageType || "").toLowerCase() === "image" ||
+        attachmentMime.startsWith("image/");
       const isAudioMessage =
         item?.messageType === "audio" ||
         String(item?.attachmentMimeType || "")
@@ -1286,15 +1299,13 @@ export default function CommunicationScreen({ navigation }) {
           )}
             <View style={[S.msgBubble, isMine ? S.msgBubbleOut : S.msgBubbleIn]}>
               {item.attachmentUrl ? (
-                item.messageType === "image" ? (
+                isImageMessage ? (
                   <TouchableOpacity
                     activeOpacity={0.92}
-                    onPress={() =>
-                      setPreviewImageUri(getImageUrl(item.attachmentUrl))
-                    }
+                    onPress={() => setPreviewImageUri(attachmentUri)}
                   >
                     <Image
-                      source={{ uri: getImageUrl(item.attachmentUrl) }}
+                      source={{ uri: attachmentUri }}
                       style={S.msgImage}
                     />
                   </TouchableOpacity>
@@ -1381,6 +1392,10 @@ export default function CommunicationScreen({ navigation }) {
         <View style={[S.chatHeader, { paddingTop: insets.top + 6 }]}>
           <TouchableOpacity
             onPress={() => {
+              if (previewImageUri) {
+                closeImagePreview();
+                return;
+              }
               setView("list");
               setMessages([]);
             }}
@@ -1589,6 +1604,35 @@ export default function CommunicationScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+
+        <Modal
+          visible={Boolean(previewImageUri)}
+          transparent
+          animationType="fade"
+          onRequestClose={closeImagePreview}
+        >
+          <View style={S.imagePreviewOverlay}>
+            <TouchableOpacity
+              style={S.imagePreviewBackdrop}
+              activeOpacity={1}
+              onPress={closeImagePreview}
+            />
+            <TouchableOpacity
+              style={S.imagePreviewClose}
+              activeOpacity={0.85}
+              onPress={closeImagePreview}
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
+            {previewImageUri ? (
+              <Image
+                source={{ uri: previewImageUri }}
+                style={S.imagePreviewFull}
+                resizeMode="contain"
+              />
+            ) : null}
+          </View>
+        </Modal>
       </SafeAreaView>
     );
   }
@@ -2561,8 +2605,8 @@ const S = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.14)",
   },
   imagePreviewFull: {
-    width: "92%",
-    height: "78%",
+    width: "100%",
+    height: "100%",
   },
   docRow: {
     flexDirection: "row",

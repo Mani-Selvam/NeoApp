@@ -91,6 +91,7 @@ const TIME_PERIODS = [
   { key: "Today", label: "Today" },
   { key: "This Week", label: "Week" },
 ];
+const DEVICE_SYNC_ENABLED = isRestrictedCallMonitoringEnabled();
 const isExpoGo = () =>
   Constants.executionEnvironment === "storeClient" ||
   Constants.appOwnership === "expo";
@@ -1405,6 +1406,27 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
           )}
         </TouchableOpacity>
       </View>
+
+      {!DEVICE_SYNC_ENABLED && Platform.OS === "android" ? (
+        <View
+          style={{
+            marginTop: 10,
+            padding: 10,
+            borderRadius: 12,
+            backgroundColor: "#FFFBEB",
+            borderWidth: 1,
+            borderColor: "#FDE68A",
+          }}
+        >
+          <Text style={{ fontSize: 12, color: "#92400E", fontWeight: "700" }}>
+            Auto call-log sync is disabled in this build.
+          </Text>
+          <Text style={{ fontSize: 11, color: "#92400E", marginTop: 4 }}>
+            Set `EXPO_PUBLIC_PLAY_STORE_SAFE_MODE=false` and rebuild the Android app
+            to enable Incoming/Outgoing/Missed sync like the Phone app.
+          </Text>
+        </View>
+      ) : null}
 
       {/* Period chips */}
       <ScrollView

@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as ImagePicker from 'expo-image-picker';
+import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { MotiView } from "moti";
@@ -17,7 +17,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
 import Constants from "expo-constants";
 import { useAuth } from "../contexts/AuthContext";
@@ -27,7 +27,10 @@ import { getEmailSettings } from "../services/emailService";
 import notificationService from "../services/notificationService";
 import * as userService from "../services/userService";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { confirmPermissionRequest, getUserFacingError } from "../utils/appFeedback";
+import {
+    confirmPermissionRequest,
+    getUserFacingError,
+} from "../utils/appFeedback";
 import {
     buildFeatureUpgradeMessage,
     hasPlanFeature,
@@ -79,12 +82,19 @@ const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "").trim();
 
 const ProfileScreen = ({ navigation }) => {
     const insets = useSafeAreaInsets();
-    const { user, updateUser, logout, localLogout, billingInfo, showUpgradePrompt } = useAuth();
+    const {
+        user,
+        updateUser,
+        logout,
+        localLogout,
+        billingInfo,
+        showUpgradePrompt,
+    } = useAuth();
     const [profile, setProfile] = useState({
         name: "",
         email: "",
         mobile: "",
-        logo: null
+        logo: null,
     });
 
     // Update States
@@ -109,13 +119,18 @@ const ProfileScreen = ({ navigation }) => {
     const [voiceLang, setVoiceLang] = useState("en");
     const [voiceLangOpen, setVoiceLangOpen] = useState(false);
 
-    const openFeatureScreen = useCallback((routeName, featureKey, label) => {
-        if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
-            showUpgradePrompt(buildFeatureUpgradeMessage(featureKey, label));
-            return;
-        }
-        navigation.navigate(routeName);
-    }, [billingInfo?.plan, navigation, showUpgradePrompt]);
+    const openFeatureScreen = useCallback(
+        (routeName, featureKey, label) => {
+            if (!hasPlanFeature(billingInfo?.plan, featureKey)) {
+                showUpgradePrompt(
+                    buildFeatureUpgradeMessage(featureKey, label),
+                );
+                return;
+            }
+            navigation.navigate(routeName);
+        },
+        [billingInfo?.plan, navigation, showUpgradePrompt],
+    );
 
     useEffect(() => {
         if (user) {
@@ -123,7 +138,7 @@ const ProfileScreen = ({ navigation }) => {
                 name: user.name || "",
                 email: user.email || "",
                 mobile: user.mobile || "",
-                logo: user.logo || null
+                logo: user.logo || null,
             });
             setEditName(user.name || "");
         }
@@ -152,28 +167,48 @@ const ProfileScreen = ({ navigation }) => {
             ]);
 
             const waConfig =
-                waResp.status === "fulfilled" ? waResp.value?.data?.config || {} : {};
+                waResp.status === "fulfilled"
+                    ? waResp.value?.data?.config || {}
+                    : {};
             const emailConfig =
                 emailResp.status === "fulfilled" ? emailResp.value || {} : {};
 
             const provider = String(waConfig?.provider || "").toUpperCase();
             const whatsappConfigured =
                 (provider === "WATI" &&
-                    Boolean(waConfig?.hasWatiCredentials || (waConfig?.watiBaseUrl && (waConfig?.apiToken || waConfig?.watiApiToken)))) ||
+                    Boolean(
+                        waConfig?.hasWatiCredentials ||
+                        (waConfig?.watiBaseUrl &&
+                            (waConfig?.apiToken || waConfig?.watiApiToken)),
+                    )) ||
                 (provider === "META" &&
-                    Boolean(waConfig?.hasMetaCredentials || (waConfig?.metaWhatsappToken && waConfig?.metaPhoneNumberId))) ||
+                    Boolean(
+                        waConfig?.hasMetaCredentials ||
+                        (waConfig?.metaWhatsappToken &&
+                            waConfig?.metaPhoneNumberId),
+                    )) ||
                 (provider === "NEO" &&
-                    Boolean(waConfig?.hasNeoCredentials || (waConfig?.neoAccountName && waConfig?.neoPhoneNumber && (waConfig?.neoApiKey || waConfig?.neoBearerToken)))) ||
+                    Boolean(
+                        waConfig?.hasNeoCredentials ||
+                        (waConfig?.neoAccountName &&
+                            waConfig?.neoPhoneNumber &&
+                            (waConfig?.neoApiKey || waConfig?.neoBearerToken)),
+                    )) ||
                 (provider === "TWILIO" &&
-                    Boolean(waConfig?.hasTwilioCredentials || (waConfig?.twilioAccountSid && waConfig?.twilioAuthToken && waConfig?.twilioWhatsappNumber))) ||
+                    Boolean(
+                        waConfig?.hasTwilioCredentials ||
+                        (waConfig?.twilioAccountSid &&
+                            waConfig?.twilioAuthToken &&
+                            waConfig?.twilioWhatsappNumber),
+                    )) ||
                 false;
 
             const settings = emailConfig?.settings || emailConfig || {};
             const emailConfigured = Boolean(
                 settings?.smtpHost &&
-                    settings?.smtpPort &&
-                    settings?.smtpUser &&
-                    (settings?.hasPassword || settings?.smtpPass),
+                settings?.smtpPort &&
+                settings?.smtpUser &&
+                (settings?.hasPassword || settings?.smtpPass),
             );
 
             setSettingsStatus({
@@ -192,7 +227,7 @@ const ProfileScreen = ({ navigation }) => {
         useCallback(() => {
             loadSettingsStatus();
             return () => {};
-        }, [loadSettingsStatus])
+        }, [loadSettingsStatus]),
     );
 
     const handlePickImage = async () => {
@@ -204,9 +239,13 @@ const ProfileScreen = ({ navigation }) => {
         });
         if (!confirmed) return;
 
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-            Alert.alert('Permission denied', 'Gallery access is needed only to pick a logo image.');
+        const { status } =
+            await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+            Alert.alert(
+                "Permission denied",
+                "Gallery access is needed only to pick a logo image.",
+            );
             return;
         }
 
@@ -232,14 +271,20 @@ const ProfileScreen = ({ navigation }) => {
     const handleUpdateBasic = async (updates) => {
         setIsSaving(true);
         try {
-            const res = await userService.updateProfile({ ...profile, ...updates });
+            const res = await userService.updateProfile({
+                ...profile,
+                ...updates,
+            });
             if (res.success) {
                 // Update local context
                 await updateUser(res.user);
                 Alert.alert("Success", res.message);
             }
         } catch (err) {
-            Alert.alert("Error", getUserFacingError(err, "Failed to update profile"));
+            Alert.alert(
+                "Error",
+                getUserFacingError(err, "Failed to update profile"),
+            );
         } finally {
             setIsSaving(false);
         }
@@ -254,11 +299,14 @@ const ProfileScreen = ({ navigation }) => {
         setNewValue("");
         setOtpLoading(true);
         try {
-            if (mode === 'email') await userService.initiateEmailChange();
+            if (mode === "email") await userService.initiateEmailChange();
             else await userService.initiateMobileChange("whatsapp");
             setShowOtpModal(true);
         } catch (err) {
-            Alert.alert("Error", getUserFacingError(err, "Failed to initiate change"));
+            Alert.alert(
+                "Error",
+                getUserFacingError(err, "Failed to initiate change"),
+            );
         } finally {
             setOtpLoading(false);
         }
@@ -267,7 +315,8 @@ const ProfileScreen = ({ navigation }) => {
     const handleVerifyCurrent = async () => {
         setOtpLoading(true);
         try {
-            if (otpMode === 'email') await userService.verifyCurrentEmail(otpValue);
+            if (otpMode === "email")
+                await userService.verifyCurrentEmail(otpValue);
             else await userService.verifyCurrentMobile(otpValue);
 
             setOtpStep(2);
@@ -282,13 +331,17 @@ const ProfileScreen = ({ navigation }) => {
     const handleInitiateNew = async () => {
         setOtpLoading(true);
         try {
-            if (otpMode === 'email') await userService.initiateNewEmail(newValue);
+            if (otpMode === "email")
+                await userService.initiateNewEmail(newValue);
             else await userService.initiateNewMobile(newValue, "whatsapp");
 
             setOtpStep(3);
             setOtpValue("");
         } catch (err) {
-            Alert.alert("Error", getUserFacingError(err, "Failed to send OTP to new contact"));
+            Alert.alert(
+                "Error",
+                getUserFacingError(err, "Failed to send OTP to new contact"),
+            );
         } finally {
             setOtpLoading(false);
         }
@@ -298,13 +351,17 @@ const ProfileScreen = ({ navigation }) => {
         setOtpLoading(true);
         try {
             let res;
-            if (otpMode === 'email') res = await userService.verifyNewEmail(otpValue);
+            if (otpMode === "email")
+                res = await userService.verifyNewEmail(otpValue);
             else res = await userService.verifyNewMobile(otpValue);
 
             if (res.success) {
                 await updateUser(res.user);
                 setShowOtpModal(false);
-                Alert.alert("Success", `${otpMode === 'email' ? 'Email' : 'Mobile'} updated successfully!`);
+                Alert.alert(
+                    "Success",
+                    `${otpMode === "email" ? "Email" : "Mobile"} updated successfully!`,
+                );
             }
         } catch (_err) {
             Alert.alert("Error", "Invalid OTP code for new verification");
@@ -314,20 +371,16 @@ const ProfileScreen = ({ navigation }) => {
     };
 
     const handleLogoutPress = () => {
-        Alert.alert(
-            "Logout",
-            "Are you sure you want to logout?",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Logout",
-                    style: "destructive",
-                    onPress: async () => {
-                        await logout();
-                    },
+        Alert.alert("Logout", "Are you sure you want to logout?", [
+            { text: "Cancel", style: "cancel" },
+            {
+                text: "Logout",
+                style: "destructive",
+                onPress: async () => {
+                    await logout();
                 },
-            ],
-        );
+            },
+        ]);
     };
 
     const handleDeleteAccountPress = () => {
@@ -429,7 +482,10 @@ const ProfileScreen = ({ navigation }) => {
 
     const openManagedUrl = async (url, label) => {
         if (!url) {
-            Alert.alert("Link unavailable", `${label} link is not configured yet.`);
+            Alert.alert(
+                "Link unavailable",
+                `${label} link is not configured yet.`,
+            );
             return;
         }
 
@@ -444,12 +500,18 @@ const ProfileScreen = ({ navigation }) => {
         try {
             const supported = await Linking.canOpenURL(url);
             if (!supported) {
-                Alert.alert("Link unavailable", `Unable to open ${label.toLowerCase()} on this device.`);
+                Alert.alert(
+                    "Link unavailable",
+                    `Unable to open ${label.toLowerCase()} on this device.`,
+                );
                 return;
             }
             await Linking.openURL(url);
         } catch (_error) {
-            Alert.alert("Link unavailable", `Unable to open ${label.toLowerCase()} right now.`);
+            Alert.alert(
+                "Link unavailable",
+                `Unable to open ${label.toLowerCase()} right now.`,
+            );
         }
     };
 
@@ -470,27 +532,35 @@ const ProfileScreen = ({ navigation }) => {
     const renderOtpModal = () => (
         <Modal visible={showOtpModal} transparent animationType="slide">
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                style={styles.modalOverlay}
-            >
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                style={styles.modalOverlay}>
                 <MotiView
                     from={{ translateY: 300 }}
                     animate={{ translateY: 0 }}
-                    style={styles.modalContent}
-                >
+                    style={styles.modalContent}>
                     <View style={styles.modalHeader}>
                         <Text style={styles.modalTitle}>
-                            Change {otpMode === 'email' ? 'Email Address' : 'Mobile Number'}
+                            Change{" "}
+                            {otpMode === "email"
+                                ? "Email Address"
+                                : "Mobile Number"}
                         </Text>
-                        <TouchableOpacity onPress={() => setShowOtpModal(false)}>
-                            <Ionicons name="close" size={24} color={COLORS.textDim} />
+                        <TouchableOpacity
+                            onPress={() => setShowOtpModal(false)}>
+                            <Ionicons
+                                name="close"
+                                size={24}
+                                color={COLORS.textDim}
+                            />
                         </TouchableOpacity>
                     </View>
 
                     <Text style={styles.modalSubtitle}>
-                        {otpStep === 1 && `Verification code sent to your current ${otpMode === 'mobile' ? 'WhatsApp mobile' : otpMode}.`}
+                        {otpStep === 1 &&
+                            `Verification code sent to your current ${otpMode === "mobile" ? "WhatsApp mobile" : otpMode}.`}
                         {otpStep === 2 && `Enter your new ${otpMode} below.`}
-                        {otpStep === 3 && `Verification code sent to your new ${otpMode === 'mobile' ? 'WhatsApp mobile' : otpMode}.`}
+                        {otpStep === 3 &&
+                            `Verification code sent to your new ${otpMode === "mobile" ? "WhatsApp mobile" : otpMode}.`}
                     </Text>
 
                     {otpStep !== 2 ? (
@@ -508,8 +578,16 @@ const ProfileScreen = ({ navigation }) => {
                         <View style={styles.inputContainer}>
                             <TextInput
                                 style={styles.input}
-                                placeholder={otpMode === 'email' ? "new-email@example.com" : "new mobile number"}
-                                keyboardType={otpMode === 'email' ? "email-address" : "phone-pad"}
+                                placeholder={
+                                    otpMode === "email"
+                                        ? "new-email@example.com"
+                                        : "new mobile number"
+                                }
+                                keyboardType={
+                                    otpMode === "email"
+                                        ? "email-address"
+                                        : "phone-pad"
+                                }
                                 value={newValue}
                                 onChangeText={setNewValue}
                                 autoCapitalize="none"
@@ -518,19 +596,25 @@ const ProfileScreen = ({ navigation }) => {
                     )}
 
                     <TouchableOpacity
-                        style={[styles.primaryBtn, otpLoading && styles.btnDisabled]}
+                        style={[
+                            styles.primaryBtn,
+                            otpLoading && styles.btnDisabled,
+                        ]}
                         disabled={otpLoading}
                         onPress={() => {
                             if (otpStep === 1) handleVerifyCurrent();
                             else if (otpStep === 2) handleInitiateNew();
                             else handleVerifyNew();
-                        }}
-                    >
+                        }}>
                         {otpLoading ? (
                             <ActivityIndicator color="#fff" />
                         ) : (
                             <Text style={styles.primaryBtnText}>
-                                {otpStep === 1 ? "Verify Current" : otpStep === 2 ? "Send OTP" : "Complete Change"}
+                                {otpStep === 1
+                                    ? "Verify Current"
+                                    : otpStep === 2
+                                      ? "Send OTP"
+                                      : "Complete Change"}
                             </Text>
                         )}
                     </TouchableOpacity>
@@ -543,80 +627,193 @@ const ProfileScreen = ({ navigation }) => {
         <Modal
             visible={voiceLangOpen}
             transparent
-            animationType="slide"
-            onRequestClose={() => setVoiceLangOpen(false)}
-        >
+            animationType="fade"
+            onRequestClose={() => setVoiceLangOpen(false)}>
             <TouchableOpacity
                 activeOpacity={1}
-                style={styles.modalOverlay}
-                onPress={() => setVoiceLangOpen(false)}
-            >
-                <TouchableOpacity
-                    activeOpacity={1}
-                    style={styles.voiceModalContent}
-                    onPress={() => {}}
-                >
-                    <View style={styles.voiceModalHeader}>
-                        <Text style={styles.voiceModalTitle}>Notification Voice</Text>
-                        <TouchableOpacity onPress={() => setVoiceLangOpen(false)}>
-                            <Ionicons name="close" size={22} color={COLORS.textDim} />
-                        </TouchableOpacity>
-                    </View>
-                    <Text style={styles.voiceModalSub}>
-                        Choose Tamil or English for voice reminders.
-                    </Text>
+                style={styles.voiceModalOverlay}
+                onPress={() => setVoiceLangOpen(false)}>
+                <MotiView
+                    from={{ scale: 0.85, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: "timing", duration: 300 }}>
+                    <TouchableOpacity
+                        activeOpacity={1}
+                        style={styles.voiceModalContent}
+                        onPress={() => {}}>
+                        {/* Drag Handle */}
+                        <View style={styles.voiceModalDragHandle} />
 
-                    <View style={styles.voiceLangRow}>
-                        <TouchableOpacity
-                            style={[
-                                styles.voiceLangChip,
-                                voiceLang === "en" && styles.voiceLangChipActive,
-                            ]}
-                            onPress={async () => {
-                                setVoiceLang("en");
-                                await notificationService.setNotificationVoiceLanguage?.("en");
-                                setVoiceLangOpen(false);
-                            }}
-                        >
-                            <Text
-                                style={[
-                                    styles.voiceLangChipText,
-                                    voiceLang === "en" && styles.voiceLangChipTextActive,
-                                ]}
-                            >
-                                English
+                        {/* Header */}
+                        <View style={styles.voiceModalHeader}>
+                            <View style={styles.voiceModalHeaderLeft}>
+                                <View style={styles.voiceHeaderIcon}>
+                                    <Ionicons
+                                        name="volume-high"
+                                        size={24}
+                                        color={COLORS.primary}
+                                    />
+                                </View>
+                                <View>
+                                    <Text style={styles.voiceModalTitle}>
+                                        Notification Voice
+                                    </Text>
+                                    <Text style={styles.voiceModalSubtitle}>
+                                        Choose your preferred language
+                                    </Text>
+                                </View>
+                            </View>
+                            <TouchableOpacity
+                                hitSlop={{
+                                    top: 10,
+                                    right: 10,
+                                    bottom: 10,
+                                    left: 10,
+                                }}
+                                onPress={() => setVoiceLangOpen(false)}>
+                                <Ionicons
+                                    name="close-circle"
+                                    size={28}
+                                    color={COLORS.textMuted}
+                                />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Description */}
+                        <View style={styles.voiceModalDescContent}>
+                            <Text style={styles.voiceModalDesc}>
+                                Your voice reminders will play in the selected
+                                language for all follow-up notifications.
                             </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
-                                styles.voiceLangChip,
-                                voiceLang === "ta" && styles.voiceLangChipActive,
-                            ]}
-                            onPress={async () => {
-                                setVoiceLang("ta");
-                                await notificationService.setNotificationVoiceLanguage?.("ta");
-                                setVoiceLangOpen(false);
-                            }}
-                        >
-                            <Text
-                                style={[
-                                    styles.voiceLangChipText,
-                                    voiceLang === "ta" && styles.voiceLangChipTextActive,
-                                ]}
-                            >
-                                தமிழ்
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </TouchableOpacity>
+                        </View>
+
+                        {/* Language Options */}
+                        <View style={styles.voiceLangRow}>
+                            {/* English Option */}
+                            <MotiView
+                                from={{ scale: 0.95 }}
+                                animate={{ scale: 1 }}
+                                transition={{
+                                    type: "timing",
+                                    duration: 300,
+                                    delay: 100,
+                                }}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.voiceLangChip,
+                                        voiceLang === "en" &&
+                                            styles.voiceLangChipActive,
+                                    ]}
+                                    activeOpacity={0.7}
+                                    onPress={async () => {
+                                        setVoiceLang("en");
+                                        await notificationService.setNotificationVoiceLanguage?.(
+                                            "en",
+                                        );
+                                        setVoiceLangOpen(false);
+                                    }}>
+                                    <View style={styles.voiceLangChipIconWrap}>
+                                        <Text style={styles.voiceLangChipFlag}>
+                                            🇬🇧
+                                        </Text>
+                                    </View>
+                                    <View style={styles.voiceLangChipContent}>
+                                        <Text
+                                            style={[
+                                                styles.voiceLangChipTitle,
+                                                voiceLang === "en" &&
+                                                    styles.voiceLangChipTitleActive,
+                                            ]}>
+                                            English
+                                        </Text>
+                                        <Text
+                                            style={[
+                                                styles.voiceLangChipSub,
+                                                voiceLang === "en" &&
+                                                    styles.voiceLangChipSubActive,
+                                            ]}>
+                                            English (US)
+                                        </Text>
+                                    </View>
+                                    {voiceLang === "en" && (
+                                        <Ionicons
+                                            name="checkmark-circle"
+                                            size={24}
+                                            color={COLORS.primary}
+                                        />
+                                    )}
+                                </TouchableOpacity>
+                            </MotiView>
+
+                            {/* Tamil Option */}
+                            <MotiView
+                                from={{ scale: 0.95 }}
+                                animate={{ scale: 1 }}
+                                transition={{
+                                    type: "timing",
+                                    duration: 300,
+                                    delay: 150,
+                                }}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.voiceLangChip,
+                                        voiceLang === "ta" &&
+                                            styles.voiceLangChipActive,
+                                    ]}
+                                    activeOpacity={0.7}
+                                    onPress={async () => {
+                                        setVoiceLang("ta");
+                                        await notificationService.setNotificationVoiceLanguage?.(
+                                            "ta",
+                                        );
+                                        setVoiceLangOpen(false);
+                                    }}>
+                                    <View style={styles.voiceLangChipIconWrap}>
+                                        <Text style={styles.voiceLangChipFlag}>
+                                            🇮🇳
+                                        </Text>
+                                    </View>
+                                    <View style={styles.voiceLangChipContent}>
+                                        <Text
+                                            style={[
+                                                styles.voiceLangChipTitle,
+                                                voiceLang === "ta" &&
+                                                    styles.voiceLangChipTitleActive,
+                                            ]}>
+                                            தமிழ்
+                                        </Text>
+                                        <Text
+                                            style={[
+                                                styles.voiceLangChipSub,
+                                                voiceLang === "ta" &&
+                                                    styles.voiceLangChipSubActive,
+                                            ]}>
+                                            Tamil
+                                        </Text>
+                                    </View>
+                                    {voiceLang === "ta" && (
+                                        <Ionicons
+                                            name="checkmark-circle"
+                                            size={24}
+                                            color={COLORS.primary}
+                                        />
+                                    )}
+                                </TouchableOpacity>
+                            </MotiView>
+                        </View>
+                    </TouchableOpacity>
+                </MotiView>
             </TouchableOpacity>
         </Modal>
     );
 
     return (
-        <SafeAreaView style={[styles.container, { paddingTop: insets.top + 10 }]}>
+        <SafeAreaView
+            style={[styles.container, { paddingTop: insets.top + 10 }]}>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+                <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={styles.backBtn}>
                     <Ionicons name="arrow-back" size={24} color={COLORS.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Edit Profile</Text>
@@ -626,13 +823,22 @@ const ProfileScreen = ({ navigation }) => {
             <ScrollView contentContainerStyle={styles.scrollContent}>
                 {/* Logo Section */}
                 <View style={styles.logoSection}>
-                    <TouchableOpacity onPress={handlePickImage} style={styles.logoContainer}>
+                    <TouchableOpacity
+                        onPress={handlePickImage}
+                        style={styles.logoContainer}>
                         {profile.logo ? (
-                            <Image source={{ uri: getImageUrl(profile.logo) }} style={styles.logo} />
+                            <Image
+                                source={{ uri: getImageUrl(profile.logo) }}
+                                style={styles.logo}
+                            />
                         ) : (
-                            <LinearGradient colors={["#4F46E5", "#6366F1"]} style={styles.logoPlaceholder}>
+                            <LinearGradient
+                                colors={["#4F46E5", "#6366F1"]}
+                                style={styles.logoPlaceholder}>
                                 <Text style={styles.logoInitial}>
-                                    {profile.name ? profile.name[0].toUpperCase() : "U"}
+                                    {profile.name
+                                        ? profile.name[0].toUpperCase()
+                                        : "U"}
                                 </Text>
                             </LinearGradient>
                         )}
@@ -640,14 +846,21 @@ const ProfileScreen = ({ navigation }) => {
                             <Ionicons name="camera" size={16} color="#fff" />
                         </View>
                     </TouchableOpacity>
-                    <Text style={styles.logoInstruction}>Tap to change logo</Text>
+                    <Text style={styles.logoInstruction}>
+                        Tap to change logo
+                    </Text>
                 </View>
 
                 {/* Form Section */}
                 <View style={styles.section}>
                     <Text style={styles.label}>Personal Name</Text>
                     <View style={styles.inputWrapper}>
-                        <Ionicons name="person-outline" size={20} color={COLORS.textMuted} style={styles.inputIcon} />
+                        <Ionicons
+                            name="person-outline"
+                            size={20}
+                            color={COLORS.textMuted}
+                            style={styles.inputIcon}
+                        />
                         <TextInput
                             style={styles.input}
                             value={editName}
@@ -657,9 +870,12 @@ const ProfileScreen = ({ navigation }) => {
                         {editName !== profile.name && (
                             <TouchableOpacity
                                 style={styles.inlineUpdateBtn}
-                                onPress={() => handleUpdateBasic({ name: editName })}
-                            >
-                                <Text style={styles.inlineUpdateBtnText}>Save</Text>
+                                onPress={() =>
+                                    handleUpdateBasic({ name: editName })
+                                }>
+                                <Text style={styles.inlineUpdateBtnText}>
+                                    Save
+                                </Text>
                             </TouchableOpacity>
                         )}
                     </View>
@@ -668,7 +884,11 @@ const ProfileScreen = ({ navigation }) => {
                 <View style={styles.section}>
                     <Text style={styles.label}>Email Address</Text>
                     <View style={styles.infoWrapper}>
-                        <Ionicons name="mail-outline" size={20} color={COLORS.textMuted} />
+                        <Ionicons
+                            name="mail-outline"
+                            size={20}
+                            color={COLORS.textMuted}
+                        />
                         <Text style={styles.infoValue}>{profile.email}</Text>
                         {/* Email change option removed per user request */}
                     </View>
@@ -677,9 +897,15 @@ const ProfileScreen = ({ navigation }) => {
                 <View style={styles.section}>
                     <Text style={styles.label}>Mobile Number</Text>
                     <View style={styles.infoWrapper}>
-                        <Ionicons name="phone-portrait-outline" size={20} color={COLORS.textMuted} />
+                        <Ionicons
+                            name="phone-portrait-outline"
+                            size={20}
+                            color={COLORS.textMuted}
+                        />
                         <Text style={styles.infoValue}>{profile.mobile}</Text>
-                        <TouchableOpacity style={styles.changeBtn} onPress={() => startChangeFlow('mobile')}>
+                        <TouchableOpacity
+                            style={styles.changeBtn}
+                            onPress={() => startChangeFlow("mobile")}>
                             <Text style={styles.changeBtnText}>Change</Text>
                         </TouchableOpacity>
                     </View>
@@ -690,15 +916,21 @@ const ProfileScreen = ({ navigation }) => {
                     <View style={styles.settingsCard}>
                         <TouchableOpacity
                             style={styles.settingsRow}
-                            onPress={() => setVoiceLangOpen(true)}
-                        >
+                            onPress={() => setVoiceLangOpen(true)}>
                             <View style={styles.settingsIconWrap}>
-                                <Ionicons name="volume-high-outline" size={18} color={COLORS.primary} />
+                                <Ionicons
+                                    name="volume-high-outline"
+                                    size={18}
+                                    color={COLORS.primary}
+                                />
                             </View>
                             <View style={styles.settingsContent}>
-                                <Text style={styles.settingsTitle}>Voice Language</Text>
+                                <Text style={styles.settingsTitle}>
+                                    Voice Language
+                                </Text>
                                 <Text style={styles.settingsSub}>
-                                    Currently: {voiceLang === "ta" ? "Tamil" : "English"}
+                                    Currently:{" "}
+                                    {voiceLang === "ta" ? "Tamil" : "English"}
                                 </Text>
                             </View>
                             <View style={styles.voiceLangPill}>
@@ -717,46 +949,100 @@ const ProfileScreen = ({ navigation }) => {
                             <>
                                 <TouchableOpacity
                                     style={styles.settingsRow}
-                                    onPress={() => navigation.navigate("PublicLeadFormScreen")}
-                                >
+                                    onPress={() =>
+                                        navigation.navigate(
+                                            "PublicLeadFormScreen",
+                                        )
+                                    }>
                                     <View style={styles.settingsIconWrap}>
-                                        <Ionicons name="globe-outline" size={18} color={COLORS.primary} />
+                                        <Ionicons
+                                            name="globe-outline"
+                                            size={18}
+                                            color={COLORS.primary}
+                                        />
                                     </View>
                                     <View style={styles.settingsContent}>
-                                        <Text style={styles.settingsTitle}>Public Lead Form</Text>
-                                        <Text style={styles.settingsSub}>Share a company form link and collect social media enquiries</Text>
+                                        <Text style={styles.settingsTitle}>
+                                            Public Lead Form
+                                        </Text>
+                                        <Text style={styles.settingsSub}>
+                                            Share a company form link and
+                                            collect social media enquiries
+                                        </Text>
                                     </View>
-                                    <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                    <Ionicons
+                                        name="chevron-forward"
+                                        size={18}
+                                        color={COLORS.textMuted}
+                                    />
                                 </TouchableOpacity>
 
                                 <TouchableOpacity
                                     style={styles.settingsRow}
-                                    onPress={() => openFeatureScreen("WhatsAppSettings", "whatsapp", "WhatsApp Settings")}
-                                >
+                                    onPress={() =>
+                                        openFeatureScreen(
+                                            "WhatsAppSettings",
+                                            "whatsapp",
+                                            "WhatsApp Settings",
+                                        )
+                                    }>
                                     <View style={styles.settingsIconWrap}>
-                                        <Ionicons name="logo-whatsapp" size={18} color={COLORS.primary} />
+                                        <Ionicons
+                                            name="logo-whatsapp"
+                                            size={18}
+                                            color={COLORS.primary}
+                                        />
                                     </View>
                                     <View style={styles.settingsContent}>
-                                        <Text style={styles.settingsTitle}>WhatsApp Settings</Text>
-                                        <Text style={styles.settingsSub}>Manage business number and templates</Text>
+                                        <Text style={styles.settingsTitle}>
+                                            WhatsApp Settings
+                                        </Text>
+                                        <Text style={styles.settingsSub}>
+                                            Manage business number and templates
+                                        </Text>
                                     </View>
-                                    {renderStatusBadge(settingsStatus.whatsappConfigured)}
-                                    <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                    {renderStatusBadge(
+                                        settingsStatus.whatsappConfigured,
+                                    )}
+                                    <Ionicons
+                                        name="chevron-forward"
+                                        size={18}
+                                        color={COLORS.textMuted}
+                                    />
                                 </TouchableOpacity>
 
                                 <TouchableOpacity
                                     style={styles.settingsRow}
-                                    onPress={() => openFeatureScreen("EmailSettingsScreen", "email", "Email Settings")}
-                                >
+                                    onPress={() =>
+                                        openFeatureScreen(
+                                            "EmailSettingsScreen",
+                                            "email",
+                                            "Email Settings",
+                                        )
+                                    }>
                                     <View style={styles.settingsIconWrap}>
-                                        <Ionicons name="mail-open-outline" size={18} color={COLORS.primary} />
+                                        <Ionicons
+                                            name="mail-open-outline"
+                                            size={18}
+                                            color={COLORS.primary}
+                                        />
                                     </View>
                                     <View style={styles.settingsContent}>
-                                        <Text style={styles.settingsTitle}>Email Settings</Text>
-                                        <Text style={styles.settingsSub}>Configure SMTP and mailbox sync</Text>
+                                        <Text style={styles.settingsTitle}>
+                                            Email Settings
+                                        </Text>
+                                        <Text style={styles.settingsSub}>
+                                            Configure SMTP and mailbox sync
+                                        </Text>
                                     </View>
-                                    {renderStatusBadge(settingsStatus.emailConfigured)}
-                                    <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                    {renderStatusBadge(
+                                        settingsStatus.emailConfigured,
+                                    )}
+                                    <Ionicons
+                                        name="chevron-forward"
+                                        size={18}
+                                        color={COLORS.textMuted}
+                                    />
                                 </TouchableOpacity>
                             </>
                         ) : null}
@@ -768,30 +1054,59 @@ const ProfileScreen = ({ navigation }) => {
                     <View style={styles.settingsCard}>
                         <TouchableOpacity
                             style={styles.settingsRow}
-                            onPress={() => navigation.navigate("AboutScreen")}
-                        >
+                            onPress={() => navigation.navigate("AboutScreen")}>
                             <View style={styles.settingsIconWrap}>
-                                <Ionicons name="information-circle-outline" size={18} color={COLORS.primary} />
+                                <Ionicons
+                                    name="information-circle-outline"
+                                    size={18}
+                                    color={COLORS.primary}
+                                />
                             </View>
                             <View style={styles.settingsContent}>
-                                <Text style={styles.settingsTitle}>About App</Text>
-                                <Text style={styles.settingsSub}>Learn about NeoApp, version details, support, and privacy</Text>
+                                <Text style={styles.settingsTitle}>
+                                    About App
+                                </Text>
+                                <Text style={styles.settingsSub}>
+                                    Learn about NeoApp, version details,
+                                    support, and privacy
+                                </Text>
                             </View>
-                            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                            <Ionicons
+                                name="chevron-forward"
+                                size={18}
+                                color={COLORS.textMuted}
+                            />
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             style={styles.settingsRow}
-                            onPress={() => openManagedUrl(PRIVACY_POLICY_URL, "Privacy Policy")}
-                        >
+                            onPress={() =>
+                                openManagedUrl(
+                                    PRIVACY_POLICY_URL,
+                                    "Privacy Policy",
+                                )
+                            }>
                             <View style={styles.settingsIconWrap}>
-                                <Ionicons name="shield-checkmark-outline" size={18} color={COLORS.primary} />
+                                <Ionicons
+                                    name="shield-checkmark-outline"
+                                    size={18}
+                                    color={COLORS.primary}
+                                />
                             </View>
                             <View style={styles.settingsContent}>
-                                <Text style={styles.settingsTitle}>Privacy Policy</Text>
-                                <Text style={styles.settingsSub}>Review how account and enquiry data is handled</Text>
+                                <Text style={styles.settingsTitle}>
+                                    Privacy Policy
+                                </Text>
+                                <Text style={styles.settingsSub}>
+                                    Review how account and enquiry data is
+                                    handled
+                                </Text>
                             </View>
-                            <Ionicons name="open-outline" size={18} color={COLORS.textMuted} />
+                            <Ionicons
+                                name="open-outline"
+                                size={18}
+                                color={COLORS.textMuted}
+                            />
                         </TouchableOpacity>
 
                         {isAdminUser ? (
@@ -799,46 +1114,87 @@ const ProfileScreen = ({ navigation }) => {
                                 <TouchableOpacity
                                     style={styles.settingsRow}
                                     onPress={handleDisableAccountPress}
-                                    disabled={isDisablingAccount}
-                                >
-                                    <View style={[styles.settingsIconWrap, styles.warningIconWrap]}>
-                                        <Ionicons name="pause-circle-outline" size={18} color="#D97706" />
+                                    disabled={isDisablingAccount}>
+                                    <View
+                                        style={[
+                                            styles.settingsIconWrap,
+                                            styles.warningIconWrap,
+                                        ]}>
+                                        <Ionicons
+                                            name="pause-circle-outline"
+                                            size={18}
+                                            color="#D97706"
+                                        />
                                     </View>
                                     <View style={styles.settingsContent}>
-                                        <Text style={[styles.settingsTitle, styles.warningTitle]}>
+                                        <Text
+                                            style={[
+                                                styles.settingsTitle,
+                                                styles.warningTitle,
+                                            ]}>
                                             Disable Company Account
                                         </Text>
                                         <Text style={styles.settingsSub}>
-                                            Primary admin only. Block login access and use the existing restricted-account flow
+                                            Primary admin only. Block login
+                                            access and use the existing
+                                            restricted-account flow
                                         </Text>
                                     </View>
                                     {isDisablingAccount ? (
-                                        <ActivityIndicator size="small" color="#D97706" />
+                                        <ActivityIndicator
+                                            size="small"
+                                            color="#D97706"
+                                        />
                                     ) : (
-                                        <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                        <Ionicons
+                                            name="chevron-forward"
+                                            size={18}
+                                            color={COLORS.textMuted}
+                                        />
                                     )}
                                 </TouchableOpacity>
 
                                 <TouchableOpacity
                                     style={styles.settingsRow}
                                     onPress={handleDeleteAccountPress}
-                                    disabled={isDeletingAccount}
-                                >
-                                    <View style={[styles.settingsIconWrap, styles.dangerIconWrap]}>
-                                        <Ionicons name="trash-outline" size={18} color={COLORS.danger} />
+                                    disabled={isDeletingAccount}>
+                                    <View
+                                        style={[
+                                            styles.settingsIconWrap,
+                                            styles.dangerIconWrap,
+                                        ]}>
+                                        <Ionicons
+                                            name="trash-outline"
+                                            size={18}
+                                            color={COLORS.danger}
+                                        />
                                     </View>
                                     <View style={styles.settingsContent}>
-                                        <Text style={[styles.settingsTitle, styles.dangerTitle]}>
+                                        <Text
+                                            style={[
+                                                styles.settingsTitle,
+                                                styles.dangerTitle,
+                                            ]}>
                                             Delete Company Account
                                         </Text>
                                         <Text style={styles.settingsSub}>
-                                            Primary admin only. Permanently remove the company, staff, admins, enquiries, follow-ups, plans, and related data
+                                            Primary admin only. Permanently
+                                            remove the company, staff, admins,
+                                            enquiries, follow-ups, plans, and
+                                            related data
                                         </Text>
                                     </View>
                                     {isDeletingAccount ? (
-                                        <ActivityIndicator size="small" color={COLORS.danger} />
+                                        <ActivityIndicator
+                                            size="small"
+                                            color={COLORS.danger}
+                                        />
                                     ) : (
-                                        <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                                        <Ionicons
+                                            name="chevron-forward"
+                                            size={18}
+                                            color={COLORS.textMuted}
+                                        />
                                     )}
                                 </TouchableOpacity>
                             </>
@@ -851,16 +1207,35 @@ const ProfileScreen = ({ navigation }) => {
                     <View style={styles.settingsCard}>
                         <TouchableOpacity
                             style={[styles.settingsRow, styles.logoutRow]}
-                            onPress={handleLogoutPress}
-                        >
-                            <View style={[styles.settingsIconWrap, styles.logoutIconWrap]}>
-                                <Ionicons name="log-out-outline" size={18} color={COLORS.danger} />
+                            onPress={handleLogoutPress}>
+                            <View
+                                style={[
+                                    styles.settingsIconWrap,
+                                    styles.logoutIconWrap,
+                                ]}>
+                                <Ionicons
+                                    name="log-out-outline"
+                                    size={18}
+                                    color={COLORS.danger}
+                                />
                             </View>
                             <View style={styles.settingsContent}>
-                                <Text style={[styles.settingsTitle, styles.logoutTitle]}>Logout</Text>
-                                <Text style={styles.settingsSub}>Sign out from this account</Text>
+                                <Text
+                                    style={[
+                                        styles.settingsTitle,
+                                        styles.logoutTitle,
+                                    ]}>
+                                    Logout
+                                </Text>
+                                <Text style={styles.settingsSub}>
+                                    Sign out from this account
+                                </Text>
                             </View>
-                            <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+                            <Ionicons
+                                name="chevron-forward"
+                                size={18}
+                                color={COLORS.textMuted}
+                            />
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -872,10 +1247,10 @@ const ProfileScreen = ({ navigation }) => {
                 </View>
             </ScrollView>
 
-	            {renderOtpModal()}
-                {renderVoiceLangModal()}
-	        </SafeAreaView>
-	    );
+            {renderOtpModal()}
+            {renderVoiceLangModal()}
+        </SafeAreaView>
+    );
 };
 
 const SafeAreaView = ({ children, style }) => (
@@ -889,18 +1264,18 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
         paddingHorizontal: 20,
         paddingBottom: 15,
-        backgroundColor: '#fff',
+        backgroundColor: "#fff",
         borderBottomWidth: 1,
         borderColor: COLORS.border,
     },
     headerTitle: {
         fontSize: 18,
-        fontWeight: '800',
+        fontWeight: "800",
         color: COLORS.text,
     },
     backBtn: {
@@ -910,14 +1285,14 @@ const styles = StyleSheet.create({
         padding: 24,
     },
     logoSection: {
-        alignItems: 'center',
+        alignItems: "center",
         marginBottom: 32,
     },
     logoContainer: {
         width: 100,
         height: 100,
         borderRadius: 30,
-        backgroundColor: '#fff',
+        backgroundColor: "#fff",
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.1,
@@ -925,39 +1300,39 @@ const styles = StyleSheet.create({
         elevation: 5,
     },
     logo: {
-        width: '100%',
-        height: '100%',
+        width: "100%",
+        height: "100%",
         borderRadius: 30,
     },
     logoPlaceholder: {
-        width: '100%',
-        height: '100%',
+        width: "100%",
+        height: "100%",
         borderRadius: 30,
-        justifyContent: 'center',
-        alignItems: 'center',
+        justifyContent: "center",
+        alignItems: "center",
     },
     logoInitial: {
         fontSize: 40,
-        color: '#fff',
-        fontWeight: '800',
+        color: "#fff",
+        fontWeight: "800",
     },
     editBadge: {
-        position: 'absolute',
+        position: "absolute",
         bottom: -5,
         right: -5,
         backgroundColor: COLORS.primary,
         width: 32,
         height: 32,
         borderRadius: 12,
-        justifyContent: 'center',
-        alignItems: 'center',
+        justifyContent: "center",
+        alignItems: "center",
         borderWidth: 3,
-        borderColor: '#fff',
+        borderColor: "#fff",
     },
     logoInstruction: {
         fontSize: 12,
         color: COLORS.textMuted,
-        fontWeight: '600',
+        fontWeight: "600",
         marginTop: 12,
     },
     section: {
@@ -966,15 +1341,15 @@ const styles = StyleSheet.create({
     label: {
         fontSize: 13,
         color: COLORS.textDim,
-        fontWeight: '700',
+        fontWeight: "700",
         marginBottom: 10,
-        textTransform: 'uppercase',
+        textTransform: "uppercase",
         letterSpacing: 0.5,
     },
     inputWrapper: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#fff',
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#fff",
         borderRadius: 16,
         paddingHorizontal: 16,
         borderWidth: 1,
@@ -982,8 +1357,8 @@ const styles = StyleSheet.create({
         height: 56,
     },
     infoWrapper: {
-        flexDirection: 'row',
-        alignItems: 'center',
+        flexDirection: "row",
+        alignItems: "center",
         backgroundColor: COLORS.bg,
         borderRadius: 16,
         paddingHorizontal: 16,
@@ -999,37 +1374,37 @@ const styles = StyleSheet.create({
         flex: 1,
         fontSize: 16,
         color: COLORS.text,
-        fontWeight: '600',
+        fontWeight: "600",
     },
     infoValue: {
         flex: 1,
         fontSize: 16,
         color: COLORS.textDim,
-        fontWeight: '600',
+        fontWeight: "600",
         marginLeft: 12,
     },
     changeBtn: {
         paddingVertical: 6,
         paddingHorizontal: 12,
-        backgroundColor: COLORS.primary + '15',
+        backgroundColor: COLORS.primary + "15",
         borderRadius: 10,
     },
     changeBtnText: {
         fontSize: 12,
         color: COLORS.primary,
-        fontWeight: '700',
+        fontWeight: "700",
     },
     settingsCard: {
-        backgroundColor: '#fff',
+        backgroundColor: "#fff",
         borderRadius: 18,
         borderWidth: 1,
         borderColor: COLORS.border,
-        overflow: 'hidden',
+        overflow: "hidden",
     },
     settingsRow: {
         minHeight: 68,
-        flexDirection: 'row',
-        alignItems: 'center',
+        flexDirection: "row",
+        alignItems: "center",
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderBottomWidth: 1,
@@ -1040,17 +1415,17 @@ const styles = StyleSheet.create({
         width: 38,
         height: 38,
         borderRadius: 12,
-        backgroundColor: COLORS.primary + '12',
-        alignItems: 'center',
-        justifyContent: 'center',
+        backgroundColor: COLORS.primary + "12",
+        alignItems: "center",
+        justifyContent: "center",
     },
     settingsContent: {
         flex: 1,
     },
     statusBadge: {
         width: 28,
-        alignItems: 'center',
-        justifyContent: 'center',
+        alignItems: "center",
+        justifyContent: "center",
         marginRight: 2,
     },
     statusBadgeOk: {
@@ -1062,7 +1437,7 @@ const styles = StyleSheet.create({
     settingsTitle: {
         fontSize: 15,
         color: COLORS.text,
-        fontWeight: '700',
+        fontWeight: "700",
     },
     settingsSub: {
         fontSize: 12,
@@ -1099,41 +1474,48 @@ const styles = StyleSheet.create({
     },
     inlineUpdateBtnText: {
         fontSize: 12,
-        color: '#fff',
-        fontWeight: '700',
+        color: "#fff",
+        fontWeight: "700",
     },
     footer: {
         marginTop: 40,
-        alignItems: 'center',
+        alignItems: "center",
     },
     footerText: {
         fontSize: 12,
         color: COLORS.textMuted,
-        fontWeight: '500',
+        fontWeight: "500",
     },
 
     // Modal Styles
     modalOverlay: {
         flex: 1,
-        backgroundColor: 'rgba(15, 23, 42, 0.5)',
-        justifyContent: 'flex-end',
+        backgroundColor: "rgba(15, 23, 42, 0.5)",
+        justifyContent: "flex-end",
     },
-	    modalContent: {
-	        backgroundColor: '#fff',
-	        borderTopLeftRadius: 32,
-	        borderTopRightRadius: 32,
+    voiceModalOverlay: {
+        flex: 1,
+        backgroundColor: "rgba(15, 23, 42, 0.6)",
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: 16,
+    },
+    modalContent: {
+        backgroundColor: "#fff",
+        borderTopLeftRadius: 32,
+        borderTopRightRadius: 32,
         padding: 24,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+        paddingBottom: Platform.OS === "ios" ? 40 : 24,
     },
     modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
         marginBottom: 12,
     },
     modalTitle: {
         fontSize: 20,
-        fontWeight: '800',
+        fontWeight: "800",
         color: COLORS.text,
     },
     modalSubtitle: {
@@ -1151,9 +1533,9 @@ const styles = StyleSheet.create({
         borderRadius: 16,
         borderWidth: 1,
         borderColor: COLORS.border,
-        textAlign: 'center',
+        textAlign: "center",
         fontSize: 24,
-        fontWeight: '800',
+        fontWeight: "800",
         color: COLORS.primary,
         letterSpacing: 10,
     },
@@ -1164,8 +1546,8 @@ const styles = StyleSheet.create({
         height: 56,
         backgroundColor: COLORS.primary,
         borderRadius: 16,
-        justifyContent: 'center',
-        alignItems: 'center',
+        justifyContent: "center",
+        alignItems: "center",
         shadowColor: COLORS.primary,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
@@ -1176,77 +1558,147 @@ const styles = StyleSheet.create({
         opacity: 0.6,
         backgroundColor: COLORS.textMuted,
     },
-	    primaryBtnText: {
-	        fontSize: 16,
-	        color: '#fff',
-	        fontWeight: '700',
-	    },
+    primaryBtnText: {
+        fontSize: 16,
+        color: "#fff",
+        fontWeight: "700",
+    },
 
-        voiceModalContent: {
-            backgroundColor: "#fff",
-            borderTopLeftRadius: 32,
-            borderTopRightRadius: 32,
-            padding: 22,
-            paddingBottom: Platform.OS === "ios" ? 34 : 22,
-        },
-        voiceModalHeader: {
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 10,
-        },
-        voiceModalTitle: {
-            fontSize: 18,
-            fontWeight: "800",
-            color: COLORS.text,
-        },
-        voiceModalSub: {
-            fontSize: 13,
-            color: COLORS.textDim,
-            lineHeight: 18,
-            marginBottom: 14,
-        },
-        voiceLangRow: {
-            flexDirection: "row",
-            gap: 10,
-        },
-        voiceLangChip: {
-            flex: 1,
-            borderRadius: 14,
-            borderWidth: 1,
-            borderColor: COLORS.border,
-            paddingVertical: 12,
-            alignItems: "center",
-            backgroundColor: COLORS.bg,
-        },
-        voiceLangChipActive: {
-            borderColor: COLORS.primary,
-            backgroundColor: "#EEF2FF",
-        },
-        voiceLangChipText: {
-            fontSize: 14,
-            fontWeight: "700",
-            color: COLORS.textDim,
-        },
-        voiceLangChipTextActive: {
-            color: COLORS.primary,
-        },
-        voiceLangPill: {
-            minWidth: 44,
-            height: 28,
-            paddingHorizontal: 10,
-            borderRadius: 999,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "#EEF2FF",
-            borderWidth: 1,
-            borderColor: "#DDE3FF",
-        },
-        voiceLangPillText: {
-            fontSize: 12,
-            fontWeight: "900",
-            color: COLORS.primary,
-        },
-	});
+    voiceModalContent: {
+        backgroundColor: "#fff",
+        borderRadius: 24,
+        padding: 28,
+        paddingVertical: 32,
+        width: "100%",
+        maxWidth: 420,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.25,
+        shadowRadius: 20,
+        elevation: 12,
+    },
+    voiceModalDragHandle: {
+        display: "none",
+    },
+    voiceModalHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: 24,
+        paddingBottom: 0,
+        borderBottomWidth: 0,
+    },
+    voiceModalHeaderLeft: {
+        flexDirection: "row",
+        alignItems: "center",
+        flex: 1,
+        gap: 12,
+    },
+    voiceHeaderIcon: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        backgroundColor: COLORS.primary + "15",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    voiceModalTitle: {
+        fontSize: 18,
+        fontWeight: "800",
+        color: COLORS.text,
+        marginBottom: 4,
+    },
+    voiceModalSubtitle: {
+        fontSize: 13,
+        fontWeight: "600",
+        color: COLORS.textMuted,
+    },
+    voiceModalDescContent: {
+        backgroundColor: COLORS.primary + "08",
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 24,
+        borderLeftWidth: 3,
+        borderLeftColor: COLORS.primary,
+    },
+    voiceModalDesc: {
+        fontSize: 13,
+        color: COLORS.textDim,
+        lineHeight: 20,
+        fontWeight: "500",
+    },
+    voiceLangRow: {
+        flexDirection: "column",
+        gap: 12,
+    },
+    voiceLangChip: {
+        flexDirection: "row",
+        borderRadius: 14,
+        borderWidth: 2,
+        borderColor: COLORS.border,
+        paddingVertical: 14,
+        paddingHorizontal: 14,
+        alignItems: "center",
+        backgroundColor: COLORS.bg,
+        minHeight: 74,
+    },
+    voiceLangChipActive: {
+        borderColor: COLORS.primary,
+        backgroundColor: COLORS.primary + "10",
+    },
+    voiceLangChipIconWrap: {
+        width: 48,
+        height: 48,
+        borderRadius: 12,
+        justifyContent: "center",
+        alignItems: "center",
+        backgroundColor: "#fff",
+        marginRight: 12,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+    },
+    voiceLangChipFlag: {
+        fontSize: 28,
+    },
+    voiceLangChipContent: {
+        flex: 1,
+    },
+    voiceLangChipTitle: {
+        fontSize: 15,
+        fontWeight: "700",
+        color: COLORS.textDim,
+        marginBottom: 3,
+    },
+    voiceLangChipTitleActive: {
+        color: COLORS.primary,
+    },
+    voiceLangChipSub: {
+        fontSize: 12,
+        fontWeight: "500",
+        color: COLORS.textMuted,
+    },
+    voiceLangChipSubActive: {
+        color: COLORS.primary + "80",
+    },
+    voiceLangPill: {
+        minWidth: 50,
+        height: 32,
+        paddingHorizontal: 12,
+        borderRadius: 999,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: COLORS.primary + "12",
+        borderWidth: 1.5,
+        borderColor: COLORS.primary + "40",
+        flexDirection: "row",
+        gap: 4,
+    },
+    voiceLangPillText: {
+        fontSize: 12,
+        fontWeight: "900",
+        color: COLORS.primary,
+        letterSpacing: 0.5,
+    },
+});
 
 export default ProfileScreen;

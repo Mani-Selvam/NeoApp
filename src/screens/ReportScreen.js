@@ -29,6 +29,12 @@ import Svg, { Circle, G, Path } from "react-native-svg";
 import AppSideMenu from "../components/AppSideMenu";
 import { useAuth } from "../contexts/AuthContext";
 import {
+    buildCacheKey,
+    getCacheEntry,
+    isFresh,
+    setCacheEntry,
+} from "../services/appCache";
+import {
     SkeletonBox,
     SkeletonCard,
     SkeletonLine,
@@ -87,6 +93,9 @@ const REPORT_STATUS_OPTIONS = [
     "Closed",
 ];
 const REPORT_CSV_DIR_KEY = "reportCsvDirectoryUri";
+const REPORT_CACHE_TTL_MS = Number(
+    process.env.EXPO_PUBLIC_CACHE_TTL_REPORT_MS || 300000,
+);
 const saveCsvToDevice = async ({ fileName, content }) => {
     const localDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
     if (!localDir) throw new Error("Export directory not available");
@@ -620,6 +629,10 @@ export default function ReportScreen({ navigation }) {
         () => normalizeId(user?.id || user?._id),
         [user?.id, user?._id],
     );
+    const reportCacheKey = useMemo(
+        () => buildCacheKey("reportData:v1", selfId || "anon"),
+        [selfId],
+    );
     const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
     const adminName = useMemo(
         () => (isStaffUser ? "Admin" : user?.name || "Admin"),
@@ -651,29 +664,48 @@ export default function ReportScreen({ navigation }) {
         callLogs: [],
     });
 
-    const loadReportData = useCallback(async () => {
-        setIsLoading(true);
-        try {
-            const [enqR, fupR, callR] = await Promise.all([
-                getAllEnquiries(1, 1000, "", "", ""),
-                getFollowUps("All", 1, 1000),
-                getCallLogs({ limit: 500 }),
-            ]);
-            setReportData({
-                enquiries: normalizeList(enqR),
-                followups: normalizeList(fupR),
-                callLogs: normalizeList(callR),
-            });
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setIsLoading(false);
-        }
-    }, []);
+    const loadReportData = useCallback(
+        async ({ force = false, showLoading = true } = {}) => {
+            let usedCache = false;
+            const cached = await getCacheEntry(reportCacheKey).catch(() => null);
+            if (cached?.value) {
+                setReportData(cached.value);
+                usedCache = true;
+                if (!showLoading) setIsLoading(false);
+            }
+
+            const shouldFetch = force || !isFresh(cached, REPORT_CACHE_TTL_MS);
+            if (!shouldFetch) {
+                setIsLoading(false);
+                return;
+            }
+
+            if (showLoading && !usedCache) setIsLoading(true);
+            try {
+                const [enqR, fupR, callR] = await Promise.all([
+                    getAllEnquiries(1, 1000, "", "", ""),
+                    getFollowUps("All", 1, 1000),
+                    getCallLogs({ limit: 500 }),
+                ]);
+                const payload = {
+                    enquiries: normalizeList(enqR),
+                    followups: normalizeList(fupR),
+                    callLogs: normalizeList(callR),
+                };
+                setReportData(payload);
+                await setCacheEntry(reportCacheKey, payload).catch(() => {});
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setIsLoading(false);
+            }
+        },
+        [reportCacheKey],
+    );
 
     useFocusEffect(
         useCallback(() => {
-            loadReportData();
+            loadReportData({ force: false, showLoading: true });
         }, [loadReportData]),
     );
 
@@ -681,25 +713,25 @@ export default function ReportScreen({ navigation }) {
         const subEnquiry = DeviceEventEmitter.addListener(
             "ENQUIRY_UPDATED",
             () => {
-                loadReportData();
+                loadReportData({ force: true, showLoading: false });
             },
         );
         const subFollowup = DeviceEventEmitter.addListener(
             "FOLLOWUP_CHANGED",
             () => {
-                loadReportData();
+                loadReportData({ force: true, showLoading: false });
             },
         );
         const subCreated = DeviceEventEmitter.addListener(
             "ENQUIRY_CREATED",
             () => {
-                loadReportData();
+                loadReportData({ force: true, showLoading: false });
             },
         );
         const subCall = DeviceEventEmitter.addListener(
             "CALL_LOG_CREATED",
             () => {
-                loadReportData();
+                loadReportData({ force: true, showLoading: false });
             },
         );
         return () => {
