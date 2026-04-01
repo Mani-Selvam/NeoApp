@@ -9,6 +9,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
     AppState,
     BackHandler,
     DeviceEventEmitter,
@@ -63,6 +64,7 @@ import notificationService, {
     getDevicePushToken,
     registerPushTokenWithServer,
 } from "../services/notificationService";
+import getApiClient from "../services/apiClient";
 import {
     buildFeatureUpgradeMessage,
     getFeatureLabel,
@@ -564,6 +566,7 @@ export default function AppNavigator() {
     const tabHistoryRef = useRef<string[]>(["Home"]);
     const lastTabRef = useRef<string>("Home");
     const [incomingMatch, setIncomingMatch] = useState<any>(null);
+    const openingIncomingRef = useRef(false);
     const notificationsInitRef = useRef<boolean>(false);
     const hourlySyncRef = useRef<boolean>(false);
     const hourlySyncPendingRef = useRef<boolean>(false);
@@ -853,6 +856,65 @@ export default function AppNavigator() {
         return () => sub.remove();
     }, [isLoggedIn]);
 
+    const resolveIncomingEnquiry = async (payload: any) => {
+        const details = payload?.details || {};
+        const enquiryId =
+            details?.enquiryId || details?._id || details?.enqNo || "";
+        if (!enquiryId) return null;
+        const client = await getApiClient();
+        const res = await client.get(`/enquiries/${enquiryId}`);
+        return res.data;
+    };
+
+    const openIncomingEnquiry = async (mode: "open" | "note" | "followup") => {
+        if (openingIncomingRef.current) return;
+        const payload = incomingMatch;
+
+        if (!payload?.details) {
+            try {
+                navigationRef.dispatch(TabActions.jumpTo("Enquiry"));
+            } catch (_e) {}
+            return;
+        }
+
+        openingIncomingRef.current = true;
+        try {
+            const enquiry = await resolveIncomingEnquiry(payload);
+            if (!enquiry?._id) {
+                navigationRef.dispatch(TabActions.jumpTo("Enquiry"));
+                return;
+            }
+
+            if (mode === "open") {
+                (navigationRef as any).navigate("Main", {
+                    screen: "Enquiry",
+                    params: { screen: "AddEnquiry", params: { enquiry } },
+                });
+                return;
+            }
+
+            (navigationRef as any).navigate("Main", {
+                screen: "FollowUp",
+                params: {
+                    openComposer: true,
+                    composerToken: Date.now(),
+                    enquiry,
+                    autoOpenForm: true,
+                },
+            });
+        } catch (e: any) {
+            Alert.alert(
+                "Could not open enquiry",
+                e?.message || "Please open Enquiry list and search by number.",
+            );
+            try {
+                navigationRef.dispatch(TabActions.jumpTo("Enquiry"));
+            } catch (_e) {}
+        } finally {
+            openingIncomingRef.current = false;
+        }
+    };
+
     useEffect(() => {
         if (!isLoggedIn) return undefined;
 
@@ -982,19 +1044,29 @@ export default function AppNavigator() {
                             }}>
                             Incoming call matched
                         </Text>
-                        <Text
-                            style={{
-                                marginTop: 8,
-                                color: "#475569",
-                                fontWeight: "700",
-                            }}>
-                            {incomingMatch?.details?.name || "Enquiry"}
-                        </Text>
-                        {incomingMatch?.details?.enqNo ? (
-                            <Text
-                                style={{
-                                    marginTop: 4,
-                                    color: "#64748B",
+	                        <Text
+	                            style={{
+	                                marginTop: 8,
+	                                color: "#475569",
+	                                fontWeight: "700",
+	                            }}>
+	                            {incomingMatch?.details?.name || "Enquiry"}
+	                        </Text>
+	                        {incomingMatch?.details?.product ? (
+	                            <Text
+	                                style={{
+	                                    marginTop: 4,
+	                                    color: "#64748B",
+	                                    fontWeight: "700",
+	                                }}>
+	                                Purpose: {incomingMatch.details.product}
+	                            </Text>
+	                        ) : null}
+	                        {incomingMatch?.details?.enqNo ? (
+	                            <Text
+	                                style={{
+	                                    marginTop: 4,
+	                                    color: "#64748B",
                                     fontWeight: "700",
                                 }}>
                                 Enquiry: {incomingMatch.details.enqNo}
@@ -1021,13 +1093,14 @@ export default function AppNavigator() {
                             </Text>
                         ) : null}
 
-                        <View
-                            style={{
-                                flexDirection: "row",
-                                gap: 10,
-                                marginTop: 14,
-                                justifyContent: "flex-end",
-                            }}>
+	                        <View
+	                            style={{
+	                                flexDirection: "row",
+	                                flexWrap: "wrap",
+	                                gap: 10,
+	                                marginTop: 14,
+	                                justifyContent: "flex-end",
+	                            }}>
                             <TouchableOpacity
                                 onPress={() => setIncomingMatch(null)}
                                 style={{
@@ -1044,31 +1117,67 @@ export default function AppNavigator() {
                                     }}>
                                     Dismiss
                                 </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    setIncomingMatch(null);
-                                    try {
-                                        navigationRef.dispatch(
-                                            TabActions.jumpTo("Enquiry"),
-                                        );
-                                    } catch (_e) {}
-                                }}
-                                style={{
-                                    paddingVertical: 10,
-                                    paddingHorizontal: 14,
-                                    borderRadius: 12,
-                                    backgroundColor: "#4F46E5",
-                                }}>
-                                <Text
-                                    style={{
-                                        fontWeight: "900",
-                                        color: "#fff",
-                                    }}>
-                                    Open Enquiries
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
+	                            </TouchableOpacity>
+	                            <TouchableOpacity
+	                                onPress={() => {
+	                                    setIncomingMatch(null);
+	                                    openIncomingEnquiry("note");
+	                                }}
+	                                style={{
+	                                    paddingVertical: 10,
+	                                    paddingHorizontal: 14,
+	                                    borderRadius: 12,
+	                                    borderWidth: 1,
+	                                    borderColor: "#E2E8F0",
+	                                }}>
+	                                <Text
+	                                    style={{
+	                                        fontWeight: "900",
+	                                        color: "#0F172A",
+	                                    }}>
+	                                    Add Note
+	                                </Text>
+	                            </TouchableOpacity>
+	                            <TouchableOpacity
+	                                onPress={() => {
+	                                    setIncomingMatch(null);
+	                                    openIncomingEnquiry("followup");
+	                                }}
+	                                style={{
+	                                    paddingVertical: 10,
+	                                    paddingHorizontal: 14,
+	                                    borderRadius: 12,
+	                                    borderWidth: 1,
+	                                    borderColor: "#E2E8F0",
+	                                }}>
+	                                <Text
+	                                    style={{
+	                                        fontWeight: "900",
+	                                        color: "#0F172A",
+	                                    }}>
+	                                    Mark Followup
+	                                </Text>
+	                            </TouchableOpacity>
+	                            <TouchableOpacity
+	                                onPress={() => {
+	                                    setIncomingMatch(null);
+	                                    openIncomingEnquiry("open");
+	                                }}
+	                                style={{
+	                                    paddingVertical: 10,
+	                                    paddingHorizontal: 14,
+	                                    borderRadius: 12,
+	                                    backgroundColor: "#4F46E5",
+	                                }}>
+	                                <Text
+	                                    style={{
+	                                        fontWeight: "900",
+	                                        color: "#fff",
+	                                    }}>
+	                                    Open Enquiry
+	                                </Text>
+	                            </TouchableOpacity>
+	                        </View>
                     </TouchableOpacity>
                 </TouchableOpacity>
             </Modal>

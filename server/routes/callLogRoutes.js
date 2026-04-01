@@ -1002,9 +1002,11 @@ router.get("/identify/:phoneNumber", verifyToken, async (req, res) => {
             res.json({
                 found: true,
                 details: {
+                    enquiryId: enquiry._id,
                     name: enquiry.name,
                     enqNo: enquiry.enqNo,
                     status: enquiry.status,
+                    product: enquiry.product,
                 },
             });
         } else {

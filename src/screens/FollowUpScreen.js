@@ -59,6 +59,11 @@ import {
 import { getImageUrl } from "../utils/imageHelper";
 import ChatScreen from "./ChatScreen";
 
+const AUTO_SAVE_CALL_LOGS =
+    String(process.env.EXPO_PUBLIC_CALL_AUTO_SAVE ?? "false")
+        .trim()
+        .toLowerCase() === "true";
+
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
     bg: "#F1F5F9",
@@ -4082,23 +4087,67 @@ export default function FollowUpScreen({ navigation, route }) {
         loadDroppedModalItems();
     }, [showDroppedModal]);
 
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
-            if (callStarted && callEnquiry) {
-                global.__callClaimedByScreen = true;
-                setAutoCallData({
-                    callType: data?.callType,
-                    duration: Number(data?.duration || 0),
-                    note: data?.note,
-                });
-                setAutoDuration(Number(data?.duration || 0));
-                setCallModalVisible(true);
-                setCallStarted(false);
-                setCallStartTime(null);
-            }
-        });
-        return () => sub.remove();
-    }, [callStarted, callEnquiry]);
+	    useEffect(() => {
+	        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
+	            if (callStarted && callEnquiry) {
+	                global.__callClaimedByScreen = true;
+
+	                if (AUTO_SAVE_CALL_LOGS) {
+	                    const mobile = callEnquiry?.mobile || "";
+	                    const digits = String(mobile).replace(/\D/g, "");
+	                    const callType = data?.callType || "Outgoing";
+	                    const duration = Number(data?.duration || 0);
+	                    const callTime = data?.callTime || new Date();
+	                    const note = data?.note || "";
+	                    const deviceCallId = data?.deviceCallId || null;
+	                    const enquiryId =
+	                        callEnquiry?._id ||
+	                        callEnquiry?.enquiryId?._id ||
+	                        callEnquiry?.enquiryId ||
+	                        callEnquiry?.enqId;
+
+	                    Promise.resolve(
+	                        callLogService.createCallLog({
+	                            phoneNumber: digits,
+	                            callType,
+	                            duration,
+	                            note,
+	                            callTime,
+	                            enquiryId,
+	                            contactName: callEnquiry?.name,
+	                            deviceCallId,
+	                        }),
+	                    )
+	                        .then((saved) => {
+	                            if (!saved?._id) return;
+	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+	                            lastFetch.current = 0;
+	                            fetchFollowUps(activeTab, true);
+	                        })
+	                        .catch(() => {});
+
+	                    setCallModalVisible(false);
+	                    setCallEnquiry(null);
+	                    setAutoCallData(null);
+	                    setAutoDuration(0);
+	                    setCallStarted(false);
+	                    setCallStartTime(null);
+	                    return;
+	                }
+
+	                setAutoCallData({
+	                    callType: data?.callType,
+	                    duration: Number(data?.duration || 0),
+	                    note: data?.note,
+	                });
+	                setAutoDuration(Number(data?.duration || 0));
+	                setCallModalVisible(true);
+	                setCallStarted(false);
+	                setCallStartTime(null);
+	            }
+	        });
+	        return () => sub.remove();
+	    }, [callStarted, callEnquiry]);
 
     useEffect(() => {
         const sub = AppState.addEventListener("change", async (next) => {
@@ -4127,21 +4176,61 @@ export default function FollowUpScreen({ navigation, route }) {
                     ? Number(device.duration)
                     : durFallback;
 
-                setAutoCallData({
-                    callType: finalCallType,
-                    duration: finalDuration,
-                    note: device
-                        ? "Auto-detected from device call log"
-                        : "AppState fallback",
-                });
-                setAutoDuration(finalDuration);
-                setCallModalVisible(true);
-                setCallStarted(false);
-                setCallStartTime(null);
-            }
-        });
-        return () => sub.remove();
-    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
+	                setAutoCallData({
+	                    callType: finalCallType,
+	                    duration: finalDuration,
+	                    note: device
+	                        ? "Auto-detected from device call log"
+	                        : "AppState fallback",
+	                });
+	                setAutoDuration(finalDuration);
+
+	                if (AUTO_SAVE_CALL_LOGS) {
+	                    const mobile = callEnquiry?.mobile || "";
+	                    const digits = String(mobile).replace(/\D/g, "");
+	                    const enquiryId =
+	                        callEnquiry?._id ||
+	                        callEnquiry?.enquiryId?._id ||
+	                        callEnquiry?.enquiryId ||
+	                        callEnquiry?.enqId;
+	                    const deviceCallId = device?.deviceCallId || null;
+
+	                    try {
+	                        const saved = await callLogService.createCallLog({
+	                            phoneNumber: digits,
+	                            callType: finalCallType,
+	                            duration: finalDuration,
+	                            note: device
+	                                ? "Auto-detected from device call log"
+	                                : "AppState fallback",
+	                            callTime: device?.callTime || new Date(),
+	                            enquiryId,
+	                            contactName: callEnquiry?.name,
+	                            deviceCallId,
+	                        });
+	                        if (saved?._id) {
+	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+	                            lastFetch.current = 0;
+	                            fetchFollowUps(activeTab, true);
+	                        }
+	                    } catch (_e) {}
+
+	                    setCallModalVisible(false);
+	                    setCallEnquiry(null);
+	                    setAutoCallData(null);
+	                    setAutoDuration(0);
+	                    setCallStarted(false);
+	                    setCallStartTime(null);
+	                    return;
+	                }
+
+	                setCallModalVisible(true);
+	                setCallStarted(false);
+	                setCallStartTime(null);
+	            }
+	        });
+	        return () => sub.remove();
+	    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {

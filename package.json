@@ -102,6 +102,7 @@
   },
   "devDependencies": {
     "@react-native-community/cli": "^20.1.1",
+    "@react-native/metro-config": "^0.84.1",
     "@types/react": "~19.1.10",
     "eslint": "^9.25.0",
     "eslint-config-expo": "^10.0.0",
