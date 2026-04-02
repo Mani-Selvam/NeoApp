@@ -283,52 +283,55 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
     const [refreshing, setRefreshing] = useState(false);
     const [typeFilter, setTypeFilter] = useState("All");
 
-    const loadLogs = useCallback(async ({ force = false, showSpinner = true } = {}) => {
-        if (!phoneKey && !enquiry?._id) {
-            setLogs([]);
-            setLoading(false);
-            return;
-        }
+    const loadLogs = useCallback(
+        async ({ force = false, showSpinner = true } = {}) => {
+            if (!phoneKey && !enquiry?._id) {
+                setLogs([]);
+                setLoading(false);
+                return;
+            }
 
-        if (showSpinner) setLoading(true);
-        try {
-            const result = await callLogService.getCallLogs(
-                enquiry?._id
-                    ? {
-                          enquiryId: enquiry._id,
-                          filter: "All",
-                          limit: 100,
-                      }
-                    : {
-                          search: phoneKey,
-                          filter: "All",
-                          limit: 100,
-                      },
-                { force },
-            );
-            const items = Array.isArray(result?.data) ? result.data : [];
-            const filtered = items.filter((item) => {
-                const sameEnquiry =
-                    enquiry?._id && item?.enquiryId
-                        ? String(item?.enquiryId?._id || item.enquiryId) ===
-                          String(enquiry._id)
+            if (showSpinner) setLoading(true);
+            try {
+                const result = await callLogService.getCallLogs(
+                    enquiry?._id
+                        ? {
+                              enquiryId: enquiry._id,
+                              filter: "All",
+                              limit: 100,
+                          }
+                        : {
+                              search: phoneKey,
+                              filter: "All",
+                              limit: 100,
+                          },
+                    { force },
+                );
+                const items = Array.isArray(result?.data) ? result.data : [];
+                const filtered = items.filter((item) => {
+                    const sameEnquiry =
+                        enquiry?._id && item?.enquiryId
+                            ? String(item?.enquiryId?._id || item.enquiryId) ===
+                              String(enquiry._id)
+                            : false;
+                    const samePhone = phoneKey
+                        ? normalizePhone(item?.phoneNumber) === phoneKey
                         : false;
-                const samePhone = phoneKey
-                    ? normalizePhone(item?.phoneNumber) === phoneKey
-                    : false;
-                return enquiry?._id ? sameEnquiry : samePhone;
-            });
-            filtered.sort(
-                (a, b) =>
-                    new Date(b?.callTime || 0) - new Date(a?.callTime || 0),
-            );
-            setLogs(filtered);
-        } catch (_error) {
-            setLogs([]);
-        } finally {
-            setLoading(false);
-        }
-    }, [phoneKey, enquiry?._id]);
+                    return enquiry?._id ? sameEnquiry : samePhone;
+                });
+                filtered.sort(
+                    (a, b) =>
+                        new Date(b?.callTime || 0) - new Date(a?.callTime || 0),
+                );
+                setLogs(filtered);
+            } catch (_error) {
+                setLogs([]);
+            } finally {
+                setLoading(false);
+            }
+        },
+        [phoneKey, enquiry?._id],
+    );
 
     useEffect(() => {
         loadLogs({ force: false }).catch(() => null);
@@ -604,10 +607,13 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
 
             setLoadingLogs(true);
             try {
-                const result = await emailService.getEmailLogs({
-                    page: 1,
-                    limit: 50,
-                }, { force: Boolean(refreshKey) });
+                const result = await emailService.getEmailLogs(
+                    {
+                        page: 1,
+                        limit: 50,
+                    },
+                    { force: Boolean(refreshKey) },
+                );
                 if (!active) return;
                 const items = Array.isArray(result?.logs)
                     ? result.logs
@@ -650,7 +656,10 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
         try {
             const [tmpl, result] = await Promise.all([
                 emailService.getEmailTemplates({ force: true }),
-                emailService.getEmailLogs({ page: 1, limit: 50 }, { force: true }),
+                emailService.getEmailLogs(
+                    { page: 1, limit: 50 },
+                    { force: true },
+                ),
             ]);
             const items = Array.isArray(tmpl?.templates)
                 ? tmpl.templates
@@ -1532,231 +1541,240 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                 paddingTop: 11,
                                 paddingBottom: 9,
                             }}>
-                        {/* Top row */}
-                        <View
-                            style={{
-                                flexDirection: "row",
-                                alignItems: "flex-start",
-                                marginBottom: sc.sp.sm,
-                            }}>
+                            {/* Top row */}
                             <View
-                                style={[
-                                    FCS.avatar,
-                                    { borderRadius: sc.radius },
-                                ]}>
-                                {item.image ? (
-                                    <Image
-                                        source={{
-                                            uri: getImageUrl(item.image),
-                                        }}
-                                        style={[
-                                            FCS.avatarImg,
-                                            { borderRadius: sc.radius },
-                                        ]}
-                                    />
-                                ) : (
-                                    <LinearGradient
-                                        colors={cols}
-                                        style={[
-                                            FCS.avatarGrad,
-                                            { borderRadius: sc.radius },
-                                        ]}>
-                                        <Text
-                                            style={{
-                                                color: "#fff",
-                                                fontSize: sc.f.md,
-                                                fontWeight: "800",
-                                            }}>
-                                            {getInitials(item.name)}
-                                        </Text>
-                                    </LinearGradient>
-                                )}
+                                style={{
+                                    flexDirection: "row",
+                                    alignItems: "flex-start",
+                                    marginBottom: sc.sp.sm,
+                                }}>
                                 <View
                                     style={[
-                                        FCS.avatarDot,
-                                        { backgroundColor: sCfg.color },
-                                    ]}
-                                />
+                                        FCS.avatar,
+                                        { borderRadius: sc.radius },
+                                    ]}>
+                                    {item.image ? (
+                                        <Image
+                                            source={{
+                                                uri: getImageUrl(item.image),
+                                            }}
+                                            style={[
+                                                FCS.avatarImg,
+                                                { borderRadius: sc.radius },
+                                            ]}
+                                        />
+                                    ) : (
+                                        <LinearGradient
+                                            colors={cols}
+                                            style={[
+                                                FCS.avatarGrad,
+                                                { borderRadius: sc.radius },
+                                            ]}>
+                                            <Text
+                                                style={{
+                                                    color: "#fff",
+                                                    fontSize: sc.f.md,
+                                                    fontWeight: "800",
+                                                }}>
+                                                {getInitials(item.name)}
+                                            </Text>
+                                        </LinearGradient>
+                                    )}
+                                    <View
+                                        style={[
+                                            FCS.avatarDot,
+                                            { backgroundColor: sCfg.color },
+                                        ]}
+                                    />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <View
+                                        style={{
+                                            flexDirection: "row",
+                                            alignItems: "center",
+                                            justifyContent: "space-between",
+                                            marginBottom: 3,
+                                        }}>
+                                        <Text
+                                            style={[
+                                                FCS.name,
+                                                { fontSize: sc.f.md },
+                                            ]}
+                                            numberOfLines={1}>
+                                            {item.name}
+                                        </Text>
+                                        <View
+                                            style={[
+                                                FCS.statusPill,
+                                                { backgroundColor: sCfg.bg },
+                                            ]}>
+                                            <View
+                                                style={[
+                                                    FCS.statusDot,
+                                                    {
+                                                        backgroundColor:
+                                                            sCfg.color,
+                                                    },
+                                                ]}
+                                            />
+                                            <Text
+                                                style={[
+                                                    FCS.statusText,
+                                                    {
+                                                        color: sCfg.color,
+                                                        fontSize: sc.f.xs,
+                                                    },
+                                                ]}>
+                                                {norm === "Contacted"
+                                                    ? "Connected"
+                                                    : displayStatusLabel(norm)}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                    <Text
+                                        style={[
+                                            FCS.mobile,
+                                            { fontSize: sc.f.sm },
+                                        ]}>
+                                        {item.mobile}
+                                    </Text>
+                                </View>
                             </View>
-                            <View style={{ flex: 1 }}>
+                            {/* Product + date */}
+                            <View
+                                style={{
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    paddingTop: sc.sp.xs,
+                                    borderTopWidth: 1,
+                                    borderTopColor: C.divider,
+                                    marginBottom: sc.sp.xs,
+                                }}>
+                                <View
+                                    style={[
+                                        FCS.productTag,
+                                        { borderRadius: sc.sp.sm },
+                                    ]}>
+                                    <Ionicons
+                                        name="briefcase-outline"
+                                        size={sc.f.xs}
+                                        color={C.primary}
+                                    />
+                                    <Text
+                                        style={[
+                                            FCS.productText,
+                                            { fontSize: sc.f.xs },
+                                        ]}
+                                        numberOfLines={1}>
+                                        {item.product || "General"}
+                                    </Text>
+                                </View>
+                                <View
+                                    style={[
+                                        FCS.dateBadge,
+                                        {
+                                            backgroundColor: sCfg.bg,
+                                            borderRadius: sc.sp.sm,
+                                        },
+                                    ]}>
+                                    <Ionicons
+                                        name="time-outline"
+                                        size={sc.f.xs}
+                                        color={sCfg.color}
+                                    />
+                                    <Text
+                                        style={[
+                                            FCS.dateText,
+                                            {
+                                                color: sCfg.color,
+                                                fontSize: sc.f.xs,
+                                            },
+                                        ]}>
+                                        {item.nextFollowUpDate ||
+                                            item.latestFollowUpDate ||
+                                            (item.isVirtualNew
+                                                ? "No follow-up yet"
+                                                : safeDate(
+                                                      item.lastContactedAt ||
+                                                          item.enquiryDateTime ||
+                                                          item.createdAt,
+                                                      {
+                                                          month: "short",
+                                                          day: "numeric",
+                                                      },
+                                                  ))}
+                                    </Text>
+                                </View>
+                            </View>
+                            {/* Footer */}
+                            <View
+                                style={{
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                }}>
                                 <View
                                     style={{
                                         flexDirection: "row",
                                         alignItems: "center",
-                                        justifyContent: "space-between",
-                                        marginBottom: 3,
+                                        gap: sc.sp.xs,
+                                    }}>
+                                    <Ionicons
+                                        name="person-outline"
+                                        size={sc.f.xs}
+                                        color={C.textMuted}
+                                    />
+                                    <Text
+                                        style={{
+                                            fontSize: sc.f.xs,
+                                            color: C.textMuted,
+                                            fontWeight: "500",
+                                        }}
+                                        numberOfLines={1}>
+                                        {fmtDisplay(
+                                            item.assignedTo,
+                                            "Unassigned",
+                                        )}
+                                    </Text>
+                                    {item.enqNo && (
+                                        <View style={FCS.enqBadge}>
+                                            <Text
+                                                style={{
+                                                    fontSize: sc.f.xs - 1,
+                                                    color: C.primary,
+                                                    fontWeight: "800",
+                                                }}>
+                                                #{item.enqNo}
+                                            </Text>
+                                        </View>
+                                    )}
+                                </View>
+                                <View
+                                    style={{
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        gap: 3,
+                                        opacity: 0.55,
                                     }}>
                                     <Text
-                                        style={[
-                                            FCS.name,
-                                            { fontSize: sc.f.md },
-                                        ]}
-                                        numberOfLines={1}>
-                                        {item.name}
-                                    </Text>
-                                    <View
-                                        style={[
-                                            FCS.statusPill,
-                                            { backgroundColor: sCfg.bg },
-                                        ]}>
-                                        <View
-                                            style={[
-                                                FCS.statusDot,
-                                                { backgroundColor: sCfg.color },
-                                            ]}
-                                        />
-                                        <Text
-                                            style={[
-                                                FCS.statusText,
-                                                {
-                                                    color: sCfg.color,
-                                                    fontSize: sc.f.xs,
-                                                },
-                                            ]}>
-                                            {norm === "Contacted"
-                                                ? "Connected"
-                                                : displayStatusLabel(norm)}
-                                        </Text>
-                                    </View>
-                                </View>
-                                <Text
-                                    style={[FCS.mobile, { fontSize: sc.f.sm }]}>
-                                    {item.mobile}
-                                </Text>
-                            </View>
-                        </View>
-                        {/* Product + date */}
-                        <View
-                            style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                paddingTop: sc.sp.xs,
-                                borderTopWidth: 1,
-                                borderTopColor: C.divider,
-                                marginBottom: sc.sp.xs,
-                            }}>
-                            <View
-                                style={[
-                                    FCS.productTag,
-                                    { borderRadius: sc.sp.sm },
-                                ]}>
-                                <Ionicons
-                                    name="briefcase-outline"
-                                    size={sc.f.xs}
-                                    color={C.primary}
-                                />
-                                <Text
-                                    style={[
-                                        FCS.productText,
-                                        { fontSize: sc.f.xs },
-                                    ]}
-                                    numberOfLines={1}>
-                                    {item.product || "General"}
-                                </Text>
-                            </View>
-                            <View
-                                style={[
-                                    FCS.dateBadge,
-                                    {
-                                        backgroundColor: sCfg.bg,
-                                        borderRadius: sc.sp.sm,
-                                    },
-                                ]}>
-                                <Ionicons
-                                    name="time-outline"
-                                    size={sc.f.xs}
-                                    color={sCfg.color}
-                                />
-                                <Text
-                                    style={[
-                                        FCS.dateText,
-                                        {
-                                            color: sCfg.color,
+                                        style={{
                                             fontSize: sc.f.xs,
-                                        },
-                                    ]}>
-                                    {item.nextFollowUpDate ||
-                                        item.latestFollowUpDate ||
-                                        (item.isVirtualNew
-                                            ? "No follow-up yet"
-                                            : safeDate(
-                                                  item.lastContactedAt ||
-                                                      item.enquiryDateTime ||
-                                                      item.createdAt,
-                                                  {
-                                                      month: "short",
-                                                      day: "numeric",
-                                                  },
-                                              ))}
-                                </Text>
-                            </View>
-                        </View>
-                        {/* Footer */}
-                        <View
-                            style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                            }}>
-                            <View
-                                style={{
-                                    flexDirection: "row",
-                                    alignItems: "center",
-                                    gap: sc.sp.xs,
-                                }}>
-                                <Ionicons
-                                    name="person-outline"
-                                    size={sc.f.xs}
-                                    color={C.textMuted}
-                                />
-                                <Text
-                                    style={{
-                                        fontSize: sc.f.xs,
-                                        color: C.textMuted,
-                                        fontWeight: "500",
-                                    }}
-                                    numberOfLines={1}>
-                                    {fmtDisplay(item.assignedTo, "Unassigned")}
-                                </Text>
-                                {item.enqNo && (
-                                    <View style={FCS.enqBadge}>
-                                        <Text
-                                            style={{
-                                                fontSize: sc.f.xs - 1,
-                                                color: C.primary,
-                                                fontWeight: "800",
-                                            }}>
-                                            #{item.enqNo}
-                                        </Text>
-                                    </View>
-                                )}
-                            </View>
-                            <View
-                                style={{
-                                    flexDirection: "row",
-                                    alignItems: "center",
-                                    gap: 3,
-                                    opacity: 0.55,
-                                }}>
-                                <Text
-                                    style={{
-                                        fontSize: sc.f.xs,
-                                        color: C.textLight,
-                                        fontWeight: "600",
-                                    }}>
-                                    Swipe left
-                                </Text>
-                                <Ionicons
-                                    name="chevron-back"
-                                    size={sc.f.sm}
-                                    color={C.textLight}
-                                />
+                                            color: C.textLight,
+                                            fontWeight: "600",
+                                        }}>
+                                        Swipe left
+                                    </Text>
+                                    <Ionicons
+                                        name="chevron-back"
+                                        size={sc.f.sm}
+                                        color={C.textLight}
+                                    />
+                                </View>
                             </View>
                         </View>
                     </View>
                 </View>
-                    </View>
             </TouchableOpacity>
         </Animated.View>
     );
@@ -2335,7 +2353,10 @@ const DetailView = ({
                     {/* ── TAB 4: Email ── */}
                     {tabIdx === 3 && (
                         <View style={{ flex: 1 }}>
-                            <FollowUpEmailPanel enquiry={enquiry} refreshKey={panelRefreshNonce} />
+                            <FollowUpEmailPanel
+                                enquiry={enquiry}
+                                refreshKey={panelRefreshNonce}
+                            />
                         </View>
                     )}
 
@@ -4198,71 +4219,71 @@ export default function FollowUpScreen({ navigation, route }) {
         loadDroppedModalItems();
     }, [showDroppedModal]);
 
-	    useEffect(() => {
-	        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
-	            if (callStarted && callEnquiry) {
-	                global.__callClaimedByScreen = true;
+    useEffect(() => {
+        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
+            if (callStarted && callEnquiry) {
+                global.__callClaimedByScreen = true;
 
-	                if (AUTO_SAVE_CALL_LOGS) {
-	                    const mobile = callEnquiry?.mobile || "";
-	                    const digits = String(mobile).replace(/\D/g, "");
-	                    const callType = data?.callType || "Outgoing";
-	                    const duration = Number(data?.duration || 0);
-	                    const callTime = data?.callTime || new Date();
-	                    const note = data?.note || "";
-	                    const deviceCallId = data?.deviceCallId || null;
-	                    const enquiryId =
-	                        callEnquiry?._id ||
-	                        callEnquiry?.enquiryId?._id ||
-	                        callEnquiry?.enquiryId ||
-	                        callEnquiry?.enqId;
+                if (AUTO_SAVE_CALL_LOGS) {
+                    const mobile = callEnquiry?.mobile || "";
+                    const digits = String(mobile).replace(/\D/g, "");
+                    const callType = data?.callType || "Outgoing";
+                    const duration = Number(data?.duration || 0);
+                    const callTime = data?.callTime || new Date();
+                    const note = data?.note || "";
+                    const deviceCallId = data?.deviceCallId || null;
+                    const enquiryId =
+                        callEnquiry?._id ||
+                        callEnquiry?.enquiryId?._id ||
+                        callEnquiry?.enquiryId ||
+                        callEnquiry?.enqId;
 
-	                    Promise.resolve(
-	                        callLogService.createCallLog({
-	                            phoneNumber: digits,
-	                            callType,
-	                            duration,
-	                            note,
-	                            callTime,
-	                            enquiryId,
-	                            contactName: callEnquiry?.name,
-	                            deviceCallId,
-	                        }),
-	                    )
-	                        .then((saved) => {
-	                            if (!saved?._id) return;
-	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-	                            lastFetch.current = 0;
-	                            fetchFollowUps(activeTab, true, {
-	                                force: true,
-	                                showIndicator: false,
-	                                allowCache: true,
-	                            });
-	                        })
-	                        .catch(() => {});
+                    Promise.resolve(
+                        callLogService.createCallLog({
+                            phoneNumber: digits,
+                            callType,
+                            duration,
+                            note,
+                            callTime,
+                            enquiryId,
+                            contactName: callEnquiry?.name,
+                            deviceCallId,
+                        }),
+                    )
+                        .then((saved) => {
+                            if (!saved?._id) return;
+                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                            lastFetch.current = 0;
+                            fetchFollowUps(activeTab, true, {
+                                force: true,
+                                showIndicator: false,
+                                allowCache: true,
+                            });
+                        })
+                        .catch(() => {});
 
-	                    setCallModalVisible(false);
-	                    setCallEnquiry(null);
-	                    setAutoCallData(null);
-	                    setAutoDuration(0);
-	                    setCallStarted(false);
-	                    setCallStartTime(null);
-	                    return;
-	                }
+                    setCallModalVisible(false);
+                    setCallEnquiry(null);
+                    setAutoCallData(null);
+                    setAutoDuration(0);
+                    setCallStarted(false);
+                    setCallStartTime(null);
+                    return;
+                }
 
-	                setAutoCallData({
-	                    callType: data?.callType,
-	                    duration: Number(data?.duration || 0),
-	                    note: data?.note,
-	                });
-	                setAutoDuration(Number(data?.duration || 0));
-	                setCallModalVisible(true);
-	                setCallStarted(false);
-	                setCallStartTime(null);
-	            }
-	        });
-	        return () => sub.remove();
-	    }, [callStarted, callEnquiry]);
+                setAutoCallData({
+                    callType: data?.callType,
+                    duration: Number(data?.duration || 0),
+                    note: data?.note,
+                });
+                setAutoDuration(Number(data?.duration || 0));
+                setCallModalVisible(true);
+                setCallStarted(false);
+                setCallStartTime(null);
+            }
+        });
+        return () => sub.remove();
+    }, [callStarted, callEnquiry]);
 
     useEffect(() => {
         const sub = AppState.addEventListener("change", async (next) => {
@@ -4291,65 +4312,65 @@ export default function FollowUpScreen({ navigation, route }) {
                     ? Number(device.duration)
                     : durFallback;
 
-	                setAutoCallData({
-	                    callType: finalCallType,
-	                    duration: finalDuration,
-	                    note: device
-	                        ? "Auto-detected from device call log"
-	                        : "AppState fallback",
-	                });
-	                setAutoDuration(finalDuration);
+                setAutoCallData({
+                    callType: finalCallType,
+                    duration: finalDuration,
+                    note: device
+                        ? "Auto-detected from device call log"
+                        : "AppState fallback",
+                });
+                setAutoDuration(finalDuration);
 
-	                if (AUTO_SAVE_CALL_LOGS) {
-	                    const mobile = callEnquiry?.mobile || "";
-	                    const digits = String(mobile).replace(/\D/g, "");
-	                    const enquiryId =
-	                        callEnquiry?._id ||
-	                        callEnquiry?.enquiryId?._id ||
-	                        callEnquiry?.enquiryId ||
-	                        callEnquiry?.enqId;
-	                    const deviceCallId = device?.deviceCallId || null;
+                if (AUTO_SAVE_CALL_LOGS) {
+                    const mobile = callEnquiry?.mobile || "";
+                    const digits = String(mobile).replace(/\D/g, "");
+                    const enquiryId =
+                        callEnquiry?._id ||
+                        callEnquiry?.enquiryId?._id ||
+                        callEnquiry?.enquiryId ||
+                        callEnquiry?.enqId;
+                    const deviceCallId = device?.deviceCallId || null;
 
-	                    try {
-	                        const saved = await callLogService.createCallLog({
-	                            phoneNumber: digits,
-	                            callType: finalCallType,
-	                            duration: finalDuration,
-	                            note: device
-	                                ? "Auto-detected from device call log"
-	                                : "AppState fallback",
-	                            callTime: device?.callTime || new Date(),
-	                            enquiryId,
-	                            contactName: callEnquiry?.name,
-	                            deviceCallId,
-	                        });
-	                        if (saved?._id) {
-	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-	                            lastFetch.current = 0;
-	                            fetchFollowUps(activeTab, true, {
-	                                force: true,
-	                                showIndicator: false,
-	                                allowCache: true,
-	                            });
-	                        }
-	                    } catch (_e) {}
+                    try {
+                        const saved = await callLogService.createCallLog({
+                            phoneNumber: digits,
+                            callType: finalCallType,
+                            duration: finalDuration,
+                            note: device
+                                ? "Auto-detected from device call log"
+                                : "AppState fallback",
+                            callTime: device?.callTime || new Date(),
+                            enquiryId,
+                            contactName: callEnquiry?.name,
+                            deviceCallId,
+                        });
+                        if (saved?._id) {
+                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                            lastFetch.current = 0;
+                            fetchFollowUps(activeTab, true, {
+                                force: true,
+                                showIndicator: false,
+                                allowCache: true,
+                            });
+                        }
+                    } catch (_e) {}
 
-	                    setCallModalVisible(false);
-	                    setCallEnquiry(null);
-	                    setAutoCallData(null);
-	                    setAutoDuration(0);
-	                    setCallStarted(false);
-	                    setCallStartTime(null);
-	                    return;
-	                }
+                    setCallModalVisible(false);
+                    setCallEnquiry(null);
+                    setAutoCallData(null);
+                    setAutoDuration(0);
+                    setCallStarted(false);
+                    setCallStartTime(null);
+                    return;
+                }
 
-	                setCallModalVisible(true);
-	                setCallStarted(false);
-	                setCallStartTime(null);
-	            }
-	        });
-	        return () => sub.remove();
-	    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
+                setCallModalVisible(true);
+                setCallStarted(false);
+                setCallStartTime(null);
+            }
+        });
+        return () => sub.remove();
+    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
@@ -4496,7 +4517,9 @@ export default function FollowUpScreen({ navigation, route }) {
             user?.id || user?._id || "",
             tab,
             selectedDate || "",
-            String(searchQuery || "").trim().toLowerCase(),
+            String(searchQuery || "")
+                .trim()
+                .toLowerCase(),
         );
 
         let cached = null;
@@ -4515,7 +4538,8 @@ export default function FollowUpScreen({ navigation, route }) {
         }
 
         if (refresh) {
-            const shouldFetch = force || !isFresh(cached, FOLLOWUPS_CACHE_TTL_MS);
+            const shouldFetch =
+                force || !isFresh(cached, FOLLOWUPS_CACHE_TTL_MS);
             if (!shouldFetch) return;
             if (showIndicator) setIsLoading(true);
             setPage(1);
@@ -4977,7 +5001,11 @@ export default function FollowUpScreen({ navigation, route }) {
                 showIndicator: false,
                 allowCache: true,
             });
-            if (["Contacted", "Interested", "Converted"].includes(effectiveStatus))
+            if (
+                ["Contacted", "Interested", "Converted"].includes(
+                    effectiveStatus,
+                )
+            )
                 confettiRef.current?.play?.();
             resetFollowUpComposer();
             setSelectedEnquiry(null);
@@ -5171,20 +5199,17 @@ export default function FollowUpScreen({ navigation, route }) {
         ),
         [openDetail, sc],
     );
-    const keyExtractor = useCallback(
-        (item, i) => {
-            // Keep keys stable per enquiry to avoid unmount/mount flicker when status/date changes
-            // (which can look like UI "blur" or broken separator lines on Android).
-            return String(
-                item?.listKey ||
-                    item?.enqId ||
-                    item?.enqNo ||
-                    item?._id ||
-                    `item-${i}`,
-            );
-        },
-        [],
-    );
+    const keyExtractor = useCallback((item, i) => {
+        // Keep keys stable per enquiry to avoid unmount/mount flicker when status/date changes
+        // (which can look like UI "blur" or broken separator lines on Android).
+        return String(
+            item?.listKey ||
+                item?.enqId ||
+                item?.enqNo ||
+                item?._id ||
+                `item-${i}`,
+        );
+    }, []);
 
     // ─────────────────────────────────────────────────────────────────────────
     return (

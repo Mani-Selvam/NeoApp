@@ -54,6 +54,7 @@ import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
 import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
+import { getAuthToken } from "../services/secureTokenStorage";
 import {
     confirmPermissionRequest,
     getUserFacingError,
@@ -74,7 +75,7 @@ const ENQUIRIES_CACHE_TTL_MS = Number(
     process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000,
 );
 
-// ─── Design tokens ────────────────────────────────────────────────────────────
+// â”€â”€â”€ Design tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const C = {
     bg: "#F1F5F9",
     card: "#FFFFFF",
@@ -106,7 +107,7 @@ const GRAD = {
     teal: [C.info, "#0E7490"],
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const toLocalIso = (d) => {
     const date = d ? new Date(d) : new Date();
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -153,7 +154,7 @@ const getAssignedUserLabel = (assignedTo) => {
     return assignedTo?.name || assignedTo?.email || assignedTo?.mobile || "-";
 };
 
-// ─── Compact enquiry card ─────────────────────────────────────────────────────
+// â”€â”€â”€ Compact enquiry card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const EnquiryCard = React.memo(function EnquiryCard({
     item,
     index,
@@ -504,7 +505,7 @@ const EnquiryCard = React.memo(function EnquiryCard({
     );
 });
 
-// ─── Detail page (slides in from right) ──────────────────────────────────────
+// â”€â”€â”€ Detail page (slides in from right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const DETAIL_TABS = ["Details", "Calls"];
 
 const EnquiryDetailPage = ({
@@ -522,6 +523,9 @@ const EnquiryDetailPage = ({
     const [tab, setTab] = useState(0);
     const tabSlideX = useRef(new Animated.Value(0)).current;
     const lastTabRef = useRef(0);
+    const [taskModalVisible, setTaskModalVisible] = useState(false);
+    const [followUpHistory, setFollowUpHistory] = useState([]);
+    const [followUpLoading, setFollowUpLoading] = useState(false);
     const pCfg = priorityCfg(enquiry?.enqType);
     const colors = avatarColors(enquiry?.name);
     const changeTab = (nextTab) => {
@@ -531,6 +535,85 @@ const EnquiryDetailPage = ({
         }
         setTab(nextTab);
     };
+
+    const followUpItems = useMemo(() => {
+        return Array.isArray(followUpHistory) ? followUpHistory : [];
+    }, [followUpHistory]);
+
+    const pendingTasks = useMemo(() => {
+        return followUpItems.filter((x) => {
+            const s = String(x?.status || "")
+                .trim()
+                .toLowerCase();
+            return s !== "completed";
+        });
+    }, [followUpItems]);
+
+    const taskIcon = (type) => {
+        const t = String(type || "")
+            .trim()
+            .toLowerCase();
+        if (t === "whatsapp") return "logo-whatsapp";
+        if (t === "email") return "mail-outline";
+        if (t === "meeting") return "people-outline";
+        if (t === "visit") return "navigate-outline";
+        return "call-outline";
+    };
+
+    const taskStatusCfg = (status) => {
+        const s = String(status || "")
+            .trim()
+            .toLowerCase();
+        if (s === "completed") return { label: "Done", color: C.success };
+        if (s === "missed") return { label: "Missed", color: C.danger };
+        return { label: "Pending", color: C.warning };
+    };
+
+    const taskTimeLabel = (t) => {
+        const dt = t?.dueAt || t?.activityTime;
+        if (dt) {
+            const d = new Date(dt);
+            if (!isNaN(d.getTime()))
+                return d.toLocaleString(undefined, {
+                    month: "short",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                });
+        }
+        const dateStr = t?.nextFollowUpDate || t?.followUpDate || t?.date;
+        const timeStr = String(t?.time || "").trim();
+        if (dateStr && timeStr) return `${dateStr} ${timeStr}`;
+        return dateStr || "-";
+    };
+
+    useEffect(() => {
+        let alive = true;
+        const load = async () => {
+            if (!enquiry?._id && !enquiry?.enqNo) return;
+            setFollowUpLoading(true);
+            try {
+                const key = enquiry?.enqNo || enquiry?._id;
+                const res = await followupService.getFollowUpHistory(key, {
+                    force: false,
+                });
+                const list = Array.isArray(res?.data)
+                    ? res.data
+                    : Array.isArray(res)
+                      ? res
+                      : [];
+                if (alive) setFollowUpHistory(list);
+            } catch {
+                if (alive) setFollowUpHistory([]);
+            } finally {
+                if (alive) setFollowUpLoading(false);
+            }
+        };
+        load();
+        return () => {
+            alive = false;
+        };
+    }, [enquiry?._id, enquiry?.enqNo]);
 
     useEffect(() => {
         Animated.timing(slideX, {
@@ -586,7 +669,7 @@ const EnquiryDetailPage = ({
             style={[SD.root, { transform: [{ translateX: slideX }] }]}>
             <StatusBar barStyle="dark-content" />
 
-            {/* ── Top card: white bg, decorative circles, circle avatar ── */}
+            {/* â”€â”€ Top card: white bg, decorative circles, circle avatar â”€â”€ */}
             <View style={[SD.topCard, { paddingTop: insets.top + 54 }]}>
                 {/* Decorative background circles */}
                 <View style={SD.deco1} />
@@ -611,7 +694,7 @@ const EnquiryDetailPage = ({
                     />
                 </TouchableOpacity>
 
-                {/* Avatar — large circle */}
+                {/* Avatar â€” large circle */}
                 <View style={SD.avatarRing}>
                     <View style={SD.avatarOuter}>
                         {enquiry.image ? (
@@ -689,7 +772,7 @@ const EnquiryDetailPage = ({
                 </View>
             </View>
 
-            {/* ── Tabs ── */}
+            {/* â”€â”€ Tabs â”€â”€ */}
             <View style={SD.tabBar}>
                 {DETAIL_TABS.map((t, i) => (
                     <TouchableOpacity
@@ -705,7 +788,7 @@ const EnquiryDetailPage = ({
                 ))}
             </View>
 
-            {/* ── Tab content — swipeable ── */}
+            {/* â”€â”€ Tab content â€” swipeable â”€â”€ */}
             {(() => {
                 const tabPan = PanResponder.create({
                     onStartShouldSetPanResponder: () => false,
@@ -752,7 +835,7 @@ const EnquiryDetailPage = ({
                                         {
                                             label: "Cost",
                                             value: enquiry.cost
-                                                ? `₹${enquiry.cost}`
+                                                ? `\u20B9${enquiry.cost}`
                                                 : "-",
                                             icon: "pricetag-outline",
                                         },
@@ -947,7 +1030,7 @@ const EnquiryDetailPage = ({
     );
 };
 
-// ─── Main screen ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ Main screen â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function EnquiryListScreen({ navigation, route }) {
     const insets = useSafeAreaInsets();
     const { user, logout, billingInfo, showUpgradePrompt } = useAuth();
@@ -980,6 +1063,13 @@ export default function EnquiryListScreen({ navigation, route }) {
 
     const [menuVisible, setMenuVisible] = useState(false);
     const [showLogoutModal, setShowLogoutModal] = useState(false);
+
+    // URL Scraping state
+    const [scrapeModalVisible, setScrapeModalVisible] = useState(false);
+    const [scrapeUrl, setScrapeUrl] = useState("");
+    const [isScraping, setIsScraping] = useState(false);
+    const [scrapedData, setScrapedData] = useState(null);
+    const [scrapeError, setScrapeError] = useState(null);
 
     const fabScale = useRef(new Animated.Value(1)).current;
     const isInitialMount = useRef(true);
@@ -1016,17 +1106,22 @@ export default function EnquiryListScreen({ navigation, route }) {
         [getEnquiryKey],
     );
 
-    // ── Data fetching ──────────────────────────────────────────────────────────
+    // â”€â”€ Data fetching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const fetchEnquiries = useCallback(
         async (refresh = false, opts = {}) => {
-            const { showIndicator = false, force = false, allowCache = true } =
-                opts || {};
+            const {
+                showIndicator = false,
+                force = false,
+                allowCache = true,
+            } = opts || {};
 
             const cacheKey = buildCacheKey(
                 "enquiries:list:v1",
                 user?.id || user?._id || "",
                 selectedDate || "",
-                String(searchQuery || "").trim().toLowerCase(),
+                String(searchQuery || "")
+                    .trim()
+                    .toLowerCase(),
             );
 
             let cached = null;
@@ -1206,77 +1301,77 @@ export default function EnquiryListScreen({ navigation, route }) {
         return () => clearTimeout(t);
     }, [searchQuery]);
 
-    // ── Call listeners ─────────────────────────────────────────────────────────
-	    useEffect(() => {
-	        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
-	            if (callStarted && callEnquiry) {
-	                global.__callClaimedByScreen = true;
+    // â”€â”€ Call listeners â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    useEffect(() => {
+        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
+            if (callStarted && callEnquiry) {
+                global.__callClaimedByScreen = true;
 
-	                if (AUTO_SAVE_CALL_LOGS) {
-	                    const mobile = callEnquiry?.mobile || "";
-	                    const digits = String(mobile).replace(/\D/g, "");
-	                    const callType = data?.callType || "Outgoing";
-	                    const duration = Number(data?.duration || 0);
-	                    const callTime = data?.callTime || new Date();
-	                    const note = data?.note || "";
-	                    const deviceCallId = data?.deviceCallId || null;
-	                    const enquiryId =
-	                        callEnquiry?._id ||
-	                        callEnquiry?.enquiryId?._id ||
-	                        callEnquiry?.enquiryId ||
-	                        callEnquiry?.enqId;
+                if (AUTO_SAVE_CALL_LOGS) {
+                    const mobile = callEnquiry?.mobile || "";
+                    const digits = String(mobile).replace(/\D/g, "");
+                    const callType = data?.callType || "Outgoing";
+                    const duration = Number(data?.duration || 0);
+                    const callTime = data?.callTime || new Date();
+                    const note = data?.note || "";
+                    const deviceCallId = data?.deviceCallId || null;
+                    const enquiryId =
+                        callEnquiry?._id ||
+                        callEnquiry?.enquiryId?._id ||
+                        callEnquiry?.enquiryId ||
+                        callEnquiry?.enqId;
 
-	                    Promise.resolve(
-	                        callLogService.createCallLog({
-	                            phoneNumber: digits,
-	                            callType,
-	                            duration,
-	                            note,
-	                            callTime,
-	                            enquiryId,
-	                            contactName: callEnquiry?.name,
-	                            deviceCallId,
-	                        }),
-	                    )
-	                        .then((saved) => {
-	                            if (!saved?._id) return;
-	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-	                            fetchEnquiries(true, {
-	                                showIndicator: false,
-	                                force: true,
-	                                allowCache: true,
-	                            });
-	                        })
-	                        .catch(() => {});
+                    Promise.resolve(
+                        callLogService.createCallLog({
+                            phoneNumber: digits,
+                            callType,
+                            duration,
+                            note,
+                            callTime,
+                            enquiryId,
+                            contactName: callEnquiry?.name,
+                            deviceCallId,
+                        }),
+                    )
+                        .then((saved) => {
+                            if (!saved?._id) return;
+                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                            fetchEnquiries(true, {
+                                showIndicator: false,
+                                force: true,
+                                allowCache: true,
+                            });
+                        })
+                        .catch(() => {});
 
-	                    setCallModalVisible(false);
-	                    setCallEnquiry(null);
-	                    setAutoCallData(null);
-	                    setAutoDuration(0);
-	                    setCallStarted(false);
-	                    setCallStartTime(null);
-	                    return;
-	                }
+                    setCallModalVisible(false);
+                    setCallEnquiry(null);
+                    setAutoCallData(null);
+                    setAutoDuration(0);
+                    setCallStarted(false);
+                    setCallStartTime(null);
+                    return;
+                }
 
-	                setAutoCallData({
-	                    callType: data?.callType,
-	                    duration: Number(data?.duration || 0),
-	                    note: data?.note,
-	                });
-	                setAutoDuration(Number(data?.duration || 0));
-	                setCallModalVisible(true);
-	                setCallStarted(false);
-	                setCallStartTime(null);
-	            }
-	        });
-	        return () => sub.remove();
-	    }, [callStarted, callEnquiry]);
+                setAutoCallData({
+                    callType: data?.callType,
+                    duration: Number(data?.duration || 0),
+                    note: data?.note,
+                });
+                setAutoDuration(Number(data?.duration || 0));
+                setCallModalVisible(true);
+                setCallStarted(false);
+                setCallStartTime(null);
+            }
+        });
+        return () => sub.remove();
+    }, [callStarted, callEnquiry]);
 
-	    useEffect(() => {
-	        const sub = AppState.addEventListener("change", async (next) => {
-	            if (
-	                next === "active" &&
-	                callStarted &&
+    useEffect(() => {
+        const sub = AppState.addEventListener("change", async (next) => {
+            if (
+                next === "active" &&
+                callStarted &&
                 callStartTime &&
                 callEnquiry &&
                 !autoCallData
@@ -1299,63 +1394,63 @@ export default function EnquiryListScreen({ navigation, route }) {
                     ? Number(device.duration)
                     : durFallback;
 
-	                setAutoCallData({
-	                    callType: finalCallType,
-	                    duration: finalDuration,
-	                    note: device
-	                        ? "Auto-detected from device call log"
-	                        : `Fallback timer. Duration: ${finalDuration}s`,
-	                });
-	                setAutoDuration(finalDuration);
+                setAutoCallData({
+                    callType: finalCallType,
+                    duration: finalDuration,
+                    note: device
+                        ? "Auto-detected from device call log"
+                        : `Fallback timer. Duration: ${finalDuration}s`,
+                });
+                setAutoDuration(finalDuration);
 
-	                if (AUTO_SAVE_CALL_LOGS) {
-	                    const mobile = callEnquiry?.mobile || "";
-	                    const digits = String(mobile).replace(/\D/g, "");
-	                    const enquiryId =
-	                        callEnquiry?._id ||
-	                        callEnquiry?.enquiryId?._id ||
-	                        callEnquiry?.enquiryId ||
-	                        callEnquiry?.enqId;
-	                    const deviceCallId = device?.deviceCallId || null;
+                if (AUTO_SAVE_CALL_LOGS) {
+                    const mobile = callEnquiry?.mobile || "";
+                    const digits = String(mobile).replace(/\D/g, "");
+                    const enquiryId =
+                        callEnquiry?._id ||
+                        callEnquiry?.enquiryId?._id ||
+                        callEnquiry?.enquiryId ||
+                        callEnquiry?.enqId;
+                    const deviceCallId = device?.deviceCallId || null;
 
-	                    try {
-	                        const saved = await callLogService.createCallLog({
-	                            phoneNumber: digits,
-	                            callType: finalCallType,
-	                            duration: finalDuration,
-	                            note: device
-	                                ? "Auto-detected from device call log"
-	                                : `Fallback timer. Duration: ${finalDuration}s`,
-	                            callTime: device?.callTime || new Date(),
-	                            enquiryId,
-	                            contactName: callEnquiry?.name,
-	                            deviceCallId,
-	                        });
-	                        if (saved?._id) {
-	                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-	                            fetchEnquiries(true, {
-	                                showIndicator: false,
-	                                force: true,
-	                                allowCache: true,
-	                            });
-	                        }
-	                    } catch (_e) {}
+                    try {
+                        const saved = await callLogService.createCallLog({
+                            phoneNumber: digits,
+                            callType: finalCallType,
+                            duration: finalDuration,
+                            note: device
+                                ? "Auto-detected from device call log"
+                                : `Fallback timer. Duration: ${finalDuration}s`,
+                            callTime: device?.callTime || new Date(),
+                            enquiryId,
+                            contactName: callEnquiry?.name,
+                            deviceCallId,
+                        });
+                        if (saved?._id) {
+                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                            fetchEnquiries(true, {
+                                showIndicator: false,
+                                force: true,
+                                allowCache: true,
+                            });
+                        }
+                    } catch (_e) {}
 
-	                    setCallModalVisible(false);
-	                    setCallEnquiry(null);
-	                    setAutoCallData(null);
-	                    setAutoDuration(0);
-	                    setCallStarted(false);
-	                    setCallStartTime(null);
-	                    return;
-	                }
+                    setCallModalVisible(false);
+                    setCallEnquiry(null);
+                    setAutoCallData(null);
+                    setAutoDuration(0);
+                    setCallStarted(false);
+                    setCallStartTime(null);
+                    return;
+                }
 
-	                setCallModalVisible(true);
-	                setCallStarted(false);
-	                setCallStartTime(null);
-	            }
-	        });
-	        return () => sub.remove();
+                setCallModalVisible(true);
+                setCallStarted(false);
+                setCallStartTime(null);
+            }
+        });
+        return () => sub.remove();
     }, [callStarted, callStartTime, callEnquiry, autoCallData]);
 
     useEffect(() => {
@@ -1421,7 +1516,7 @@ export default function EnquiryListScreen({ navigation, route }) {
         return unsubscribe;
     }, [navigation]);
 
-    // ── Action handlers ────────────────────────────────────────────────────────
+    // â”€â”€ Action handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const openDetail = useCallback(async (enquiry) => {
         setSwipeResetTrigger((prev) => prev + 1);
         setDetailCallLogs([]);
@@ -1592,7 +1687,151 @@ export default function EnquiryListScreen({ navigation, route }) {
         }
     }, []);
 
-    // ── Render ─────────────────────────────────────────────────────────────────
+    // â”€â”€ Web Scraping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const handleScrapeWebsite = async () => {
+        if (!scrapeUrl.trim()) {
+            setScrapeError("Please enter a valid URL");
+            return;
+        }
+
+        setIsScraping(true);
+        setScrapeError(null);
+        setScrapedData(null);
+
+        try {
+            // Validate URL format
+            try {
+                new URL(scrapeUrl);
+            } catch {
+                throw new Error(
+                    "Please enter a valid URL (e.g., https://example.com)",
+                );
+            }
+
+            // Get the authentication token from secure storage
+            const token = await getAuthToken();
+            if (!token) {
+                throw new Error("Not authenticated. Please log in again.");
+            }
+
+            const fullUrl = `${GLOBAL_API_URL}/enquiries/scrape-website`;
+            console.log("[Scraping] Calling endpoint:", fullUrl);
+
+            const response = await fetch(fullUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ url: scrapeUrl }),
+            });
+
+            const responseData = await response.json();
+            console.log("[Scraping] Response status:", response.status);
+            console.log("[Scraping] Response data:", responseData);
+
+            if (!response.ok) {
+                throw new Error(
+                    responseData?.error ||
+                        (response.status === 404
+                            ? "Could not extract data from this website"
+                            : `Server error (${response.status}): Failed to scrape website`),
+                );
+            }
+
+            setScrapedData(responseData);
+        } catch (error) {
+            console.error("[Scraping Error]", error);
+            const message = error.message || "Invalid URL or scraping failed";
+            setScrapeError(message);
+        } finally {
+            setIsScraping(false);
+        }
+    };
+
+    const handleSaveScrapedData = async () => {
+        if (!scrapedData) return;
+
+        try {
+            // Get the authentication token from secure storage
+            const token = await getAuthToken();
+            if (!token) {
+                throw new Error("Not authenticated. Please log in again.");
+            }
+
+            const enquiryPayload = {
+                name: scrapedData.companyName || "",
+                email: scrapedData.email || "",
+                mobile: scrapedData.phone || "",
+                address: scrapedData.location || "",
+                product: "Website Scrape",
+                cost: 0, // Default cost for web scraped leads
+                requirements: Array.isArray(scrapedData.productDetails)
+                    ? scrapedData.productDetails.join(" | ")
+                    : scrapedData.productDetails || "",
+                source: "Website Scraping",
+                status: "New",
+            };
+
+            // Validate required fields
+            if (!enquiryPayload.name) {
+                throw new Error("Company name is required");
+            }
+            if (!enquiryPayload.mobile) {
+                throw new Error("Phone number is required");
+            }
+
+            console.log("[Save] Payload:", enquiryPayload);
+            console.log("[Save] API URL:", API_URL);
+
+            const response = await fetch(API_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(enquiryPayload),
+            });
+
+            const responseData = await response.json();
+            console.log("[Save] Response status:", response.status);
+            console.log("[Save] Response data:", responseData);
+
+            if (!response.ok) {
+                throw new Error(
+                    responseData?.message ||
+                        responseData?.error ||
+                        "Failed to save enquiry",
+                );
+            }
+
+            Alert.alert(
+                "\u2713 Success",
+                `Enquiry saved for ${enquiryPayload.name || "company"}`,
+                [
+                    {
+                        text: "Done",
+                        onPress: () => {
+                            handleCancelScrape();
+                            fetchEnquiries(true, { force: true });
+                        },
+                    },
+                ],
+            );
+        } catch (error) {
+            console.error("[Save Error]", error);
+            Alert.alert("Error", "Failed to save enquiry: " + error.message);
+        }
+    };
+
+    const handleCancelScrape = () => {
+        setScrapeModalVisible(false);
+        setScrapeUrl("");
+        setScrapedData(null);
+        setScrapeError(null);
+    };
+
+    // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const renderItem = useCallback(
         ({ item, index }) => (
             <EnquiryCard
@@ -1721,7 +1960,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                 </View>
             </Modal>
 
-            {/* ── Header ── */}
+            {/* â”€â”€ Header â”€â”€ */}
             <View style={S.header}>
                 <View style={S.headerTop}>
                     <TouchableOpacity
@@ -1729,27 +1968,55 @@ export default function EnquiryListScreen({ navigation, route }) {
                         onPress={() => setMenuVisible(true)}>
                         <Ionicons name="menu" size={21} color={C.textSub} />
                     </TouchableOpacity>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
+                    <View style={S.headerTitleBlock}>
                         <Text style={S.headerLabel}>Enquiry List</Text>
-                        <Text style={S.headerName}>{user?.name || "User"}</Text>
-                    </View>
-                    <TouchableOpacity
-                        style={S.profileBtn}
-                        activeOpacity={0.85}
-                        onPress={() => navigation.navigate("ProfileScreen")}>
-                        {user?.logo ? (
-                            <Image
-                                source={{ uri: getImageUrl(user.logo) }}
-                                style={S.profileImg}
+                        <View style={S.headerUserRow}>
+                            <Ionicons
+                                name="person-circle-outline"
+                                size={18}
+                                color={C.textMuted}
+                                style={S.headerUserIcon}
                             />
-                        ) : (
-                            <View style={S.profileFallback}>
-                                <Text style={S.profileFallbackText}>
-                                    {user?.name?.[0]?.toUpperCase() || "U"}
-                                </Text>
-                            </View>
-                        )}
-                    </TouchableOpacity>
+                            <Text style={S.headerName} numberOfLines={1}>
+                                {user?.name || "User"}
+                            </Text>
+                        </View>
+                    </View>
+                    <View style={S.headerRight}>
+                        <TouchableOpacity
+                            style={[S.headerBtn, S.headerBtnPrimary]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Add website URL"
+                            onPress={() => setScrapeModalVisible(true)}>
+                            <Ionicons
+                                name="link-outline"
+                                size={20}
+                                color={C.primary}
+                            />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={S.profileBtn}
+                            activeOpacity={0.85}
+                            accessibilityRole="button"
+                            accessibilityLabel="Open profile"
+                            onPress={() =>
+                                navigation.navigate("ProfileScreen")
+                            }>
+                            {user?.logo ? (
+                                <Image
+                                    source={{ uri: getImageUrl(user.logo) }}
+                                    style={S.profileImg}
+                                />
+                            ) : (
+                                <View style={S.profileFallback}>
+                                    <Text style={S.profileFallbackText}>
+                                        {user?.name?.[0]?.toUpperCase() || "U"}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+                    </View>
                 </View>
 
                 {/* Search */}
@@ -1762,7 +2029,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                     />
                     <TextInput
                         style={S.searchInput}
-                        placeholder="Search name, phone…"
+                        placeholder="Search name, phone..."
                         placeholderTextColor={C.textLight}
                         value={searchQuery}
                         onChangeText={setSearchQuery}
@@ -1798,7 +2065,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                 </View>
             </View>
 
-            {/* ── List ── */}
+            {/* â”€â”€ List â”€â”€ */}
             <FlatList
                 data={listEnquiries}
                 keyExtractor={keyExtractor}
@@ -1855,7 +2122,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                 showsVerticalScrollIndicator={false}
             />
 
-            {/* ── FAB ── */}
+            {/* â”€â”€ FAB â”€â”€ */}
             <Animated.View
                 style={[S.fab, { transform: [{ scale: fabScale }] }]}>
                 <TouchableOpacity
@@ -1886,7 +2153,436 @@ export default function EnquiryListScreen({ navigation, route }) {
                 </TouchableOpacity>
             </Animated.View>
 
-            {/* ── Date picker ── */}
+            {/* â”€â”€ URL Scraping Modal (Centered Popup) â”€â”€ */}
+            <Modal
+                visible={scrapeModalVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={handleCancelScrape}>
+                <View style={S.modalOverlay}>
+                    <View style={S.scrapeModalContent}>
+                        {/* Header with Icon */}
+                        <View style={S.scrapeHeader}>
+                            <View style={S.headerIconGroup}>
+                                <LinearGradient
+                                    colors={[C.primary, C.primaryDark]}
+                                    style={S.headerIcon}>
+                                    <Ionicons
+                                        name="globe"
+                                        size={26}
+                                        color="#fff"
+                                    />
+                                </LinearGradient>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={S.scrapeHeaderTitle}>
+                                        Website Scraper
+                                    </Text>
+                                    <Text style={S.scrapeHeaderSubtitle}>
+                                        Extract company data instantly
+                                    </Text>
+                                </View>
+                            </View>
+                            <TouchableOpacity
+                                onPress={handleCancelScrape}
+                                style={S.closeBtn}>
+                                <Ionicons
+                                    name="close-circle"
+                                    size={28}
+                                    color={C.textMuted}
+                                />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Content Area */}
+                        <ScrollView
+                            scrollEnabled={true}
+                            showsVerticalScrollIndicator={false}>
+                            {!scrapedData ? (
+                                <View
+                                    style={{
+                                        paddingHorizontal: 16,
+                                        paddingVertical: 20,
+                                    }}>
+                                    {/* URL Input Section */}
+                                    <View style={S.urlInputContainer}>
+                                        <View style={S.urlInputBox}>
+                                            <Ionicons
+                                                name="link"
+                                                size={18}
+                                                color={C.primary}
+                                                style={{ marginRight: 10 }}
+                                            />
+                                            <TextInput
+                                                style={S.scrapeInput}
+                                                placeholder="Enter website URL"
+                                                placeholderTextColor={
+                                                    C.textLight
+                                                }
+                                                value={scrapeUrl}
+                                                onChangeText={(text) => {
+                                                    setScrapeUrl(text);
+                                                    setScrapeError(null);
+                                                }}
+                                                editable={!isScraping}
+                                            />
+                                        </View>
+                                        {scrapeError && (
+                                            <View style={S.errorBox}>
+                                                <Ionicons
+                                                    name="alert-circle"
+                                                    size={16}
+                                                    color={C.danger}
+                                                />
+                                                <Text style={S.errorText}>
+                                                    {scrapeError}
+                                                </Text>
+                                            </View>
+                                        )}
+
+                                        {/* Scrape Button */}
+                                        <TouchableOpacity
+                                            style={[
+                                                S.scrapeButton,
+                                                isScraping
+                                                    ? S.scrapeButtonDisabled
+                                                    : {},
+                                            ]}
+                                            onPress={handleScrapeWebsite}
+                                            disabled={isScraping}>
+                                            {isScraping ? (
+                                                <>
+                                                    <ActivityIndicator
+                                                        color="#fff"
+                                                        size="small"
+                                                    />
+                                                    <Text
+                                                        style={
+                                                            S.scrapeButtonText
+                                                        }>
+                                                        Scraping...
+                                                    </Text>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Ionicons
+                                                        name="search"
+                                                        size={18}
+                                                        color="#fff"
+                                                    />
+                                                    <Text
+                                                        style={
+                                                            S.scrapeButtonText
+                                                        }>
+                                                        Scrape Website
+                                                    </Text>
+                                                </>
+                                            )}
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    {/* Help Section */}
+                                    <View style={S.helpSection}>
+                                        <Text style={S.helpTitle}>
+                                            Tips to get best results:
+                                        </Text>
+                                        <View style={S.helpItem}>
+                                            <Ionicons
+                                                name="checkmark-circle"
+                                                size={14}
+                                                color={C.primary}
+                                            />
+                                            <Text style={S.helpText}>
+                                                Use complete URL (with https://)
+                                            </Text>
+                                        </View>
+                                        <View style={S.helpItem}>
+                                            <Ionicons
+                                                name="checkmark-circle"
+                                                size={14}
+                                                color={C.primary}
+                                            />
+                                            <Text style={S.helpText}>
+                                                Works best with company websites
+                                            </Text>
+                                        </View>
+                                    </View>
+                                </View>
+                            ) : (
+                                <View
+                                    style={{
+                                        paddingHorizontal: 16,
+                                        paddingVertical: 20,
+                                    }}>
+                                    {/* Success Banner */}
+                                    <View style={S.successBanner}>
+                                        <Ionicons
+                                            name="checkmark-circle"
+                                            size={24}
+                                            color={C.success}
+                                        />
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={S.successText}>
+                                                Data Extracted Successfully!
+                                            </Text>
+                                            <Text
+                                                style={{
+                                                    fontSize: 11,
+                                                    color: C.success,
+                                                    marginTop: 2,
+                                                }}>
+                                                Review and save to enquiries
+                                            </Text>
+                                        </View>
+                                    </View>
+
+                                    {/* Company Profile Card */}
+                                    <View style={S.companyCard}>
+                                        <View style={S.companyCardHeader}>
+                                            <View style={S.companyIconBg}>
+                                                <Ionicons
+                                                    name="business"
+                                                    size={28}
+                                                    color={C.primary}
+                                                />
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text
+                                                    style={S.companyName}
+                                                    numberOfLines={2}>
+                                                    {scrapedData.companyName ||
+                                                        "Company Name"}
+                                                </Text>
+                                                <Text
+                                                    style={S.companyUrl}
+                                                    numberOfLines={1}>
+                                                    {scrapeUrl}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                    </View>
+
+                                    {/* Data List Section */}
+                                    <View style={S.dataListSection}>
+                                        <Text style={S.dataListTitle}>
+                                            Extracted Information
+                                        </Text>
+
+                                        {/* Email */}
+                                        {scrapedData.email && (
+                                            <View style={S.dataItem}>
+                                                <View style={S.dataItemIcon}>
+                                                    <Ionicons
+                                                        name="mail"
+                                                        size={18}
+                                                        color={C.primary}
+                                                    />
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text
+                                                        style={S.dataItemLabel}>
+                                                        Email
+                                                    </Text>
+                                                    <Text
+                                                        style={S.dataItemValue}
+                                                        numberOfLines={1}>
+                                                        {scrapedData.email}
+                                                    </Text>
+                                                </View>
+                                                <Ionicons
+                                                    name="checkmark-circle"
+                                                    size={18}
+                                                    color={C.success}
+                                                />
+                                            </View>
+                                        )}
+
+                                        {/* Phone */}
+                                        {scrapedData.phone && (
+                                            <View style={S.dataItem}>
+                                                <View style={S.dataItemIcon}>
+                                                    <Ionicons
+                                                        name="call"
+                                                        size={18}
+                                                        color={C.primary}
+                                                    />
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text
+                                                        style={S.dataItemLabel}>
+                                                        Phone
+                                                    </Text>
+                                                    <Text
+                                                        style={S.dataItemValue}
+                                                        numberOfLines={1}>
+                                                        {scrapedData.phone}
+                                                    </Text>
+                                                </View>
+                                                <Ionicons
+                                                    name="checkmark-circle"
+                                                    size={18}
+                                                    color={C.success}
+                                                />
+                                            </View>
+                                        )}
+
+                                        {/* Location */}
+                                        {scrapedData.location && (
+                                            <View style={S.dataItem}>
+                                                <View style={S.dataItemIcon}>
+                                                    <Ionicons
+                                                        name="location"
+                                                        size={18}
+                                                        color={C.primary}
+                                                    />
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text
+                                                        style={S.dataItemLabel}>
+                                                        Address
+                                                    </Text>
+                                                    <Text
+                                                        style={S.dataItemValue}
+                                                        numberOfLines={2}>
+                                                        {scrapedData.location}
+                                                    </Text>
+                                                </View>
+                                                <Ionicons
+                                                    name="checkmark-circle"
+                                                    size={18}
+                                                    color={C.success}
+                                                />
+                                            </View>
+                                        )}
+
+                                        {/* Services */}
+                                        {scrapedData.productDetails && (
+                                            <View style={S.dataItem}>
+                                                <View style={S.dataItemIcon}>
+                                                    <Ionicons
+                                                        name="briefcase"
+                                                        size={18}
+                                                        color={C.primary}
+                                                    />
+                                                </View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text
+                                                        style={S.dataItemLabel}>
+                                                        Services
+                                                    </Text>
+                                                    {Array.isArray(
+                                                        scrapedData.productDetails,
+                                                    ) ? (
+                                                        <Text
+                                                            style={
+                                                                S.dataItemValue
+                                                            }
+                                                            numberOfLines={2}>
+                                                            {scrapedData.productDetails
+                                                                .slice(0, 2)
+                                                                .join(", ")}
+                                                            {scrapedData
+                                                                .productDetails
+                                                                .length > 2
+                                                                ? "..."
+                                                                : ""}
+                                                        </Text>
+                                                    ) : (
+                                                        <Text
+                                                            style={
+                                                                S.dataItemValue
+                                                            }
+                                                            numberOfLines={2}>
+                                                            {
+                                                                scrapedData.productDetails
+                                                            }
+                                                        </Text>
+                                                    )}
+                                                </View>
+                                                <Ionicons
+                                                    name="checkmark-circle"
+                                                    size={18}
+                                                    color={C.success}
+                                                />
+                                            </View>
+                                        )}
+
+                                        {/* Social Media */}
+                                        {scrapedData.socialMedia &&
+                                            Object.keys(scrapedData.socialMedia)
+                                                .length > 0 && (
+                                                <View style={S.dataItem}>
+                                                    <View
+                                                        style={S.dataItemIcon}>
+                                                        <Ionicons
+                                                            name="share-social"
+                                                            size={18}
+                                                            color={C.primary}
+                                                        />
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text
+                                                            style={
+                                                                S.dataItemLabel
+                                                            }>
+                                                            Social Media
+                                                        </Text>
+                                                        <Text
+                                                            style={
+                                                                S.dataItemValue
+                                                            }
+                                                            numberOfLines={1}>
+                                                            {Object.keys(
+                                                                scrapedData.socialMedia,
+                                                            ).join(", ")}
+                                                        </Text>
+                                                    </View>
+                                                    <Ionicons
+                                                        name="checkmark-circle"
+                                                        size={18}
+                                                        color={C.success}
+                                                    />
+                                                </View>
+                                            )}
+                                    </View>
+
+                                    {/* Action Buttons */}
+                                    <View style={S.actionButtonsContainer}>
+                                        <TouchableOpacity
+                                            style={S.secondaryButton}
+                                            onPress={() => {
+                                                setScrapedData(null);
+                                                setScrapeUrl("");
+                                            }}>
+                                            <Ionicons
+                                                name="arrow-back"
+                                                size={18}
+                                                color={C.primary}
+                                            />
+                                            <Text style={S.secondaryButtonText}>
+                                                Back
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={S.primaryButton}
+                                            onPress={handleSaveScrapedData}>
+                                            <Ionicons
+                                                name="save"
+                                                size={18}
+                                                color="#fff"
+                                            />
+                                            <Text style={S.primaryButtonText}>
+                                                Save Enquiry
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* â”€â”€ Date picker â”€â”€ */}
             <Modal
                 visible={datePickerVisible}
                 transparent
@@ -2032,7 +2728,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                 </View>
             </Modal>
 
-            {/* ── Detail page overlay ── */}
+            {/* â”€â”€ Detail page overlay â”€â”€ */}
             {detailEnquiry && (
                 <View style={StyleSheet.absoluteFill}>
                     <EnquiryDetailPage
@@ -2051,7 +2747,7 @@ export default function EnquiryListScreen({ navigation, route }) {
     );
 }
 
-// ─── Main screen styles ───────────────────────────────────────────────────────
+// â”€â”€â”€ Main screen styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const S = StyleSheet.create({
     root: { flex: 1, backgroundColor: C.bg },
     list: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 90 },
@@ -2080,7 +2776,10 @@ const S = StyleSheet.create({
         paddingTop: 8,
         marginBottom: 12,
     },
-    headerRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+    headerTitleBlock: { flex: 1, marginLeft: 10 },
+    headerUserRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
+    headerUserIcon: { marginRight: 6 },
+    headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
     headerBtn: {
         width: 38,
         height: 38,
@@ -2090,6 +2789,10 @@ const S = StyleSheet.create({
         alignItems: "center",
         borderWidth: 1,
         borderColor: C.border,
+    },
+    headerBtnPrimary: {
+        backgroundColor: C.primarySoft,
+        borderColor: "transparent",
     },
     headerLabel: {
         fontSize: 11,
@@ -2519,9 +3222,327 @@ const S = StyleSheet.create({
     },
     emptyTitle: { fontSize: 16, color: C.textSub, fontWeight: "700" },
     emptySubtext: { fontSize: 13, color: C.textLight },
+
+    // â”€â”€ URL Scraping Modal (Centered Popup with Data List) â”€â”€
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: "rgba(15, 23, 42, 0.7)",
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: 12,
+    },
+    scrapeModalContent: {
+        width: "100%",
+        maxWidth: 520,
+        maxHeight: "90%",
+        backgroundColor: C.card,
+        borderRadius: 20,
+        shadowColor: C.shadow,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.25,
+        shadowRadius: 20,
+        elevation: 12,
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+    },
+    scrapeHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingVertical: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: C.divider,
+        backgroundColor: C.cardAlt,
+    },
+    headerIconGroup: {
+        flexDirection: "row",
+        alignItems: "center",
+        flex: 1,
+        gap: 14,
+    },
+    headerIcon: {
+        width: 50,
+        height: 50,
+        borderRadius: 14,
+        justifyContent: "center",
+        alignItems: "center",
+        shadowColor: C.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        elevation: 4,
+    },
+    scrapeHeaderTitle: {
+        fontSize: 17,
+        fontWeight: "700",
+        color: C.text,
+        letterSpacing: 0.3,
+    },
+    scrapeHeaderSubtitle: {
+        fontSize: 12,
+        color: C.textMuted,
+        marginTop: 2,
+    },
+    closeBtn: {
+        padding: 8,
+        borderRadius: 12,
+    },
+    scrapeContent: {
+        paddingHorizontal: 16,
+        paddingVertical: 20,
+        paddingBottom: 28,
+    },
+
+    // URL Input Container
+    urlInputContainer: {
+        marginBottom: 22,
+        alignItems: "center",
+        width: "100%",
+    },
+    urlInputBox: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#fff",
+        borderRadius: 14,
+        borderWidth: 1.5,
+        borderColor: C.border,
+        paddingHorizontal: 12,
+        marginBottom: 12,
+        minHeight: 48,
+        shadowColor: "rgba(0,0,0,0.05)",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 1,
+        shadowRadius: 4,
+        elevation: 1,
+    },
+    scrapeInput: {
+        flex: 1,
+        paddingVertical: 12,
+        fontSize: 14,
+        color: C.text,
+        borderWidth: 0,
+        minHeight: 45,
+    },
+    errorBox: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#FEF2F2",
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        gap: 8,
+        borderLeftWidth: 3,
+        borderLeftColor: C.danger,
+        width: "100%",
+    },
+    errorText: {
+        fontSize: 12,
+        color: C.danger,
+        fontWeight: "500",
+        flex: 1,
+    },
+    scrapeButton: {
+        backgroundColor: C.primary,
+        borderRadius: 12,
+        paddingVertical: 13,
+        paddingHorizontal: 24,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        width: "100%",
+        minHeight: 48,
+        shadowColor: C.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        elevation: 4,
+    },
+    scrapeButtonDisabled: {
+        opacity: 0.7,
+    },
+    scrapeButtonText: {
+        color: "#fff",
+        fontWeight: "700",
+        fontSize: 14,
+        letterSpacing: 0.3,
+    },
+
+    // Help Section
+    helpSection: {
+        backgroundColor: C.primarySoft,
+        borderRadius: 14,
+        padding: 14,
+        marginBottom: 22,
+        borderLeftWidth: 3,
+        borderLeftColor: C.primary,
+    },
+    helpTitle: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: C.primary,
+        marginBottom: 10,
+    },
+    helpItem: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        marginBottom: 8,
+        gap: 8,
+    },
+    helpText: {
+        fontSize: 12,
+        color: C.textSub,
+        flex: 1,
+        lineHeight: 17,
+    },
+
+    // Success Banner
+    successBanner: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#F0FDF4",
+        borderRadius: 14,
+        padding: 14,
+        marginBottom: 18,
+        borderLeftWidth: 3,
+        borderLeftColor: C.success,
+    },
+    successText: {
+        fontSize: 14,
+        fontWeight: "700",
+        color: C.success,
+        letterSpacing: 0.3,
+    },
+
+    // Company Card
+    companyCard: {
+        backgroundColor: C.bg,
+        borderRadius: 14,
+        padding: 14,
+        marginBottom: 18,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    companyCardHeader: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 12,
+    },
+    companyIconBg: {
+        width: 50,
+        height: 50,
+        borderRadius: 12,
+        backgroundColor: C.primarySoft,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    companyName: {
+        fontSize: 15,
+        fontWeight: "700",
+        color: C.text,
+        lineHeight: 20,
+    },
+    companyUrl: {
+        fontSize: 11,
+        color: C.textMuted,
+        marginTop: 4,
+    },
+
+    // Data List Section
+    dataListSection: {
+        marginBottom: 20,
+    },
+    dataListTitle: {
+        fontSize: 13,
+        fontWeight: "700",
+        color: C.text,
+        marginBottom: 12,
+        letterSpacing: 0.3,
+        textTransform: "uppercase",
+    },
+    dataItem: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#fff",
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 8,
+        gap: 12,
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    dataItemIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: 10,
+        backgroundColor: C.primarySoft,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    dataItemLabel: {
+        fontSize: 11,
+        fontWeight: "700",
+        color: C.textMuted,
+        textTransform: "uppercase",
+        letterSpacing: 0.4,
+    },
+    dataItemValue: {
+        fontSize: 13,
+        fontWeight: "600",
+        color: C.text,
+        marginTop: 4,
+        lineHeight: 17,
+    },
+
+    // Action Buttons Container
+    actionButtonsContainer: {
+        flexDirection: "row",
+        gap: 10,
+        marginTop: 6,
+    },
+    primaryButton: {
+        flex: 1,
+        backgroundColor: C.success,
+        borderRadius: 12,
+        paddingVertical: 13,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        shadowColor: C.success,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8,
+        elevation: 3,
+    },
+    primaryButtonText: {
+        color: "#fff",
+        fontWeight: "700",
+        fontSize: 14,
+        letterSpacing: 0.3,
+    },
+    secondaryButton: {
+        flex: 1,
+        backgroundColor: C.primarySoft,
+        borderRadius: 12,
+        paddingVertical: 13,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        borderWidth: 2,
+        borderColor: C.primary,
+    },
+    secondaryButtonText: {
+        color: C.primary,
+        fontWeight: "700",
+        fontSize: 14,
+        letterSpacing: 0.3,
+    },
 });
 
-// ─── Detail page styles ───────────────────────────────────────────────────────
+// â”€â”€â”€ Detail page styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const SD = StyleSheet.create({
     root: {
         ...StyleSheet.absoluteFillObject,
@@ -2529,7 +3550,7 @@ const SD = StyleSheet.create({
         zIndex: 100,
     },
 
-    // ── Top card ──
+    // â”€â”€ Top card â”€â”€
     topCard: {
         backgroundColor: C.card,
         alignItems: "center",
@@ -2545,7 +3566,7 @@ const SD = StyleSheet.create({
         elevation: 3,
     },
 
-    // Decorative circles (no color change — just structure)
+    // Decorative circles (no color change â€” just structure)
     deco1: {
         position: "absolute",
         top: -60,
@@ -2685,7 +3706,7 @@ const SD = StyleSheet.create({
     chipDot: { width: 6, height: 6, borderRadius: 3 },
     chipText: { fontSize: 11, color: C.textSub, fontWeight: "700" },
 
-    // ── Tabs ──
+    // â”€â”€ Tabs â”€â”€
     tabBar: {
         flexDirection: "row",
         backgroundColor: C.card,
@@ -2711,7 +3732,7 @@ const SD = StyleSheet.create({
         borderRadius: 2,
     },
 
-    // ── Details tab ──
+    // â”€â”€ Details tab â”€â”€
     detailRow: {
         flexDirection: "row",
         alignItems: "flex-start",
@@ -2741,7 +3762,7 @@ const SD = StyleSheet.create({
     },
     detailValue: { fontSize: 13, color: C.text, fontWeight: "600" },
 
-    // ── Make Follow-up Button ──
+    // â”€â”€ Make Follow-up Button â”€â”€
     makeFollowupBtn: {
         backgroundColor: C.primary,
         paddingVertical: 12,
@@ -2763,7 +3784,7 @@ const SD = StyleSheet.create({
         fontWeight: "600",
     },
 
-    // ── Calls tab ──
+    // â”€â”€ Calls tab â”€â”€
     logItem: {
         flexDirection: "row",
         alignItems: "center",
@@ -2792,7 +3813,7 @@ const SD = StyleSheet.create({
         textTransform: "uppercase",
     },
 
-    // ── Empty ──
+    // â”€â”€ Empty â”€â”€
     emptyWrap: { alignItems: "center", paddingTop: 48, gap: 8 },
     emptyIconBox: {
         width: 56,
