@@ -1,9 +1,44 @@
 import getApiClient from "./apiClient";
+import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
 
-export const getCallLogs = async (params = {}) => {
+const DEFAULT_TTL_MS = 60_000;
+
+const buildSortedQuery = (params = {}) => {
+    const entries = Object.entries(params || {}).filter(
+        ([, v]) => v !== undefined && v !== null && String(v) !== "",
+    );
+    entries.sort(([a], [b]) => String(a).localeCompare(String(b)));
+    const qs = new URLSearchParams();
+    for (const [k, v] of entries) qs.set(k, String(v));
+    return qs.toString();
+};
+
+export const getCallLogs = async (params = {}, options = {}) => {
+    const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
+    const query = buildSortedQuery(params);
+    const cacheKey = buildCacheKey("calllogs:v1", query || "all");
+
+    if (!force) {
+        const cached = await getCacheEntry(cacheKey).catch(() => null);
+        if (cached?.value && isFresh(cached, ttlMs)) {
+            return cached.value;
+        }
+        if (cached?.value) {
+            // Stale-while-revalidate: return stale immediately, refresh cache in background.
+            Promise.resolve()
+                .then(async () => {
+                    const client = await getApiClient();
+                    const response = await client.get(`/calllogs?${query}`);
+                    await setCacheEntry(cacheKey, response.data).catch(() => {});
+                })
+                .catch(() => {});
+            return cached.value;
+        }
+    }
+
     const client = await getApiClient();
-    const query = new URLSearchParams(params).toString();
     const response = await client.get(`/calllogs?${query}`);
+    await setCacheEntry(cacheKey, response.data).catch(() => {});
     return response.data;
 };
 

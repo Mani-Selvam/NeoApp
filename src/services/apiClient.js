@@ -12,6 +12,16 @@ import { getAuthToken } from "./secureTokenStorage";
 let cachedToken = null;
 let apiClient = null;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isLikelyNetworkError = (error) => {
+    const code = String(error?.code || "").toUpperCase();
+    if (code === "ERR_CANCELED") return false;
+    if (code === "ERR_NETWORK" || code === "ECONNABORTED") return true;
+    // Axios in React Native often uses generic "Network Error" with no response.
+    return !error?.response && String(error?.message || "").toLowerCase().includes("network");
+};
+
 // Create or reuse the axios instance
 const getApiClient = async () => {
     const token = await getAuthToken();
@@ -34,7 +44,28 @@ const getApiClient = async () => {
 
     apiClient.interceptors.response.use(
         (response) => response,
-        (error) => {
+        async (error) => {
+            // Retry GET once on intermittent mobile network drops (Wi-Fi switch / server wake / etc.)
+            try {
+                const cfg = error?.config;
+                const method = String(cfg?.method || "").toLowerCase();
+                const canRetry =
+                    method === "get" &&
+                    cfg &&
+                    !cfg.__isRetryRequest &&
+                    (cfg.__retryCount == null || cfg.__retryCount < 1) &&
+                    isLikelyNetworkError(error);
+
+                if (canRetry) {
+                    cfg.__retryCount = (cfg.__retryCount || 0) + 1;
+                    cfg.__isRetryRequest = true;
+                    await sleep(650);
+                    return apiClient(cfg);
+                }
+            } catch (_retryError) {
+                // fall through to normal error handling
+            }
+
             const status = error?.response?.status;
             const message =
                 error?.response?.data?.message ||
@@ -44,6 +75,10 @@ const getApiClient = async () => {
 
             if (message) {
                 error.message = message;
+            }
+
+            if (isLikelyNetworkError(error)) {
+                error.message = `Network Error: cannot reach server (${API_URL}). Check Wi-Fi / server IP / VPN.`;
             }
 
             const code = error?.response?.data?.code;

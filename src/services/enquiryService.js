@@ -1,4 +1,7 @@
 import getApiClient from "./apiClient";
+import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+
+const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000);
 
 // CREATE ENQUIRY
 export const createEnquiry = async (enquiryData) => {
@@ -48,10 +51,29 @@ export const getAllEnquiries = async (
 };
 
 // GET SINGLE ENQUIRY
-export const getEnquiryById = async (id) => {
+export const getEnquiryById = async (id, options = {}) => {
     try {
+        const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
+        const key = buildCacheKey("enquiry:byId:v1", String(id || ""));
+
+        if (!force) {
+            const cached = await getCacheEntry(key).catch(() => null);
+            if (cached?.value && isFresh(cached, ttlMs)) return cached.value;
+            if (cached?.value) {
+                Promise.resolve()
+                    .then(async () => {
+                        const client = await getApiClient();
+                        const response = await client.get(`/enquiries/${id}`);
+                        await setCacheEntry(key, response.data).catch(() => {});
+                    })
+                    .catch(() => {});
+                return cached.value;
+            }
+        }
+
         const client = await getApiClient();
         const response = await client.get(`/enquiries/${id}`);
+        await setCacheEntry(key, response.data).catch(() => {});
         return response.data;
     } catch (error) {
         console.error(

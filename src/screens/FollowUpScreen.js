@@ -26,6 +26,7 @@ import {
     PanResponder,
     Platform,
     Pressable,
+    RefreshControl,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -275,20 +276,21 @@ function FloatingInput({
     );
 }
 
-function FollowUpCallPanel({ enquiry, onCallPress }) {
+function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
     const phoneKey = normalizePhone(enquiry?.mobile || enquiry?.phoneNumber);
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [typeFilter, setTypeFilter] = useState("All");
 
-    const loadLogs = useCallback(async () => {
+    const loadLogs = useCallback(async ({ force = false, showSpinner = true } = {}) => {
         if (!phoneKey && !enquiry?._id) {
             setLogs([]);
             setLoading(false);
             return;
         }
 
-        setLoading(true);
+        if (showSpinner) setLoading(true);
         try {
             const result = await callLogService.getCallLogs(
                 enquiry?._id
@@ -302,6 +304,7 @@ function FollowUpCallPanel({ enquiry, onCallPress }) {
                           filter: "All",
                           limit: 100,
                       },
+                { force },
             );
             const items = Array.isArray(result?.data) ? result.data : [];
             const filtered = items.filter((item) => {
@@ -328,14 +331,23 @@ function FollowUpCallPanel({ enquiry, onCallPress }) {
     }, [phoneKey, enquiry?._id]);
 
     useEffect(() => {
-        loadLogs().catch(() => null);
-    }, [loadLogs]);
+        loadLogs({ force: false }).catch(() => null);
+    }, [loadLogs, refreshKey]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-            loadLogs().catch(() => null);
+            loadLogs({ force: true, showSpinner: false }).catch(() => null);
         });
         return () => sub.remove();
+    }, [loadLogs]);
+
+    const handleRefresh = useCallback(async () => {
+        setRefreshing(true);
+        try {
+            await loadLogs({ force: true, showSpinner: false });
+        } finally {
+            setRefreshing(false);
+        }
     }, [loadLogs]);
 
     const counts = useMemo(() => {
@@ -444,6 +456,14 @@ function FollowUpCallPanel({ enquiry, onCallPress }) {
                                 `${item?.phoneNumber || "call"}-${item?.callTime || index}`,
                         )
                     }
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={refreshing}
+                            onRefresh={handleRefresh}
+                            tintColor={C.primary}
+                            colors={[C.primary, C.teal, C.info]}
+                        />
+                    }
                     contentContainerStyle={{
                         paddingHorizontal: 14,
                         paddingBottom: 24,
@@ -510,7 +530,7 @@ function FollowUpCallPanel({ enquiry, onCallPress }) {
     );
 }
 
-function FollowUpEmailPanel({ enquiry }) {
+function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
     const [subject, setSubject] = useState("");
     const [message, setMessage] = useState(
         enquiry?.name ? `Hello ${enquiry.name},\n\n` : "",
@@ -525,6 +545,7 @@ function FollowUpEmailPanel({ enquiry }) {
     const [sending, setSending] = useState(false);
     const [logs, setLogs] = useState([]);
     const [loadingLogs, setLoadingLogs] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
 
     const templateOptions = useMemo(() => {
         if (!templateMatch) return [];
@@ -549,7 +570,9 @@ function FollowUpEmailPanel({ enquiry }) {
         let active = true;
         const loadTemplates = async () => {
             try {
-                const result = await emailService.getEmailTemplates();
+                const result = await emailService.getEmailTemplates({
+                    force: Boolean(refreshKey),
+                });
                 if (!active) return;
                 const items = Array.isArray(result?.templates)
                     ? result.templates
@@ -565,7 +588,7 @@ function FollowUpEmailPanel({ enquiry }) {
         return () => {
             active = false;
         };
-    }, []);
+    }, [refreshKey]);
 
     useEffect(() => {
         let active = true;
@@ -584,7 +607,7 @@ function FollowUpEmailPanel({ enquiry }) {
                 const result = await emailService.getEmailLogs({
                     page: 1,
                     limit: 50,
-                });
+                }, { force: Boolean(refreshKey) });
                 if (!active) return;
                 const items = Array.isArray(result?.logs)
                     ? result.logs
@@ -620,6 +643,50 @@ function FollowUpEmailPanel({ enquiry }) {
         return () => {
             active = false;
         };
+    }, [enquiry?._id, enquiry?.email, refreshKey]);
+
+    const handleRefresh = useCallback(async () => {
+        setRefreshing(true);
+        try {
+            const [tmpl, result] = await Promise.all([
+                emailService.getEmailTemplates({ force: true }),
+                emailService.getEmailLogs({ page: 1, limit: 50 }, { force: true }),
+            ]);
+            const items = Array.isArray(tmpl?.templates)
+                ? tmpl.templates
+                : Array.isArray(tmpl?.data)
+                  ? tmpl.data
+                  : [];
+            setTemplates(items);
+
+            const logsItems = Array.isArray(result?.logs)
+                ? result.logs
+                : Array.isArray(result?.data)
+                  ? result.data
+                  : [];
+            const filtered = logsItems.filter((item) => {
+                const sameEnquiry =
+                    enquiry?._id && item?.enquiryId
+                        ? String(item.enquiryId) === String(enquiry._id)
+                        : false;
+                const sameEmail =
+                    enquiry?.email && item?.to
+                        ? String(item.to).toLowerCase() ===
+                          String(enquiry.email).toLowerCase()
+                        : false;
+                return sameEnquiry || sameEmail;
+            });
+            filtered.sort(
+                (a, b) =>
+                    new Date(b?.createdAt || b?.sentAt || 0) -
+                    new Date(a?.createdAt || a?.sentAt || 0),
+            );
+            setLogs(filtered.slice(0, 10));
+        } catch (_error) {
+            // ignore refresh errors
+        } finally {
+            setRefreshing(false);
+        }
     }, [enquiry?._id, enquiry?.email]);
 
     const getTemplateMentionMatch = useCallback((text, cursor) => {
@@ -696,10 +763,10 @@ function FollowUpEmailPanel({ enquiry }) {
             setSubject("");
             setMessage(enquiry?.name ? `Hello ${enquiry.name},\n\n` : "");
             setLoadingLogs(true);
-            const result = await emailService.getEmailLogs({
-                page: 1,
-                limit: 20,
-            });
+            const result = await emailService.getEmailLogs(
+                { page: 1, limit: 20 },
+                { force: true },
+            );
             const items = Array.isArray(result?.logs)
                 ? result.logs
                 : Array.isArray(result?.data)
@@ -739,6 +806,14 @@ function FollowUpEmailPanel({ enquiry }) {
             style={{ flex: 1 }}
             contentContainerStyle={{ padding: 14, paddingBottom: 28, gap: 12 }}
             keyboardShouldPersistTaps="handled"
+            refreshControl={
+                <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={handleRefresh}
+                    tintColor={C.primary}
+                    colors={[C.primary, C.teal, C.info]}
+                />
+            }
             showsVerticalScrollIndicator={false}>
             <View style={DV.emailHero}>
                 <View style={DV.emailHeroIcon}>
@@ -1429,34 +1504,34 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
             style={{
                 transform: [{ translateX: tx }],
                 marginBottom: sc.sp.sm,
-                opacity: tx.interpolate({
-                    inputRange: [0, sc.SW * 0.5, sc.SW],
-                    outputRange: [1, 0.9, 0.75],
-                    extrapolate: "clamp",
-                }),
+                // Avoid animated opacity here (can cause Android text/card blur artifacts)
+                // and keep rendering on the GPU to reduce "lines" while scrolling.
+                renderToHardwareTextureAndroid: true,
+                needsOffscreenAlphaCompositing: true,
             }}
             {...pan.panHandlers}>
             <TouchableOpacity
                 activeOpacity={0.92}
                 onPress={() => onSwipe?.(item)}>
-                <View style={[FCS.card, { borderRadius: sc.cardR }]}>
-                    <View
-                        style={[
-                            FCS.stripe,
-                            {
-                                backgroundColor: sCfg.color,
-                                borderTopLeftRadius: sc.cardR,
-                                borderBottomLeftRadius: sc.cardR,
-                            },
-                        ]}
-                    />
-                    <View
-                        style={{
-                            paddingLeft: 16,
-                            paddingRight: 12,
-                            paddingTop: 11,
-                            paddingBottom: 9,
-                        }}>
+                <View style={[FCS.shadowWrap, { borderRadius: sc.cardR }]}>
+                    <View style={[FCS.card, { borderRadius: sc.cardR }]}>
+                        <View
+                            style={[
+                                FCS.stripe,
+                                {
+                                    backgroundColor: sCfg.color,
+                                    borderTopLeftRadius: sc.cardR,
+                                    borderBottomLeftRadius: sc.cardR,
+                                },
+                            ]}
+                        />
+                        <View
+                            style={{
+                                paddingLeft: 16,
+                                paddingRight: 12,
+                                paddingTop: 11,
+                                paddingBottom: 9,
+                            }}>
                         {/* Top row */}
                         <View
                             style={{
@@ -1681,20 +1756,24 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                         </View>
                     </View>
                 </View>
+                    </View>
             </TouchableOpacity>
         </Animated.View>
     );
 });
 
 const FCS = StyleSheet.create({
-    card: {
+    shadowWrap: {
         backgroundColor: C.card,
-        overflow: "hidden",
         shadowColor: C.shadow,
         shadowOffset: { width: 0, height: 3 },
         shadowOpacity: 0.06,
         shadowRadius: 10,
         elevation: 3,
+    },
+    card: {
+        backgroundColor: C.card,
+        overflow: "hidden",
     },
     stripe: { position: "absolute", left: 0, top: 0, bottom: 0, width: 3 },
     avatar: { width: 44, height: 44, marginRight: 10, flexShrink: 0 },
@@ -1803,6 +1882,8 @@ const DetailView = ({
     setFollowUps,
     lastFetch,
     refreshDetailHistory,
+    refreshDetailEnquiry,
+    handlePullToRefresh,
 }) => {
     const insets = useSafeAreaInsets();
     const { width: SW, height: SH } = useWindowDimensions();
@@ -1810,6 +1891,8 @@ const DetailView = ({
     // Slide in from right on mount
     const mountX = useRef(new Animated.Value(SW)).current;
     const [tabIdx, setTabIdx] = useState(0);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [panelRefreshNonce, setPanelRefreshNonce] = useState(0);
     const [showFollowUpForm, setShowFollowUpForm] = useState(false);
     const [deletingFollowUpId, setDeletingFollowUpId] = useState(null);
     const tabRef = useRef(0);
@@ -2230,7 +2313,7 @@ const DetailView = ({
                     {tabIdx === 2 && (
                         <View style={{ flex: 1, minHeight: 0 }}>
                             <ChatScreen
-                                key={`followup-whatsapp-${enquiry?._id || enquiry?.enqNo || enquiry?.mobile || "chat"}`}
+                                key={`followup-whatsapp-${enquiry?._id || enquiry?.enqNo || enquiry?.mobile || "chat"}-${panelRefreshNonce}`}
                                 embedded
                                 manualKeyboardLift={Platform.OS === "android"}
                                 route={{ params: { enquiry } }}
@@ -2244,6 +2327,7 @@ const DetailView = ({
                             <FollowUpCallPanel
                                 enquiry={enquiry}
                                 onCallPress={onStartCall}
+                                refreshKey={panelRefreshNonce}
                             />
                         </View>
                     )}
@@ -2251,7 +2335,7 @@ const DetailView = ({
                     {/* ── TAB 4: Email ── */}
                     {tabIdx === 3 && (
                         <View style={{ flex: 1 }}>
-                            <FollowUpEmailPanel enquiry={enquiry} />
+                            <FollowUpEmailPanel enquiry={enquiry} refreshKey={panelRefreshNonce} />
                         </View>
                     )}
 
@@ -2268,6 +2352,14 @@ const DetailView = ({
                             <ScrollView
                                 ref={followUpFormScrollRef}
                                 style={{ flex: 1 }}
+                                refreshControl={
+                                    <RefreshControl
+                                        refreshing={isRefreshing}
+                                        onRefresh={handlePullToRefresh}
+                                        tintColor={C.primary}
+                                        colors={[C.primary, C.teal, C.info]}
+                                    />
+                                }
                                 contentContainerStyle={{
                                     padding: 14,
                                     paddingBottom: Math.max(
@@ -4674,6 +4766,7 @@ export default function FollowUpScreen({ navigation, route }) {
             setHistoryLoading(true);
             const hist = await followupService.getFollowUpHistory(
                 detailEnquiry.enqNo || detailEnquiry.enqId || detailEnquiry._id,
+                { force: true },
             );
             setDetailHistory(Array.isArray(hist) ? hist : []);
             console.log(
@@ -4687,6 +4780,22 @@ export default function FollowUpScreen({ navigation, route }) {
             setDetailHistory([]);
         } finally {
             setHistoryLoading(false);
+        }
+    }, [detailEnquiry]);
+
+    const refreshDetailEnquiry = useCallback(async () => {
+        if (!detailEnquiry) return;
+        try {
+            const full = await enquiryService.getEnquiryById(
+                detailEnquiry.enqId || detailEnquiry._id || detailEnquiry.enqNo,
+                { force: true },
+            );
+            if (full) {
+                setDetailEnquiry(full);
+                setSelectedEnquiry(full);
+            }
+        } catch (_error) {
+            // ignore refresh errors
         }
     }, [detailEnquiry]);
 
@@ -4910,6 +5019,19 @@ export default function FollowUpScreen({ navigation, route }) {
         }
     };
 
+    const handlePullToRefresh = useCallback(async () => {
+        setIsRefreshing(true);
+        try {
+            await Promise.all([
+                Promise.resolve(refreshDetailEnquiry?.()),
+                Promise.resolve(refreshDetailHistory?.()),
+            ]);
+            setPanelRefreshNonce((n) => n + 1);
+        } finally {
+            setIsRefreshing(false);
+        }
+    }, [refreshDetailEnquiry, refreshDetailHistory]);
+
     const handleStartContactCall = useCallback(async (enquiry) => {
         const digits = String(enquiry?.mobile || "").replace(/\D/g, "");
         if (!digits) {
@@ -4970,11 +5092,13 @@ export default function FollowUpScreen({ navigation, route }) {
         let active = true;
         const loadCalendarSummary = async () => {
             try {
+                const monthRange = getMonthDateRange(`${calendarMonth}-01`);
                 const allRes = await followupService.getFollowUps(
                     "All",
                     1,
-                    500,
+                    250,
                     "",
+                    monthRange,
                 );
                 if (!active) return;
                 const allItems = Array.isArray(allRes?.data) ? allRes.data : [];
@@ -5048,19 +5172,17 @@ export default function FollowUpScreen({ navigation, route }) {
         [openDetail, sc],
     );
     const keyExtractor = useCallback(
-        (item, i) =>
-            String(
+        (item, i) => {
+            // Keep keys stable per enquiry to avoid unmount/mount flicker when status/date changes
+            // (which can look like UI "blur" or broken separator lines on Android).
+            return String(
                 item?.listKey ||
-                    [
-                        item?.enqId || item?._id || item?.enqNo || `item-${i}`,
-                        normalizeStatus(item?.status || ""),
-                        item?.nextFollowUpDate ||
-                            item?.latestFollowUpDate ||
-                            item?.date ||
-                            "",
-                        item?.isVirtualNew ? "virtual" : "history",
-                    ].join("-"),
-            ),
+                    item?.enqId ||
+                    item?.enqNo ||
+                    item?._id ||
+                    `item-${i}`,
+            );
+        },
         [],
     );
 
@@ -5408,7 +5530,8 @@ export default function FollowUpScreen({ navigation, route }) {
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
                 windowSize={10}
-                removeClippedSubviews
+                // Android + complex cards (shadows/animations) can flicker with clipping enabled.
+                removeClippedSubviews={Platform.OS !== "android"}
                 ListFooterComponent={
                     isLoadingMore ? (
                         <ActivityIndicator
@@ -6011,6 +6134,8 @@ export default function FollowUpScreen({ navigation, route }) {
                         setFollowUps={setFollowUps}
                         lastFetch={lastFetch}
                         refreshDetailHistory={refreshDetailHistory}
+                        refreshDetailEnquiry={refreshDetailEnquiry}
+                        handlePullToRefresh={handlePullToRefresh}
                     />
                 </View>
             )}

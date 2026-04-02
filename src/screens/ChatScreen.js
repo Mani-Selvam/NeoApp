@@ -470,6 +470,7 @@ export default function ChatScreen({
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -648,12 +649,14 @@ export default function ChatScreen({
     channels.forEach((ch) => socket.current.on(ch, addMessage));
   };
 
-  const loadHistory = async () => {
+  const loadHistory = async ({ force = false, silent = false } = {}) => {
     try {
+      if (!silent) setLoading(true);
       const result = await whatsappService.getChatHistory(
         enquiry.mobile,
         1,
         30,
+        { force },
       );
       setMessages(result.messages || []);
       setHasMore(result.pagination?.hasMore || false);
@@ -661,11 +664,22 @@ export default function ChatScreen({
     } catch (e) {
       console.error("History fail:", e);
     } finally {
-      setLoading(false);
-      setTimeout(() => {
-        scrollToLatest(false, true);
-        initialScrollDone.current = true;
-      }, 300);
+      if (!silent) {
+        setLoading(false);
+        setTimeout(() => {
+          scrollToLatest(false, true);
+          initialScrollDone.current = true;
+        }, 300);
+      }
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadHistory({ force: true, silent: true });
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -1073,6 +1087,8 @@ export default function ChatScreen({
             ref={flatListRef}
             style={{ flex: 1, minHeight: 0 }}
             data={messages}
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
             renderItem={({ item }) => (
               <MessageBubble
                 item={item}

@@ -2,6 +2,9 @@ import axios from "axios";
 import getApiClient from "./apiClient";
 import { API_URL } from "./apiConfig";
 import { getAuthToken } from "./secureTokenStorage";
+import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+
+const DEFAULT_TTL_MS = 60_000;
 
 const getAuthHeader = async (isMultipart = false) => {
     const token = await getAuthToken();
@@ -13,11 +16,34 @@ const getAuthHeader = async (isMultipart = false) => {
     };
 };
 
-export const getChatHistory = async (phoneNumber, page = 1, limit = 30) => {
+export const getChatHistory = async (phoneNumber, page = 1, limit = 30, options = {}) => {
+    const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
+    const key = buildCacheKey(
+        "whatsapp:history:v1",
+        phoneNumber || "unknown",
+        String(page),
+        String(limit),
+    );
+    const cached = await getCacheEntry(key).catch(() => null);
+    if (!force && cached?.value && isFresh(cached, ttlMs)) return cached.value;
+    if (!force && cached?.value) {
+        Promise.resolve()
+            .then(async () => {
+                const client = await getApiClient();
+                const response = await client.get(
+                    `/whatsapp/history/${phoneNumber}?page=${page}&limit=${limit}`,
+                );
+                await setCacheEntry(key, response.data).catch(() => {});
+            })
+            .catch(() => {});
+        return cached.value;
+    }
+
     const client = await getApiClient();
     const response = await client.get(
-        `/whatsapp/history/${phoneNumber}?page=${page}&limit=${limit}`
+        `/whatsapp/history/${phoneNumber}?page=${page}&limit=${limit}`,
     );
+    await setCacheEntry(key, response.data).catch(() => {});
     return response.data; // Now returns { messages: [], pagination: {} }
 };
 

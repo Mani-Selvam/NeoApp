@@ -11,8 +11,10 @@ import {
     Animated,
     DeviceEventEmitter,
     Dimensions,
+    Image,
     Modal,
     Platform,
+    RefreshControl,
     ScrollView,
     StatusBar,
     StyleSheet,
@@ -28,6 +30,7 @@ import {
 import Svg, { Circle, G, Path } from "react-native-svg";
 import AppSideMenu from "../components/AppSideMenu";
 import { useAuth } from "../contexts/AuthContext";
+import { getImageUrl } from "../services/apiConfig";
 import {
     buildCacheKey,
     getCacheEntry,
@@ -658,6 +661,7 @@ export default function ReportScreen({ navigation }) {
     );
     const [statusFilter, setStatusFilter] = useState(ALL_STATUS);
     const [isLoading, setIsLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [reportData, setReportData] = useState({
         enquiries: [],
         followups: [],
@@ -740,6 +744,15 @@ export default function ReportScreen({ navigation }) {
             subCreated.remove();
             subCall.remove();
         };
+    }, [loadReportData]);
+
+    const handleRefresh = useCallback(async () => {
+        setIsRefreshing(true);
+        try {
+            await loadReportData({ force: true, showLoading: false });
+        } finally {
+            setIsRefreshing(false);
+        }
     }, [loadReportData]);
 
     const filterRange = useMemo(
@@ -1138,7 +1151,7 @@ export default function ReportScreen({ navigation }) {
                 user={user}
                 onLogout={logout}
                 activeRouteName="Report"
-                resolveImageUrl={(value) => value}
+                resolveImageUrl={getImageUrl}
             />
 
             <View
@@ -1151,6 +1164,7 @@ export default function ReportScreen({ navigation }) {
                 </TouchableOpacity>
                 <Text style={st.topHeaderTitle}>Reports</Text>
                 <View style={st.topHeaderRight}>
+                    <View style={st.topHeaderRightRow}>
                     <TouchableOpacity
                         style={st.exportHeaderBtn}
                         onPress={exportReport}
@@ -1162,11 +1176,41 @@ export default function ReportScreen({ navigation }) {
                         />
                         <Text style={st.exportHeaderText}>Download CSV</Text>
                     </TouchableOpacity>
+                    <TouchableOpacity
+                        style={st.avatarBtn}
+                        activeOpacity={0.85}
+                        onPress={() => navigation.navigate("ProfileScreen")}>
+                        <LinearGradient
+                            colors={[C.sky, C.teal]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={st.avatarGrad}>
+                            {user?.logo ? (
+                                <Image
+                                    source={{ uri: getImageUrl(user.logo) }}
+                                    style={st.avatarImg}
+                                />
+                            ) : (
+                                <Text style={st.avatarText}>
+                                    {user?.name?.[0]?.toUpperCase?.() ?? "M"}
+                                </Text>
+                            )}
+                        </LinearGradient>
+                    </TouchableOpacity>
+                    </View>
                 </View>
             </View>
 
             <ScrollView
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={handleRefresh}
+                        tintColor={C.gold}
+                        colors={[C.gold, C.teal, C.sky]}
+                    />
+                }
                 contentContainerStyle={[
                     st.scroll,
                     { paddingTop: insets.top > 0 ? 4 : 12 },
@@ -1949,6 +1993,11 @@ const st = StyleSheet.create({
         position: "relative",
         alignItems: "flex-end",
     },
+    topHeaderRightRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+    },
     exportHeaderBtn: {
         flexDirection: "row",
         alignItems: "center",
@@ -1964,6 +2013,29 @@ const st = StyleSheet.create({
         fontSize: 13,
         fontWeight: "700",
         color: C.gold,
+    },
+    avatarBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        overflow: "hidden",
+        borderWidth: 1,
+        borderColor: C.border,
+    },
+    avatarGrad: {
+        width: "100%",
+        height: "100%",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    avatarImg: {
+        width: "100%",
+        height: "100%",
+    },
+    avatarText: {
+        color: "#fff",
+        fontWeight: "900",
+        fontSize: 16,
     },
     exportMenu: {
         position: "absolute",

@@ -35,16 +35,13 @@ import {
 } from "react-native-safe-area-context";
 import ConfettiBurst from "../components/ConfettiBurst";
 import * as addressService from "../services/addressService";
-import { API_URL as GLOBAL_API_URL } from "../services/apiConfig";
+import getApiClient from "../services/apiClient";
 import * as leadSourceService from "../services/leadSourceService";
 import notificationService from "../services/notificationService";
 import * as productService from "../services/productService";
-import { getAuthToken } from "../services/secureTokenStorage";
 import * as staffService from "../services/staffService";
 import { useAuth } from "../contexts/AuthContext";
 import { getImageUrl } from "../utils/imageHelper";
-
-const API_URL = `${GLOBAL_API_URL}/enquiries`;
 
 const getOrdinalAdminLabel = (position) => {
   const labels = {
@@ -1019,11 +1016,13 @@ export default function AddEnquiryScreen({ route, navigation }) {
         mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.5,
-        base64: true,
+        // Performance: don't embed base64 into JSON (very large payload in production).
+        // We'll upload the file `uri` using multipart/form-data on submit.
+        quality: 0.6,
+        base64: false,
       });
       if (!res.canceled) {
-        set("image", `data:image/jpeg;base64,${res.assets[0].base64}`);
+        set("image", res.assets?.[0]?.uri || null);
       }
     } catch {
       toast("Failed to pick image", "error");
@@ -1051,26 +1050,54 @@ export default function AddEnquiryScreen({ route, navigation }) {
     closeAll();
     setLoading(true);
     try {
-      const token = await getAuthToken();
-      const url = isEditMode ? `${API_URL}/${editingEnquiry._id}` : API_URL;
-      const method = isEditMode ? "PUT" : "POST";
       const body = {
         ...form,
         assignedTo: isStaffUser ? null : form.assignedTo || null,
         cost: form.cost ? Number(form.cost) : undefined,
       };
 
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: token ? `Bearer ${token}` : "",
-        },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
+      const client = await getApiClient();
+      const imageValue = form.image;
+      const isLocalFile =
+        typeof imageValue === "string" &&
+        (imageValue.startsWith("file://") ||
+          imageValue.startsWith("content://"));
 
-      if (res.ok) {
+      let data = null;
+      if (isLocalFile) {
+        const fd = new FormData();
+        Object.entries(body).forEach(([k, v]) => {
+          if (v === undefined) return;
+          if (k === "image") return;
+          fd.append(k, v == null ? "" : String(v));
+        });
+        fd.append("image", {
+          uri: imageValue,
+          name: "enquiry.jpg",
+          type: "image/jpeg",
+        });
+
+        const resp = isEditMode
+          ? await client.put(`/enquiries/${editingEnquiry._id}`, fd)
+          : await client.post("/enquiries", fd);
+        data = resp.data;
+      } else {
+        const payload = { ...body };
+        // Avoid sending file:// uri as JSON if it somehow exists.
+        if (
+          typeof payload.image === "string" &&
+          (payload.image.startsWith("file://") ||
+            payload.image.startsWith("content://"))
+        ) {
+          delete payload.image;
+        }
+        const resp = isEditMode
+          ? await client.put(`/enquiries/${editingEnquiry._id}`, payload)
+          : await client.post("/enquiries", payload);
+        data = resp.data;
+      }
+
+      if (data) {
         if (!isEditMode) confettiRef.current?.play?.();
         await notificationService.showEnquirySuccessNotification({
           name: form.name,
@@ -1098,9 +1125,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
           setTimeout(() => navigation.goBack(), 800);
         }, 300);
       } else {
-        const msg =
-          data.message ||
-          (isEditMode ? "Failed to update" : "Failed to create enquiry");
+        const msg = isEditMode ? "Failed to update" : "Failed to create enquiry";
         await notificationService.showEnquiryErrorNotification(msg);
         toast(msg, "error");
       }

@@ -2,6 +2,9 @@ import axios from "axios";
 import getApiClient from "./apiClient";
 import { API_URL } from "./apiConfig";
 import { getAuthToken } from "./secureTokenStorage";
+import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+
+const DEFAULT_TTL_MS = 60_000;
 
 const getAuthHeader = async (isMultipart = false) => {
     const token = await getAuthToken();
@@ -25,9 +28,25 @@ export const saveEmailSettings = async (payload) => {
     return res.data;
 };
 
-export const getEmailTemplates = async () => {
+export const getEmailTemplates = async (options = {}) => {
+    const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
+    const cacheKey = buildCacheKey("email:templates:v1");
+    const cached = await getCacheEntry(cacheKey).catch(() => null);
+    if (!force && cached?.value && isFresh(cached, ttlMs)) return cached.value;
+    if (!force && cached?.value) {
+        Promise.resolve()
+            .then(async () => {
+                const client = await getApiClient();
+                const res = await client.get("/email/templates");
+                await setCacheEntry(cacheKey, res.data).catch(() => {});
+            })
+            .catch(() => {});
+        return cached.value;
+    }
+
     const client = await getApiClient();
     const res = await client.get("/email/templates");
+    await setCacheEntry(cacheKey, res.data).catch(() => {});
     return res.data;
 };
 
@@ -49,13 +68,31 @@ export const deleteEmailTemplate = async (id) => {
     return res.data;
 };
 
-export const getEmailLogs = async ({ status, page = 1, limit = 20 } = {}) => {
-    const client = await getApiClient();
+export const getEmailLogs = async (params = {}, options = {}) => {
+    const { status, page = 1, limit = 20 } = params || {};
+    const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
     qs.set("page", String(page));
     qs.set("limit", String(limit));
+
+    const cacheKey = buildCacheKey("email:logs:v1", qs.toString());
+    const cached = await getCacheEntry(cacheKey).catch(() => null);
+    if (!force && cached?.value && isFresh(cached, ttlMs)) return cached.value;
+    if (!force && cached?.value) {
+        Promise.resolve()
+            .then(async () => {
+                const client = await getApiClient();
+                const res = await client.get(`/email/logs?${qs.toString()}`);
+                await setCacheEntry(cacheKey, res.data).catch(() => {});
+            })
+            .catch(() => {});
+        return cached.value;
+    }
+
+    const client = await getApiClient();
     const res = await client.get(`/email/logs?${qs.toString()}`);
+    await setCacheEntry(cacheKey, res.data).catch(() => {});
     return res.data;
 };
 

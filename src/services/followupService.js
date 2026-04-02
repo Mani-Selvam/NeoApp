@@ -1,5 +1,8 @@
 import { DeviceEventEmitter } from "react-native";
 import getApiClient from "./apiClient";
+import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+
+const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 60000);
 
 // GET FOLLOWUPS (with tab filter and pagination)
 export const getFollowUps = async (
@@ -103,10 +106,29 @@ export const deleteFollowUp = async (id) => {
 };
 
 // GET FOLLOW-UP HISTORY (all records for an enquiry)
-export const getFollowUpHistory = async (enqNoOrId) => {
+export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
     try {
+        const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
+        const key = buildCacheKey("followups:history:v1", String(enqNoOrId || ""));
+
+        if (!force) {
+            const cached = await getCacheEntry(key).catch(() => null);
+            if (cached?.value && isFresh(cached, ttlMs)) return cached.value;
+            if (cached?.value) {
+                Promise.resolve()
+                    .then(async () => {
+                        const client = await getApiClient();
+                        const response = await client.get(`/followups/history/${enqNoOrId}`);
+                        await setCacheEntry(key, response.data).catch(() => {});
+                    })
+                    .catch(() => {});
+                return cached.value;
+            }
+        }
+
         const client = await getApiClient();
         const response = await client.get(`/followups/history/${enqNoOrId}`);
+        await setCacheEntry(key, response.data).catch(() => {});
         return response.data;
     } catch (error) {
         console.error(
