@@ -921,7 +921,7 @@ router.post("/", verifyToken, async (req, res) => {
 // GET CALL STATS/REPORTS
 router.get("/stats", verifyToken, async (req, res) => {
     try {
-        const { filter } = req.query;
+        const { filter, staffId, dateFrom, dateTo } = req.query;
         const ownerId = getOwnerId(req);
 
         let matchQuery = {
@@ -929,12 +929,36 @@ router.get("/stats", verifyToken, async (req, res) => {
             isPersonal: { $ne: true },
         };
 
+        // Staff can only see their own call stats
+        const isStaff = String(req.user?.role || "").toLowerCase() === "staff";
+        const requestedStaffId = String(staffId || "").trim();
+        const effectiveStaffId = isStaff
+            ? String(req.userId || "")
+            : requestedStaffId;
+        if (effectiveStaffId && mongoose.Types.ObjectId.isValid(effectiveStaffId)) {
+            matchQuery.staffId = new mongoose.Types.ObjectId(effectiveStaffId);
+        }
+
+        // Explicit date range override (takes precedence over named filters)
+        if (dateFrom || dateTo) {
+            const from = dateFrom ? new Date(dateFrom) : null;
+            const to = dateTo ? new Date(dateTo) : null;
+            const fromOk = from && !Number.isNaN(from.getTime());
+            const toOk = to && !Number.isNaN(to.getTime());
+            if (fromOk || toOk) {
+                matchQuery.callTime = {
+                    ...(fromOk ? { $gte: from } : {}),
+                    ...(toOk ? { $lte: to } : {}),
+                };
+            }
+        }
+
         // Apply Time Filter
-        if (filter === "Today") {
+        if (!matchQuery.callTime && filter === "Today") {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             matchQuery.callTime = { $gte: today };
-        } else if (filter === "This Week") {
+        } else if (!matchQuery.callTime && filter === "This Week") {
             const weekAgo = new Date();
             weekAgo.setDate(weekAgo.getDate() - 7);
             matchQuery.callTime = { $gte: weekAgo };
@@ -986,14 +1010,46 @@ router.get("/stats", verifyToken, async (req, res) => {
             CallLog.aggregate([
                 {
                     $match: {
-                        userId: new mongoose.Types.ObjectId(ownerId),
-                        isPersonal: { $ne: true },
+                        ...matchQuery,
                     },
                 },
                 {
                     $group: {
                         _id: "$staffId",
-                        count: { $sum: 1 },
+                        totalCalls: { $sum: 1 },
+                        incoming: {
+                            $sum: {
+                                $cond: [
+                                    { $eq: ["$callType", "Incoming"] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        outgoing: {
+                            $sum: {
+                                $cond: [
+                                    { $eq: ["$callType", "Outgoing"] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        missed: {
+                            $sum: {
+                                $cond: [{ $eq: ["$callType", "Missed"] }, 1, 0],
+                            },
+                        },
+                        notAttended: {
+                            $sum: {
+                                $cond: [
+                                    { $eq: ["$callType", "Not Attended"] },
+                                    1,
+                                    0,
+                                ],
+                            },
+                        },
+                        totalDuration: { $sum: "$duration" },
                     },
                 },
                 {
@@ -1008,7 +1064,12 @@ router.get("/stats", verifyToken, async (req, res) => {
                 {
                     $project: {
                         name: "$staffInfo.name",
-                        count: 1,
+                        totalCalls: 1,
+                        incoming: 1,
+                        outgoing: 1,
+                        missed: 1,
+                        notAttended: 1,
+                        totalDuration: 1,
                     },
                 },
             ]),

@@ -4,6 +4,27 @@ import { emitFollowupChanged } from "./appEvents";
 
 const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 60000);
 
+const normalizeEnquiryKey = (value) => {
+    if (!value) return "";
+    if (typeof value === "string" || typeof value === "number") {
+        const s = String(value).trim();
+        return s && s !== "[object Object]" ? s : "";
+    }
+    if (typeof value === "object") {
+        const id =
+            value?._id ||
+            value?.enqId ||
+            value?.enquiryId ||
+            value?.id ||
+            value?.enqNo ||
+            "";
+        const s = String(id || "").trim();
+        return s && s !== "[object Object]" ? s : "";
+    }
+    const s = String(value).trim();
+    return s && s !== "[object Object]" ? s : "";
+};
+
 // GET FOLLOWUPS (with tab filter and pagination)
 export const getFollowUps = async (
     tab = "Today",
@@ -118,7 +139,9 @@ export const deleteFollowUp = async (id) => {
 export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
     try {
         const { force = false, ttlMs = DEFAULT_TTL_MS } = options || {};
-        const key = buildCacheKey("followups:history:v1", String(enqNoOrId || ""));
+        const normalizedKey = normalizeEnquiryKey(enqNoOrId);
+        if (!normalizedKey) throw new Error("Invalid enquiry id");
+        const key = buildCacheKey("followups:history:v2", normalizedKey);
 
         if (!force) {
             const cached = await getCacheEntry(key).catch(() => null);
@@ -127,7 +150,9 @@ export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
                 Promise.resolve()
                     .then(async () => {
                         const client = await getApiClient();
-                        const response = await client.get(`/followups/history/${enqNoOrId}`);
+                        const response = await client.get(
+                            `/followups/history/${encodeURIComponent(normalizedKey)}`,
+                        );
                         await setCacheEntry(key, response.data, { tags: ["followups"] }).catch(() => {});
                     })
                     .catch(() => {});
@@ -136,7 +161,9 @@ export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
         }
 
         const client = await getApiClient();
-        const response = await client.get(`/followups/history/${enqNoOrId}`);
+        const response = await client.get(
+            `/followups/history/${encodeURIComponent(normalizedKey)}`,
+        );
         await setCacheEntry(key, response.data, { tags: ["followups"] }).catch(() => {});
         return response.data;
     } catch (error) {

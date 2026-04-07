@@ -1284,6 +1284,8 @@ const mapEnquiryToFollowUpCard = (item = {}) => ({
         item?.followUpDate ||
         item?.date
     ),
+    // UI hint (Today tab): set during fetch when this enquiry has a missed follow-up today.
+    hasMissedActivity: false,
 });
 const getHistoryEditStatus = (item = {}) => {
     const explicit = normalizeStatus(item?.enquiryStatus || item?.status || "");
@@ -1497,6 +1499,8 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
     const norm = normalizeStatus(item?.status);
     const sCfg = statusCfg(norm);
     const cols = avatarGrad(item?.name);
+    const missedAlert = Boolean(item?.hasMissedActivity);
+    const overdueAlert = isMissed(item);
 
     const pan = useRef(
         PanResponder.create({
@@ -1556,8 +1560,9 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                             FCS.card,
                             {
                                 borderRadius: sc.cardR,
-                                backgroundColor: isMissed(item)
-                                    ? "#FFFBEB"
+                                backgroundColor:
+                                    missedAlert || overdueAlert
+                                        ? "#FFF7ED"
                                     : C.card,
                             },
                         ]}>
@@ -1565,9 +1570,11 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                             style={[
                                 FCS.stripe,
                                 {
-                                    backgroundColor: isMissed(item)
+                                    backgroundColor: missedAlert
                                         ? C.danger
-                                        : sCfg.color,
+                                        : overdueAlert
+                                          ? C.danger
+                                          : sCfg.color,
                                     borderTopLeftRadius: sc.cardR,
                                     borderBottomLeftRadius: sc.cardR,
                                 },
@@ -1745,7 +1752,7 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                                   ))}
                                     </Text>
                                 </View>
-                                {isMissed(item) && (
+                                {(missedAlert || overdueAlert) && (
                                     <View
                                         style={{
                                             backgroundColor: C.danger + "20",
@@ -1769,7 +1776,9 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                                 textTransform: "uppercase",
                                                 letterSpacing: 0.2,
                                             }}>
-                                            Overdue
+                                            {missedAlert
+                                                ? "Missed"
+                                                : "Overdue"}
                                         </Text>
                                     </View>
                                 )}
@@ -4163,6 +4172,8 @@ export default function FollowUpScreen({ navigation, route }) {
     const [detailEnquiry, setDetailEnquiry] = useState(null);
     const [detailHistory, setDetailHistory] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const detailLoadReqIdRef = useRef(0);
+    const detailHistoryReqIdRef = useRef(0);
     const [selectedEnquiry, setSelectedEnquiry] = useState(null);
     const [detailAutoOpenFormToken, setDetailAutoOpenFormToken] =
         useState(null);
@@ -4287,10 +4298,11 @@ export default function FollowUpScreen({ navigation, route }) {
             );
 
             // Server also auto-marks Missed on /followups, so refresh both list + counts.
-            fetchFollowUps(activeTab, true, {
+            fetchFollowUps(focusTab || activeTab, true, {
                 force: true,
                 showIndicator: false,
-                allowCache: true,
+                allowCache: false,
+                selectedDate: focusDate,
             });
             fetchTabCounts(selectedDate).catch(() => {});
             if (showMissedModal) loadMissedModalItems(selectedDate);
@@ -4497,7 +4509,7 @@ export default function FollowUpScreen({ navigation, route }) {
                             fetchFollowUps(activeTab, true, {
                                 force: true,
                                 showIndicator: false,
-                                allowCache: true,
+                                allowCache: false,
                             });
                         })
                         .catch(() => {});
@@ -4577,7 +4589,7 @@ export default function FollowUpScreen({ navigation, route }) {
                         fetchFollowUps(activeTab, true, {
                             force: true,
                             showIndicator: false,
-                            allowCache: true,
+                            allowCache: false,
                         });
                     }
                 } catch (_e) {}
@@ -4604,7 +4616,7 @@ export default function FollowUpScreen({ navigation, route }) {
             fetchFollowUps(activeTab, true, {
                 force: true,
                 showIndicator: false,
-                allowCache: true,
+                allowCache: false,
             });
             if (refreshCounts) fetchTabCounts(selectedDate).catch(() => {});
             if (refreshModals) {
@@ -4628,10 +4640,10 @@ export default function FollowUpScreen({ navigation, route }) {
             refresh({ clear: false, refreshCounts: false, refreshModals: false }),
         );
         const unsubFollowup = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, () =>
-            refresh({ clear: false, refreshCounts: false, refreshModals: true }),
+            refresh({ clear: false, refreshCounts: true, refreshModals: true }),
         );
         const unsubEnquiry = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, () =>
-            refresh({ clear: true, refreshCounts: true, refreshModals: false }),
+            refresh({ clear: true, refreshCounts: true, refreshModals: true }),
         );
 
         return () => {
@@ -4763,10 +4775,11 @@ export default function FollowUpScreen({ navigation, route }) {
 
     // Feature #2: Auto-load next page on scroll
     const handleEndReached = useCallback(() => {
-        if (isLoadingMore || !hasMore) return;
-        setIsLoadingMore(true);
+        // Important: don't set `isLoadingMore` here. `fetchFollowUps()` manages it.
+        // Setting it early causes a deadlock where `fetchFollowUps()` exits immediately.
+        if (isLoading || isRefreshing || isLoadingMore || !hasMore) return;
         fetchFollowUps(activeTab, false);
-    }, [isLoadingMore, hasMore, activeTab]);
+    }, [isLoading, isRefreshing, isLoadingMore, hasMore, activeTab]);
 
     // Feature #4: Initialize Socket.IO for real-time updates
     useEffect(() => {
@@ -4833,7 +4846,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 if (tabName === activeTab) continue; // Skip current tab
 
                 const cacheKey = buildCacheKey(
-                    "followups:list:v1",
+                    "followups:list:v2",
                     user?.id || user?._id || "",
                     tabName,
                     selectedDate || "",
@@ -4857,32 +4870,106 @@ export default function FollowUpScreen({ navigation, route }) {
                     const filterDate = tabUsesExactDateFilter(tabName)
                         ? selectedDate
                         : "";
-                    const res = await followupService.getFollowUps(
-                        tabName,
-                        1,
-                        20,
-                        filterDate,
-                        tabName === "All" ? monthRange : {},
-                    );
-                    const data = Array.isArray(res?.data)
-                        ? res.data
-                        : Array.isArray(res)
-                          ? res
-                          : [];
 
-                    // Cache silently
+                    let items = [];
+                    let hasMore = false;
+                    let nextPage = 1;
+
+                    if (tabName === "Today") {
+                        const enquiryRes = await enquiryService.getAllEnquiries(
+                            1,
+                            20,
+                            searchQuery.trim(),
+                            "",
+                            "",
+                            selectedDate,
+                        );
+                        const data = Array.isArray(enquiryRes?.data)
+                            ? enquiryRes.data
+                            : Array.isArray(enquiryRes)
+                              ? enquiryRes
+                              : [];
+                        const total = Array.isArray(enquiryRes)
+                            ? 1
+                            : Number(enquiryRes?.pagination?.pages || 1);
+                        items = dedupeByLatestActivity(
+                            data.map(mapEnquiryToFollowUpCard),
+                        );
+                        hasMore = Array.isArray(enquiryRes) ? false : 1 < total;
+                        nextPage = hasMore ? 2 : 1;
+                    } else {
+                        const res = await followupService.getFollowUps(
+                            tabName,
+                            1,
+                            20,
+                            filterDate,
+                            tabName === "All" ? monthRange : {},
+                        );
+                        const data = Array.isArray(res?.data)
+                            ? res.data
+                            : Array.isArray(res)
+                              ? res
+                              : [];
+                        const total = Array.isArray(res)
+                            ? 1
+                            : Number(res?.pagination?.pages || 1);
+                        items = data.map(mapFollowUpItemToEnquiryCard);
+                        hasMore = Array.isArray(res) ? false : 1 < total;
+                        nextPage = hasMore ? 2 : 1;
+
+                        if (tabName === "All") {
+                            try {
+                                const enquiryRes =
+                                    await enquiryService.getAllEnquiries(
+                                        1,
+                                        500,
+                                        searchQuery.trim(),
+                                        "New",
+                                        "",
+                                        "",
+                                        monthRange,
+                                    );
+                                const enquiryItems = Array.isArray(
+                                    enquiryRes?.data,
+                                )
+                                    ? enquiryRes.data
+                                    : Array.isArray(enquiryRes)
+                                      ? enquiryRes
+                                      : [];
+                                const newOnlyItems = enquiryItems
+                                    .filter((item) => !item?.latestFollowUpDate)
+                                    .map(mapEnquiryToFollowUpCard);
+                                items = [...newOnlyItems, ...items];
+                            } catch (_e) {
+                                // ignore prefetch enrichment failures
+                            }
+                            if (searchQuery.trim()) {
+                                const q = searchQuery.trim().toLowerCase();
+                                items = items.filter(
+                                    (item) =>
+                                        String(item?.name || "")
+                                            .toLowerCase()
+                                            .includes(q) ||
+                                        String(item?.mobile || "")
+                                            .toLowerCase()
+                                            .includes(q) ||
+                                        String(item?.enqNo || "")
+                                            .toLowerCase()
+                                            .includes(q),
+                                );
+                            }
+                            items = dedupeByLatestActivity(items);
+                        }
+                    }
+
                     await setCacheEntry(
                         cacheKey,
-                        {
-                        items: data.map(mapFollowUpItemToEnquiryCard),
-                        hasMore: !Array.isArray(res),
-                        page: 1,
-                        },
+                        { items, hasMore, page: nextPage },
                         { tags: ["followups"] },
                     ).catch(() => {});
 
                     console.log(
-                        `[FollowUpScreen] Prefetched ${tabName}: ${data.length} items`,
+                        `[FollowUpScreen] Prefetched ${tabName}: ${items.length} items`,
                     );
                 } catch (err) {
                     console.log(
@@ -4906,6 +4993,10 @@ export default function FollowUpScreen({ navigation, route }) {
         const { force = false, allowCache = true } = opts || {};
         const showIndicator =
             opts?.showIndicator ?? (refresh && followUps.length > 0);
+        const effectiveSelectedDate =
+            opts?.selectedDate != null ? String(opts.selectedDate) : selectedDate;
+        const effectiveSearchQuery =
+            opts?.searchQuery != null ? String(opts.searchQuery) : searchQuery;
 
         // FIX #5: Cancel previous request if still pending
         if (requestAbortRef.current) {
@@ -4914,22 +5005,24 @@ export default function FollowUpScreen({ navigation, route }) {
         requestAbortRef.current = new AbortController();
 
         const cacheKey = buildCacheKey(
-            "followups:list:v1",
+            "followups:list:v2",
             user?.id || user?._id || "",
             tab,
-            selectedDate || "",
-            String(searchQuery || "")
+            effectiveSelectedDate || "",
+            String(effectiveSearchQuery || "")
                 .trim()
                 .toLowerCase(),
         );
 
         let cached = null;
+        let cachedItemCount = null;
         if (refresh && allowCache) {
             cached = await getCacheEntry(cacheKey).catch(() => null);
             if (cached?.value?.items) {
                 const cachedItems = Array.isArray(cached.value.items)
                     ? cached.value.items
                     : [];
+                cachedItemCount = cachedItems.length;
                 setFollowUps(cachedItems);
                 setHasMore(Boolean(cached.value.hasMore));
                 setPage(Number(cached.value.page || 1));
@@ -4940,7 +5033,10 @@ export default function FollowUpScreen({ navigation, route }) {
 
         if (refresh) {
             const shouldFetch =
-                force || !isFresh(cached, FOLLOWUPS_CACHE_TTL_MS);
+                force ||
+                !isFresh(cached, FOLLOWUPS_CACHE_TTL_MS) ||
+                // If cache is empty, always fetch to avoid "blank list until manual refresh".
+                cachedItemCount === 0;
             if (!shouldFetch) return;
             if (showIndicator) setIsLoading(true);
             setPage(1);
@@ -4951,17 +5047,42 @@ export default function FollowUpScreen({ navigation, route }) {
         }
         try {
             const pg = refresh ? 1 : page;
-            const monthRange = getMonthDateRange(selectedDate);
-            const filterDate = tabUsesExactDateFilter(tab) ? selectedDate : "";
+            const monthRange = getMonthDateRange(effectiveSelectedDate);
+            const filterDate = tabUsesExactDateFilter(tab)
+                ? effectiveSelectedDate
+                : "";
             if (tab === "Today" || tab === "Sales") {
-                const enquiryRes = await enquiryService.getAllEnquiries(
-                    pg,
-                    20,
-                    searchQuery.trim(),
-                    "",
-                    "",
-                    selectedDate,
-                );
+                const loadMissedAlertForToday =
+                    tab === "Today" &&
+                    effectiveSelectedDate === toIso(new Date()) &&
+                    refresh;
+
+                const [enquiryRes, todayFuRes, missedFuRes] = await Promise.all([
+                    enquiryService.getAllEnquiries(
+                        pg,
+                        20,
+                        effectiveSearchQuery.trim(),
+                        "",
+                        "",
+                        effectiveSelectedDate,
+                    ),
+                    loadMissedAlertForToday
+                        ? followupService.getFollowUps(
+                              "Today",
+                              1,
+                              300,
+                              effectiveSelectedDate,
+                          )
+                        : Promise.resolve(null),
+                    loadMissedAlertForToday
+                        ? followupService.getFollowUps(
+                              "Missed",
+                              1,
+                              300,
+                              effectiveSelectedDate,
+                          )
+                        : Promise.resolve(null),
+                ]);
                 let data = [],
                     total = 1;
                 if (Array.isArray(enquiryRes)) {
@@ -4971,12 +5092,55 @@ export default function FollowUpScreen({ navigation, route }) {
                     total = enquiryRes.pagination?.pages || 1;
                 }
                 if (rid !== fetchIdRef.current) return;
+
                 const allowedStatuses =
                     tab === "Sales"
                         ? ["Converted"]
                         : ["New", "Contacted", "Interested"];
+
+                let missedKeySet = null;
+                if (loadMissedAlertForToday) {
+                    missedKeySet = new Set();
+                    const pick = (res) =>
+                        Array.isArray(res?.data)
+                            ? res.data
+                            : Array.isArray(res)
+                              ? res
+                              : [];
+                    const fuItems = [
+                        ...pick(todayFuRes),
+                        ...pick(missedFuRes),
+                    ];
+                    for (const fu of fuItems) {
+                        try {
+                            const iso = getFollowUpCalendarDate(fu);
+                            if (iso !== effectiveSelectedDate) continue;
+                            if (getCalendarSummaryBucket(fu) !== "missed")
+                                continue;
+                            const key = String(
+                                fu?.enqId || fu?.enqNo || fu?._id || "",
+                            ).trim();
+                            if (key) missedKeySet.add(key);
+                        } catch {
+                            /* ignore */
+                        }
+                    }
+                }
+
                 data = data
                     .map(mapEnquiryToFollowUpCard)
+                    .map((item) => {
+                        if (!missedKeySet) return item;
+                        const key = String(
+                            item?.enqId || item?.enqNo || item?._id || "",
+                        ).trim();
+                        return {
+                            ...item,
+                            hasMissedActivity: Boolean(
+                                key && missedKeySet.has(key),
+                            ),
+                        };
+                    })
                     .filter((item) =>
                         allowedStatuses.includes(normalizeStatus(item?.status)),
                     );
@@ -4995,7 +5159,7 @@ export default function FollowUpScreen({ navigation, route }) {
 
                 setHasMore(nextHasMore);
                 setFollowUps(nextItems);
-                if (refresh) fetchTabCounts(selectedDate);
+                if (refresh) fetchTabCounts(effectiveSelectedDate);
                 lastFetch.current = Date.now();
                 setPage(nextPage);
                 await setCacheEntry(
@@ -5039,7 +5203,7 @@ export default function FollowUpScreen({ navigation, route }) {
                     const enquiryRes = await enquiryService.getAllEnquiries(
                         1,
                         500,
-                        searchQuery.trim(),
+                        effectiveSearchQuery.trim(),
                         "New",
                         "",
                         "",
@@ -5058,8 +5222,8 @@ export default function FollowUpScreen({ navigation, route }) {
                     // If enquiry-side fetch fails, keep follow-up data working normally.
                 }
             }
-            if (searchQuery.trim()) {
-                const q = searchQuery.trim().toLowerCase();
+            if (effectiveSearchQuery.trim()) {
+                const q = effectiveSearchQuery.trim().toLowerCase();
                 data = data.filter(
                     (item) =>
                         String(item?.name || "")
@@ -5086,7 +5250,7 @@ export default function FollowUpScreen({ navigation, route }) {
 
             setHasMore(nextHasMore);
             setFollowUps(nextItems);
-            if (refresh) fetchTabCounts(filterDate || selectedDate);
+            if (refresh) fetchTabCounts(filterDate || effectiveSelectedDate);
             lastFetch.current = Date.now();
             setPage(nextPage);
             await setCacheEntry(
@@ -5130,6 +5294,7 @@ export default function FollowUpScreen({ navigation, route }) {
 
     // ── Open detail ───────────────────────────────────────────────────────────
     const openDetail = useCallback(async (item) => {
+        const reqId = ++detailLoadReqIdRef.current;
         setDetailHistory([]);
         setHistoryLoading(true);
         detailSourceFollowUpIdRef.current =
@@ -5169,24 +5334,30 @@ export default function FollowUpScreen({ navigation, route }) {
             const full = await enquiryService.getEnquiryById(
                 item.enqId || item._id || item.enqNo,
             );
-            setDetailEnquiry(full || fb);
-            setSelectedEnquiry(full || fb);
-            setEditStatus(
-                getRecommendedNextStatus((full || fb)?.status || "New"),
-            );
+            if (reqId === detailLoadReqIdRef.current) {
+                setDetailEnquiry(full || fb);
+                setSelectedEnquiry(full || fb);
+                setEditStatus(
+                    getRecommendedNextStatus((full || fb)?.status || "New"),
+                );
+            }
         } catch {
-            setDetailEnquiry(fb);
-            setSelectedEnquiry(fb);
+            if (reqId === detailLoadReqIdRef.current) {
+                setDetailEnquiry(fb);
+                setSelectedEnquiry(fb);
+            }
         }
         try {
             const hist = await followupService.getFollowUpHistory(
-                item.enqNo || item.enqId || item._id,
+                item.enqId || item._id || item.enqNo,
             );
-            setDetailHistory(Array.isArray(hist) ? hist : []);
+            if (reqId === detailLoadReqIdRef.current) {
+                setDetailHistory(Array.isArray(hist) ? hist : []);
+            }
         } catch {
-            setDetailHistory([]);
+            if (reqId === detailLoadReqIdRef.current) setDetailHistory([]);
         } finally {
-            setHistoryLoading(false);
+            if (reqId === detailLoadReqIdRef.current) setHistoryLoading(false);
         }
     }, []);
 
@@ -5203,13 +5374,16 @@ export default function FollowUpScreen({ navigation, route }) {
 
     const refreshDetailHistory = useCallback(async () => {
         if (!detailEnquiry) return;
+        const reqId = ++detailHistoryReqIdRef.current;
         try {
             setHistoryLoading(true);
             const hist = await followupService.getFollowUpHistory(
-                detailEnquiry.enqNo || detailEnquiry.enqId || detailEnquiry._id,
+                detailEnquiry.enqId || detailEnquiry._id || detailEnquiry.enqNo,
                 { force: true },
             );
-            setDetailHistory(Array.isArray(hist) ? hist : []);
+            if (reqId === detailHistoryReqIdRef.current) {
+                setDetailHistory(Array.isArray(hist) ? hist : []);
+            }
             console.log(
                 `[FollowUpScreen] ✓ Detail history refreshed: ${hist?.length || 0} items`,
             );
@@ -5218,9 +5392,9 @@ export default function FollowUpScreen({ navigation, route }) {
                 "[FollowUpScreen] Error refreshing history:",
                 error?.message || error,
             );
-            setDetailHistory([]);
+            if (reqId === detailHistoryReqIdRef.current) setDetailHistory([]);
         } finally {
-            setHistoryLoading(false);
+            if (reqId === detailHistoryReqIdRef.current) setHistoryLoading(false);
         }
     }, [detailEnquiry]);
 
@@ -5239,6 +5413,40 @@ export default function FollowUpScreen({ navigation, route }) {
             // ignore refresh errors
         }
     }, [detailEnquiry]);
+
+    useEffect(() => {
+        if (!detailEnquiry) return undefined;
+
+        const matchesDetail = (payload) => {
+            const d = payload?.item || payload || {};
+            const pEnqId = String(d?.enqId?._id || d?.enqId || "").trim();
+            const pEnqNo = String(d?.enqNo || "").trim();
+            const deqId = String(
+                detailEnquiry?.enqId || detailEnquiry?._id || "",
+            ).trim();
+            const deqNo = String(detailEnquiry?.enqNo || "").trim();
+            if (pEnqId && deqId && pEnqId === deqId) return true;
+            if (pEnqNo && deqNo && pEnqNo === deqNo) return true;
+            return false;
+        };
+
+        const unsub = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, (payload) => {
+            if (!matchesDetail(payload)) return;
+            debounceByKey(
+                "followup-detail-refresh",
+                () => {
+                    Promise.resolve(refreshDetailEnquiry?.()).catch(() => {});
+                    Promise.resolve(refreshDetailHistory?.()).catch(() => {});
+                },
+                250,
+            );
+        });
+
+        return () => {
+            cancelDebounceKey("followup-detail-refresh");
+            unsub();
+        };
+    }, [detailEnquiry, refreshDetailEnquiry, refreshDetailHistory]);
 
     const handleEditScheduledFollowUp = useCallback((item) => {
         if (!item?._id) return;
@@ -5413,10 +5621,11 @@ export default function FollowUpScreen({ navigation, route }) {
             // but item stayed in old section if status changed to different category.
             setFollowUps([]);
             lastFetch.current = 0;
-            fetchFollowUps(activeTab, true, {
+            fetchFollowUps(focusTab || activeTab, true, {
                 force: true,
                 showIndicator: false,
-                allowCache: true,
+                allowCache: false,
+                selectedDate: focusDate,
             });
             if (
                 ["Contacted", "Interested", "Converted"].includes(

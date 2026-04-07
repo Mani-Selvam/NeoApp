@@ -23,6 +23,7 @@ const MISSED_FOLLOWUP_ALERT_STATE_KEY = "missedFollowupAlertState";
 const NOTIFICATION_PERMISSION_EXPLAINED_KEY = "notificationPermissionExplained";
 const NEXT_FOLLOWUP_PROMPT_SCHEDULE_KEY = "nextFollowupPromptSchedule";
 const NOTIFICATION_VOICE_LANG_KEY = "notificationVoiceLang";
+const ENQUIRY_MUTE_KEY = "followupEnquiryMuteMap_v1";
 
 // ─── Timing Constants ────────────────────────────────────────────────────────
 const DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES = 60;
@@ -70,6 +71,93 @@ const releaseSchedulingLock = () => {
     _schedulingLockTs = 0;
 };
 
+const getEnquiryMuteKey = ({ enqId, enqNo } = {}) => {
+    const id = enqId ? String(enqId).trim() : "";
+    const no = enqNo ? String(enqNo).trim() : "";
+    if (id) return `id:${id}`;
+    if (no) return `no:${no}`;
+    return "";
+};
+
+const loadEnquiryMuteMap = async () => {
+    try {
+        const raw = await AsyncStorage.getItem(ENQUIRY_MUTE_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        const map = parsed && typeof parsed === "object" ? parsed : {};
+        const now = Date.now();
+        let changed = false;
+        for (const [k, v] of Object.entries(map)) {
+            const until = Number(v?.until || 0);
+            if (until && until > 0 && until < now) {
+                delete map[k];
+                changed = true;
+            }
+        }
+        if (changed) {
+            await AsyncStorage.setItem(ENQUIRY_MUTE_KEY, JSON.stringify(map));
+        }
+        return map;
+    } catch {
+        return {};
+    }
+};
+
+const muteEnquiryNotifications = async ({ enqId, enqNo, untilMs, whenMs } = {}) => {
+    try {
+        const key = getEnquiryMuteKey({ enqId, enqNo });
+        if (!key) return { muted: false, skipped: true, reason: "no-key" };
+
+        const now = Date.now();
+        const until = Number.isFinite(Number(untilMs))
+            ? Math.max(now + 60_000, Number(untilMs))
+            : now + 24 * 60 * 60 * 1000; // default 24h
+
+        const map = await loadEnquiryMuteMap();
+        const w = Number(whenMs);
+        map[key] = {
+            until,
+            at: now,
+            // If set, mute applies only to this specific scheduled due-time.
+            whenMs: Number.isFinite(w) && w > 0 ? w : undefined,
+        };
+        await AsyncStorage.setItem(ENQUIRY_MUTE_KEY, JSON.stringify(map));
+        return { muted: true, skipped: false, until };
+    } catch {
+        return { muted: false, skipped: false, error: true };
+    }
+};
+
+const isEnquiryMuted = (muteMap, { enqId, enqNo, whenMs } = {}) => {
+    const key = getEnquiryMuteKey({ enqId, enqNo });
+    if (!key) return false;
+    const rec = muteMap?.[key];
+    const until = Number(rec?.until || 0);
+    if (!(until > Date.now())) return false;
+
+    const mutedWhen = Number(rec?.whenMs || 0);
+    const currentWhen = Number(whenMs || 0);
+    // If the follow-up time changed, automatically unmute so new schedules work.
+    if (
+        mutedWhen > 0 &&
+        Number.isFinite(currentWhen) &&
+        currentWhen > 0 &&
+        mutedWhen !== currentWhen
+    ) {
+        try {
+            const next = { ...(muteMap || {}) };
+            delete next[key];
+            AsyncStorage.setItem(ENQUIRY_MUTE_KEY, JSON.stringify(next)).catch(
+                () => {},
+            );
+        } catch {
+            /* ignore */
+        }
+        return false;
+    }
+
+    return true;
+};
+
 // ─── Safe trigger type resolution ────────────────────────────────────────────
 const TRIGGER_TYPES = Notifications.SchedulableTriggerInputTypes ?? {};
 const DATE_TRIGGER_TYPE =
@@ -79,7 +167,9 @@ const DAILY_TRIGGER_TYPE =
 
 // ─── Channel IDs ─────────────────────────────────────────────────────────────
 const CHANNEL_IDS = {
-    default: "default_v4",
+    // NOTE: Android notification channels are sticky. When changing default sound,
+    // bump the channel id so existing installs receive the new sound.
+    default: "default_v5",
     followups: "followups_v4",
     followups_soon_en: "followups_soon_en_v2",
     followups_due_en: "followups_due_en_v2",
@@ -118,8 +208,68 @@ const CHANNEL_IDS = {
     reports: "reports_v1",
 };
 
+// Minute-based channels for different sounds (5/4/3/2/1 min, due, missed).
+// Android channels are sticky; bump *_v1 to *_v2 when changing sounds in future.
+const MINUTE_CHANNEL_IDS = (() => {
+    const out = {};
+    const types = ["followups", "phone", "meeting", "email", "whatsapp"];
+    const langs = ["en", "ta"];
+    for (const t of types) {
+        for (const l of langs) {
+            for (const m of [5, 4, 3, 2, 1]) {
+                const key = `${t}_${m}min_${l}`;
+                out[key] = `${t}_${m}min_${l}_v1`;
+            }
+            out[`${t}_due_${l}`] = `${t}_due_${l}_v1`;
+            out[`${t}_missed_${l}`] = `${t}_missed_${l}_v1`;
+        }
+    }
+    return out;
+})();
+
+const MINUTE_NOTIFICATION_CHANNELS = (() => {
+    const meta = {};
+    const typeLabels = {
+        followups: "Follow-ups",
+        phone: "Phone",
+        meeting: "Meeting",
+        email: "Email",
+        whatsapp: "WhatsApp",
+    };
+    const langLabels = { en: "EN", ta: "TA" };
+
+    const mk = (name, sound) => ({
+        name,
+        lightColor: "#0EA5E9",
+        vibrationPattern: [0, 250, 250, 250],
+        sound,
+    });
+
+    for (const t of Object.keys(typeLabels)) {
+        for (const l of Object.keys(langLabels)) {
+            for (const m of [5, 4, 3, 2, 1]) {
+                const key = `${t}_${m}min_${l}`;
+                meta[key] = mk(
+                    `${typeLabels[t]} (${m} min) ${langLabels[l]}`,
+                    `${t}_${m}min_${l}.mp3`,
+                );
+            }
+            meta[`${t}_due_${l}`] = mk(
+                `${typeLabels[t]} (Due) ${langLabels[l]}`,
+                `${t}_due_${l}.mp3`,
+            );
+            meta[`${t}_missed_${l}`] = mk(
+                `${typeLabels[t]} (Missed) ${langLabels[l]}`,
+                `${t}_missed_${l}.mp3`,
+            );
+        }
+    }
+    return meta;
+})();
+
 const CATEGORY_IDS = {
-    followups: "FOLLOWUP_ACTIONS",
+    // Bump id so Android/iOS pick up new action set (Cancel only).
+    followups: "FOLLOWUP_ACTIONS_V3",
     next_followup: "NEXT_FOLLOWUP_PROMPT",
 };
 
@@ -349,7 +499,6 @@ if (Platform.OS !== "web") {
                 data.type === "followup-due" ||
                 data.type === "followup-missed";
             return {
-                shouldShowAlert: true,
                 shouldShowBanner: true,
                 shouldShowList: true,
                 // FIX #4: shouldPlaySound: true lets the Android channel sound
@@ -389,7 +538,8 @@ const openCsvFileUri = async (uri) => {
                 "android.intent.action.VIEW",
                 {
                     data: dataUri,
-                    flags: IntentLauncher.Flags?.GRANT_READ_URI_PERMISSION ?? 1,
+                    // FLAG_GRANT_READ_URI_PERMISSION = 0x00000001
+                    flags: 1,
                     type: "text/csv",
                 },
             );
@@ -605,8 +755,10 @@ const ensureAudioMode = async () => {
             staysActiveInBackground: true,
             shouldDuckAndroid: true, // Allow lowering other app's volume instead of failing
             playThroughEarpieceAndroid: false,
-            interruptionModeAndroid: Audio.INTERRUPTION_MODE_DUCK_OTHERS ?? 2,
-            interruptionModeIOS: Audio.INTERRUPTION_MODE_DUCK_OTHERS ?? 2,
+            // Expo AV interruption mode constants can vary by SDK; numeric 2 is "duck others"
+            // across iOS/Android in practice for our supported SDKs.
+            interruptionModeAndroid: 2,
+            interruptionModeIOS: 2,
         });
         audioModeReady = true;
         console.log(
@@ -890,7 +1042,7 @@ const buildTextToSpeechForNotification = (data = {}, lang = "en") => {
 
 // ─── Channel Helpers ──────────────────────────────────────────────────────────
 const resolveChannelId = (channelId = "default") =>
-    CHANNEL_IDS[channelId] ?? channelId;
+    MINUTE_CHANNEL_IDS[channelId] ?? CHANNEL_IDS[channelId] ?? channelId;
 
 const selectChannelForNotification = async (
     activityType = "followup",
@@ -914,11 +1066,11 @@ const selectChannelForNotification = async (
         const langSuffix = lang === "ta" ? "ta" : "en";
         const statusMap = {
             soon: "soon",
-            5: "soon",
-            4: "soon",
-            3: "soon",
-            2: "soon",
-            1: "soon",
+            5: "5min",
+            4: "4min",
+            3: "3min",
+            2: "2min",
+            1: "1min",
             due: "due",
             missed: "missed",
         };
@@ -931,7 +1083,7 @@ const selectChannelForNotification = async (
 
         if (typeKey !== "followup") {
             const channelKey = `${typeKey}_${statusKey}_${langSuffix}`;
-            if (CHANNEL_IDS[channelKey]) {
+            if (MINUTE_CHANNEL_IDS[channelKey] || CHANNEL_IDS[channelKey]) {
                 console.log(`[NotifSvc] Activity channel: ${channelKey}`);
                 return channelKey;
             }
@@ -1030,7 +1182,7 @@ const buildDailyTrigger = (hour, minute) => ({
 });
 
 const getChannelMeta = (channelId = "default") =>
-    NOTIFICATION_CHANNELS[channelId] ?? {
+    MINUTE_NOTIFICATION_CHANNELS[channelId] ?? NOTIFICATION_CHANNELS[channelId] ?? {
         name: "default",
         lightColor: "#2563EB",
         vibrationPattern: [0, 220, 160, 220],
@@ -1195,6 +1347,8 @@ export const initializeNotifications = async () => {
                     name: "Default",
                     lightColor: "#FF231F7C",
                     vibrationPattern: [0, 250, 250, 250],
+                    // Main app notification sound (used by general notifications & fallback cases)
+                    sound: "followup_due_en.mp3",
                 },
                 Notifications.AndroidImportance.HIGH,
             );
@@ -1254,6 +1408,17 @@ export const initializeNotifications = async () => {
                 );
             }
 
+            // Minute-based channels (5/4/3/2/1 min + due + missed) for activity-specific sounds
+            for (const [key, channelId] of Object.entries(MINUTE_CHANNEL_IDS)) {
+                const meta = MINUTE_NOTIFICATION_CHANNELS[key];
+                if (!meta) continue;
+                await setChannel(
+                    channelId,
+                    meta,
+                    Notifications.AndroidImportance.MAX,
+                );
+            }
+
             await setChannel(
                 CHANNEL_IDS.enquiries,
                 NOTIFICATION_CHANNELS.enquiries,
@@ -1287,14 +1452,10 @@ export const initializeNotifications = async () => {
                 CATEGORY_IDS.followups,
                 [
                     {
-                        identifier: "FOLLOWUP_COMPLETE",
-                        buttonTitle: "Complete",
-                        options: { opensAppToForeground: true },
-                    },
-                    {
                         identifier: "FOLLOWUP_CANCEL",
                         buttonTitle: "Cancel",
-                        options: { opensAppToForeground: false },
+                        // Needs foreground so JS can cancel other scheduled notifications for this enquiry.
+                        options: { opensAppToForeground: true },
                     },
                 ],
                 { previewPlaceholder: "Update follow-up" },
@@ -2513,6 +2674,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
     try {
         if (Platform.OS === "web") return { scheduled: 0, skipped: true };
 
+        const muteMap = await loadEnquiryMuteMap();
         const todayKey = getTodayKey();
         const list = Array.isArray(followUps) ? followUps : [];
         const now = new Date();
@@ -2534,7 +2696,9 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     ? parseLocalDateTime(dateStr, timeStr)
                     : null;
                 const ms = when ? when.getTime() : NaN;
-                return { item, when, ms };
+                const enqId = item?.enqId?._id || item?.enqId || item?.enquiryId;
+                const enqNo = item?.enqNo || item?.enquiryNo;
+                return { item, when, ms, enqId, enqNo };
             })
             .filter(
                 ({ when, ms }) =>
@@ -2543,6 +2707,9 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     ms >= startMs &&
                     ms <= endMs,
             )
+            .filter(({ enqId, enqNo, ms }) => {
+                return !isEnquiryMuted(muteMap, { enqId, enqNo, whenMs: ms });
+            })
             .sort((a, b) => a.ms - b.ms);
 
         // FIX #2: Cancel only previously saved IDs (not ALL notifications)
@@ -2608,12 +2775,17 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                 }
 
                 const soon = buildSoonContent(item, when, minutesLeft, lang);
+                const minuteChannelKey = await selectChannelForNotification(
+                    item?.activityType,
+                    minutesLeft,
+                    lang,
+                );
                 const id = await scheduleDateNotification({
                     when: t,
                     title: soon.title,
                     body: soon.body,
                     data: soon.data,
-                    channelId: soonChannelKey,
+                    channelId: minuteChannelKey,
                     sound: "default",
                     color: "#0EA5E9",
                 });
@@ -2703,9 +2875,31 @@ export const setupGlobalNotificationListener = (navigationRef) => {
         const actionId = response.actionIdentifier;
         console.log("Global notification tapped:", data);
 
-        if (actionId === "FOLLOWUP_CANCEL") return;
+        if (actionId === "FOLLOWUP_CANCEL") {
+            const whenMs = (() => {
+                const rawWhen = data?.when ?? data?.timestamp ?? null;
+                if (!rawWhen) return undefined;
+                const ms = new Date(String(rawWhen)).getTime();
+                return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+            })();
+            // Mute this enquiry so the scheduler doesn't recreate notifications on next foreground sync.
+            Promise.resolve(
+                muteEnquiryNotifications({
+                    enqId: data?.enqId,
+                    enqNo: data?.enqNo,
+                    whenMs,
+                    // Mute until tomorrow (local) by default: 24h is fine and simple.
+                }),
+            ).catch(() => {});
+            Promise.resolve(
+                cancelNotificationsForEnquiry?.({
+                    enqId: data?.enqId,
+                    enqNo: data?.enqNo,
+                }),
+            ).catch(() => {});
+            return;
+        }
 
-        const isComplete = actionId === "FOLLOWUP_COMPLETE";
         const isDefaultAction =
             actionId === Notifications.DEFAULT_ACTION_IDENTIFIER ||
             actionId === "expo-notifications-default";
@@ -2724,29 +2918,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
             data.type === "followup-due" ||
             data.type === "followup-missed"
         ) {
-            if (isComplete) {
-                Promise.resolve(completeFollowUpFromNotification(data)).catch(
-                    () => {},
-                );
-                Promise.resolve(
-                    cancelNotificationsForEnquiry?.({
-                        enqId: data?.enqId,
-                        enqNo: data?.enqNo,
-                    }),
-                ).catch(() => {});
-                Promise.resolve(
-                    scheduleNextFollowUpPromptForEnquiry?.({
-                        enqId: data?.enqId,
-                        enqNo: data?.enqNo,
-                        name: data?.name,
-                        mobile: data?.mobile,
-                        product: data?.product,
-                        delayMinutes: 2,
-                    }),
-                ).catch(() => {});
-            }
-
-            if (actionId === "FOLLOWUP_COMPLETE" || isDefaultAction) {
+            if (isDefaultAction) {
                 acknowledgeHourlyFollowUpReminders().catch(() => {});
             }
 
@@ -2761,25 +2933,26 @@ export const setupGlobalNotificationListener = (navigationRef) => {
 
             navigationRef.navigate("Main", {
                 screen: "FollowUp",
-                params: isComplete
-                    ? {
-                          openComposer: true,
-                          composerToken: `${Date.now()}`,
-                          enquiry,
-                          focusTab: "Today",
-                          focusSearch: data?.name ?? "",
-                          autoOpenForm: true,
-                      }
-                    : data.type === "followup-missed"
-                      ? {
-                            openComposer: true,
-                            composerToken: `${Date.now()}`,
-                            enquiry,
-                            focusTab: "Missed",
-                            openMissedModal: true,
-                            autoOpenForm: true,
-                        }
-                      : { focusTab: "Today" },
+                params:
+                    data.type === "followup-missed"
+                        ? {
+                              openComposer: true,
+                              composerToken: `${Date.now()}`,
+                              enquiry,
+                              focusTab: "Missed",
+                              openMissedModal: true,
+                              autoOpenForm: true,
+                          }
+                        : data.type === "followup-due"
+                          ? {
+                                openComposer: true,
+                                composerToken: `${Date.now()}`,
+                                enquiry,
+                                focusTab: "Today",
+                                focusSearch: data?.name ?? "",
+                                autoOpenForm: true,
+                            }
+                          : { focusTab: "Today", focusSearch: data?.name ?? "" },
             });
         } else if (data.type === "next-followup-prompt") {
             if (actionId === "NEXT_FOLLOWUP_NO") {

@@ -73,7 +73,16 @@ export const identifyCaller = async (phoneNumber) => {
 export const syncCallLogs = async (logs) => {
     const client = await getApiClient();
     const response = await client.post(`/calllogs/sync-batch`, { logs });
-    return response.data;
+    const data = response.data;
+
+    const synced = Number(data?.synced || data?.syncCount || 0);
+    if (synced > 0) {
+        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(
+            () => {},
+        );
+        emitCallLogCreated({ type: "BATCH_SYNC", synced });
+    }
+    return data;
 };
 
 export const createCallSession = async (sessionData) => {

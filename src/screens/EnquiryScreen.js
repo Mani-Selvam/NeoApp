@@ -1119,6 +1119,9 @@ export default function EnquiryListScreen({ navigation, route }) {
             } = opts || {};
 
             if (enquiriesFetchInFlightRef.current) return;
+            // Avoid entering "inFlight" when paginating but nothing to do.
+            if (!refresh && (!hasMore || isLoadingMore)) return;
+
             enquiriesFetchInFlightRef.current = true;
             const cacheKey = buildCacheKey(
                 "enquiries:list:v1",
@@ -1130,30 +1133,29 @@ export default function EnquiryListScreen({ navigation, route }) {
             );
 
             let cached = null;
-            if (refresh && allowCache) {
-                cached = await getCacheEntry(cacheKey).catch(() => null);
-                if (cached?.value?.items) {
-                    const cachedItems = Array.isArray(cached.value.items)
-                        ? cached.value.items
-                        : [];
-                    setEnquiries(dedupeEnquiries(cachedItems));
-                    setHasMore(Boolean(cached.value.hasMore));
-                    setPage(Number(cached.value.page || 1));
-                    if (!showIndicator) setIsLoading(false);
-                }
-            }
-
-            if (refresh) {
-                const shouldFetch =
-                    force || !isFresh(cached, ENQUIRIES_CACHE_TTL_MS);
-                if (!shouldFetch) return;
-                if (showIndicator) setIsLoading(true);
-            } else {
-                if (!hasMore || isLoadingMore) return;
-                setIsLoadingMore(true);
-            }
-
             try {
+                if (refresh && allowCache) {
+                    cached = await getCacheEntry(cacheKey).catch(() => null);
+                    if (cached?.value?.items) {
+                        const cachedItems = Array.isArray(cached.value.items)
+                            ? cached.value.items
+                            : [];
+                        setEnquiries(dedupeEnquiries(cachedItems));
+                        setHasMore(Boolean(cached.value.hasMore));
+                        setPage(Number(cached.value.page || 1));
+                        if (!showIndicator) setIsLoading(false);
+                    }
+                }
+
+                if (refresh) {
+                    const shouldFetch =
+                        force || !isFresh(cached, ENQUIRIES_CACHE_TTL_MS);
+                    if (!shouldFetch) return;
+                    if (showIndicator) setIsLoading(true);
+                } else {
+                    setIsLoadingMore(true);
+                }
+
                 // When refreshing, reload up to the current loaded page count so the
                 // previously visible records don't "disappear" after coming back from detail.
                 const PAGE_SIZE = 20;
@@ -1451,7 +1453,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                     fetchEnquiries(true, {
                         showIndicator: false,
                         force: true,
-                        allowCache: true,
+                        allowCache: false,
                     }),
                 300,
             );

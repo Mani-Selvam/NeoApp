@@ -1,8 +1,10 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
 import { DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_URL } from './apiConfig';
 import * as callLogService from './callLogService';
+import { APP_EVENTS, emitAppEvent } from "./appEvents";
 
 let CallDetectorManager;
 let isCallDetectorAvailable = false;
@@ -28,6 +30,8 @@ let hasWarnedUnavailableCallLog = false;
 let lastIncomingLookup = { num: null, ts: 0 };
 let deviceSyncIntervalId = null;
 let lastDeviceSyncTs = 0;
+let lastDeviceSyncMinTs = 0;
+const LAST_DEVICE_SYNC_KEY = "callMonitor:lastDeviceSyncMinTs";
 
 const isPlayStoreSafeMode = () =>
     Constants.expoConfig?.extra?.playStoreSafeMode === true;
@@ -248,26 +252,46 @@ const syncDeviceLogsIfPossible = async ({ force = false } = {}) => {
     lastDeviceSyncTs = now;
 
     try {
+        if (!lastDeviceSyncMinTs) {
+            const stored = await AsyncStorage.getItem(LAST_DEVICE_SYNC_KEY).catch(
+                () => null,
+            );
+            const parsed = Number(stored);
+            if (Number.isFinite(parsed) && parsed > 0) lastDeviceSyncMinTs = parsed;
+        }
+
         const mod = require("react-native-call-log");
         const CallLog = mod?.default || mod;
         if (!CallLog?.load) return;
 
+        const minTimestamp = Math.max(
+            Date.now() - 6 * 60 * 60 * 1000,
+            (Number(lastDeviceSyncMinTs || 0) || 0) - 5 * 60 * 1000,
+        );
+
         const logs = await CallLog.load(80, {
-            minTimestamp: Date.now() - 6 * 60 * 60 * 1000,
+            minTimestamp,
         });
         if (!Array.isArray(logs) || logs.length === 0) return;
 
-        const result = await callLogService.syncCallLogs(logs);
-        const synced = Number(result?.synced || 0);
-        if (synced > 0) {
-            DeviceEventEmitter.emit("CALL_LOG_CREATED", { type: "BATCH_SYNC", synced });
-        }
+        await callLogService.syncCallLogs(logs);
+
+        // Advance the persisted cursor so future syncs are incremental.
+        try {
+            let maxTs = 0;
+            for (const entry of logs) {
+                const ts = pickEntryTimestampMs(entry) || 0;
+                if (ts > maxTs) maxTs = ts;
+            }
+            if (maxTs > 0) {
+                lastDeviceSyncMinTs = maxTs;
+                await AsyncStorage.setItem(LAST_DEVICE_SYNC_KEY, String(maxTs)).catch(
+                    () => {},
+                );
+            }
+        } catch (_e) {}
     } catch (_e) {
         // ignore sync errors (permissions / OEM restrictions)
-    }
-    if (deviceSyncIntervalId) {
-        clearInterval(deviceSyncIntervalId);
-        deviceSyncIntervalId = null;
     }
 };
 
@@ -341,7 +365,7 @@ export const startCallMonitoring = async (userData = null) => {
                 try {
                     const res = await callLogService.identifyCaller(cleanNum);
                     if (res?.found && res?.details) {
-                        DeviceEventEmitter.emit("INCOMING_CRM_MATCH", {
+                        emitAppEvent(APP_EVENTS.INCOMING_CRM_MATCH, {
                             phoneNumber: cleanNum,
                             details: res.details,
                             at: new Date().toISOString(),
@@ -540,7 +564,7 @@ const handleCallEnd = async (phoneNumber) => {
     };
 
     // Emit the event — screens listening will set a flag
-    DeviceEventEmitter.emit('CALL_ENDED', callEndData);
+    emitAppEvent(APP_EVENTS.CALL_ENDED, callEndData);
 
     // Give screens a moment to claim the call (50ms is enough for JS event loop)
     setTimeout(async () => {
@@ -562,7 +586,7 @@ const handleCallEnd = async (phoneNumber) => {
                     console.log('[CallMonitor] Ignored non-enquiry call log');
                 } else {
                     console.log('[CallMonitor] Auto-Log Saved:', savedLog._id);
-                    DeviceEventEmitter.emit('CALL_LOG_CREATED', savedLog);
+                    // callLogService.createCallLog() already emits CALL_LOG_CREATED + invalidates caches
                 }
             } catch (error) {
                 console.error('❌ [CallMonitor] Auto-Log Failed:', error.message);

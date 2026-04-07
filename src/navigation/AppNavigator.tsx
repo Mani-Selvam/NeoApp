@@ -65,6 +65,8 @@ import notificationService, {
     registerPushTokenWithServer,
 } from "../services/notificationService";
 import getApiClient from "../services/apiClient";
+import { APP_EVENTS, onAppEvent } from "../services/appEvents";
+import { cancelDebounceKey, debounceByKey } from "../services/debounce";
 import {
     buildFeatureUpgradeMessage,
     getFeatureLabel,
@@ -834,11 +836,7 @@ export default function AppNavigator() {
 
     // Speak follow-up reminders while app is in foreground.
     useEffect(() => {
-        const sub = notificationService.setupForegroundNotificationListener?.(
-            (data: any) => {
-                notificationService.speakForNotificationData?.(data);
-            },
-        );
+        const sub = notificationService.setupForegroundNotificationListener?.();
         return () => {
             sub?.remove?.();
         };
@@ -846,14 +844,15 @@ export default function AppNavigator() {
 
     useEffect(() => {
         if (!isLoggedIn) return undefined;
-        const sub = DeviceEventEmitter.addListener(
-            "INCOMING_CRM_MATCH",
-            (payload) => {
-                if (!payload?.details) return;
-                setIncomingMatch(payload);
-            },
-        );
-        return () => sub.remove();
+        const handler = (payload: any) => {
+            if (!payload?.details) return;
+            debounceByKey("incoming-match", () => setIncomingMatch(payload), 120);
+        };
+        const unsub = onAppEvent(APP_EVENTS.INCOMING_CRM_MATCH, handler);
+        return () => {
+            cancelDebounceKey("incoming-match");
+            unsub();
+        };
     }, [isLoggedIn]);
 
     const resolveIncomingEnquiry = async (payload: any) => {

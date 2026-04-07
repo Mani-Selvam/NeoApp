@@ -221,6 +221,7 @@ const normalizeStaffLabel = (name, adminName = "Admin") => {
 const getStaffName = (item, adminName = "Admin") =>
     normalizeStaffLabel(
         item?.staffName ||
+            item?.staffId?.name ||
             item?.assignedTo?.name ||
             item?.assignedToName ||
             item?.enqBy ||
@@ -265,6 +266,15 @@ const buildExplicitDateRange = (fromDate, toDate) => {
 };
 const formatAppliedRangeLabel = (fromDate, toDate) =>
     `${formatShortDate(fromDate)} - ${formatShortDate(toDate)}`;
+const formatDurationSec = (seconds) => {
+    const s = Math.max(0, Math.floor(Number(seconds || 0)));
+    const hh = Math.floor(s / 3600);
+    const mm = Math.floor((s % 3600) / 60);
+    const ss = s % 60;
+    if (hh > 0) return `${hh}h ${mm}m`;
+    if (mm > 0) return `${mm}m ${ss}s`;
+    return `${ss}s`;
+};
 const isSameIsoDate = (left, right) =>
     String(left || "") === String(right || "");
 const normalizeId = (value) => String(value?._id || value || "").trim();
@@ -1020,6 +1030,57 @@ export default function ReportScreen({ navigation }) {
         });
     }, [adminName, filteredEnq, filteredFups]);
 
+    const staffCallPerf = useMemo(() => {
+        const toRow = (name) => ({
+            name,
+            totalCalls: 0,
+            incoming: 0,
+            outgoing: 0,
+            missed: 0,
+            notAttended: 0,
+            totalDuration: 0,
+        });
+
+        if (isStaffUser) {
+            const selfName = user?.name || "Staff";
+            const row = toRow(selfName);
+            filteredCalls.forEach((i) => {
+                const t = String(i?.callType || "").trim();
+                row.totalCalls += 1;
+                if (t === "Incoming") row.incoming += 1;
+                else if (t === "Outgoing") row.outgoing += 1;
+                else if (t === "Missed") row.missed += 1;
+                else if (t === "Not Attended") row.notAttended += 1;
+                row.totalDuration += Number(i?.duration || 0) || 0;
+            });
+            return [row];
+        }
+
+        const map = {};
+        const ensure = (name) => {
+            const n = normalizeStaffLabel(name, adminName);
+            if (!map[n]) map[n] = toRow(n);
+            return map[n];
+        };
+
+        filteredCalls.forEach((i) => {
+            const name = getStaffName(i, adminName);
+            const row = ensure(name);
+            const t = String(i?.callType || "").trim();
+            row.totalCalls += 1;
+            if (t === "Incoming") row.incoming += 1;
+            else if (t === "Outgoing") row.outgoing += 1;
+            else if (t === "Missed") row.missed += 1;
+            else if (t === "Not Attended") row.notAttended += 1;
+            row.totalDuration += Number(i?.duration || 0) || 0;
+        });
+
+        return Object.values(map).sort((a, b) => {
+            if (b.totalCalls !== a.totalCalls) return b.totalCalls - a.totalCalls;
+            return b.totalDuration - a.totalDuration;
+        });
+    }, [adminName, filteredCalls, isStaffUser, user?.name]);
+
     const revenueM = useMemo(() => {
         const convertedEnquiries = filteredEnq.filter(
             (i) => i?.status === "Converted",
@@ -1142,6 +1203,137 @@ export default function ReportScreen({ navigation }) {
         }
     };
 
+    const exportStaffActivityCsv = async () => {
+        try {
+            const available = await Sharing.isAvailableAsync();
+            const exportDate = toIsoDate(new Date());
+            const csvEscape = (value) =>
+                `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+            const map = {};
+            const ensure = (name) => {
+                const key = String(name || "").trim() || "Staff";
+                if (!map[key]) {
+                    map[key] = {
+                        Staff: key,
+                        EnquiriesCreated: 0,
+                        FollowupsDone: 0,
+                        SalesLeads: 0,
+                        Calls: 0,
+                        Incoming: 0,
+                        Outgoing: 0,
+                        Missed: 0,
+                        NotAttended: 0,
+                        DurationSec: 0,
+                    };
+                }
+                return map[key];
+            };
+
+            (Array.isArray(staffPerf) ? staffPerf : []).forEach((r) => {
+                const row = ensure(r?.name);
+                row.EnquiriesCreated = Number(r?.enquiriesCreated || 0);
+                row.FollowupsDone = Number(r?.followupsDone || 0);
+                row.SalesLeads = Number(r?.salesLeads || 0);
+            });
+            (Array.isArray(staffCallPerf) ? staffCallPerf : []).forEach((r) => {
+                const row = ensure(r?.name);
+                row.Calls = Number(r?.totalCalls || 0);
+                row.Incoming = Number(r?.incoming || 0);
+                row.Outgoing = Number(r?.outgoing || 0);
+                row.Missed = Number(r?.missed || 0);
+                row.NotAttended = Number(r?.notAttended || 0);
+                row.DurationSec = Number(r?.totalDuration || 0);
+            });
+
+            const rows = Object.values(map).sort((a, b) => {
+                if (b.Calls !== a.Calls) return b.Calls - a.Calls;
+                if (b.SalesLeads !== a.SalesLeads)
+                    return b.SalesLeads - a.SalesLeads;
+                return b.DurationSec - a.DurationSec;
+            });
+
+            const header = [
+                "Staff Name",
+                "Enquiries Created",
+                "Followups Done",
+                "Sales Leads",
+                "Total Calls",
+                "Incoming",
+                "Outgoing",
+                "Missed",
+                "Not Attended",
+                "Total Duration (sec)",
+                "Total Duration (formatted)",
+                "From Date",
+                "To Date",
+                "Staff Filter",
+                "Status Filter",
+            ]
+                .map(csvEscape)
+                .join(",");
+
+            const csvText = [
+                header,
+                ...rows.map((r) =>
+                    [
+                        r.Staff,
+                        r.EnquiriesCreated,
+                        r.FollowupsDone,
+                        r.SalesLeads,
+                        r.Calls,
+                        r.Incoming,
+                        r.Outgoing,
+                        r.Missed,
+                        r.NotAttended,
+                        r.DurationSec,
+                        formatDurationSec(r.DurationSec),
+                        fromDate,
+                        toDate,
+                        staffFilter,
+                        statusFilter,
+                    ]
+                        .map(csvEscape)
+                        .join(","),
+                ),
+            ].join("\n");
+
+            const fileName = `report-staff-activity-${exportDate}.csv`;
+            const savedFile = await saveCsvToDevice({
+                fileName,
+                content: csvText,
+            });
+
+            Promise.resolve(
+                notificationService.showReportCsvReadyNotification?.({
+                    uri: savedFile?.uri,
+                    fileName,
+                }),
+            ).catch(() => {});
+
+            if (savedFile.downloaded) {
+                Alert.alert(
+                    "Download Complete",
+                    `${fileName} saved successfully.`,
+                );
+            } else if (available) {
+                await Sharing.shareAsync(savedFile.uri, {
+                    mimeType: "text/csv",
+                    dialogTitle: "Download staff activity CSV",
+                    UTI: "public.comma-separated-values-text",
+                });
+            } else {
+                Alert.alert("Export Ready", `CSV saved at:\n${savedFile.uri}`);
+            }
+        } catch (e) {
+            console.error(e);
+            Alert.alert(
+                "Export Failed",
+                e?.message || "Unable to export staff activity",
+            );
+        }
+    };
+
     return (
         <SafeAreaView style={st.container} edges={["top"]}>
             <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
@@ -1176,7 +1368,20 @@ export default function ReportScreen({ navigation }) {
                                 color={C.gold}
                             />
                             <Text style={st.exportHeaderText}>
-                                Download CSV
+                                CSV
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={st.exportHeaderBtn}
+                            onPress={exportStaffActivityCsv}
+                            activeOpacity={0.85}>
+                            <Ionicons
+                                name="people-outline"
+                                size={15}
+                                color={C.violet}
+                            />
+                            <Text style={st.exportHeaderText}>
+                                Staff
                             </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -1840,6 +2045,99 @@ export default function ReportScreen({ navigation }) {
                                                     </Text>
                                                 </View>
                                             </View>
+                                        </View>
+                                    ))
+                                )}
+                            </Card>
+                        </FadeIn>
+
+                        <FadeIn delay={160}>
+                            <Card>
+                                <CardHeader
+                                    title="Staff Call Activity"
+                                    icon="call-outline"
+                                    accent={C.violet}
+                                />
+                                <View style={st.tableHead}>
+                                    {[
+                                        "Staff Name",
+                                        "Calls",
+                                        "Duration",
+                                        "Missed",
+                                    ].map((h, i) => (
+                                        <Text
+                                            key={h}
+                                            style={[
+                                                st.thCell,
+                                                i === 0 && st.thNameCell,
+                                            ]}>
+                                            {h}
+                                        </Text>
+                                    ))}
+                                </View>
+                                {staffCallPerf.length === 0 ? (
+                                    <Text style={st.emptyNote}>
+                                        No call activity
+                                    </Text>
+                                ) : (
+                                    staffCallPerf.map((item, idx) => (
+                                        <View
+                                            key={item.name}
+                                            style={[
+                                                st.tableRow,
+                                                idx % 2 === 1 && {
+                                                    backgroundColor: `${C.violet}08`,
+                                                },
+                                            ]}>
+                                            <View
+                                                style={[
+                                                    st.thNameCell,
+                                                    {
+                                                        flexDirection: "row",
+                                                        alignItems: "center",
+                                                        gap: 8,
+                                                    },
+                                                ]}>
+                                                <View
+                                                    style={[
+                                                        st.teamAvatar,
+                                                        {
+                                                            backgroundColor: `${CHART_COLORS[idx % CHART_COLORS.length]}22`,
+                                                        },
+                                                    ]}>
+                                                    <Text
+                                                        style={[
+                                                            st.teamAvatarText,
+                                                            {
+                                                                color: CHART_COLORS[
+                                                                    idx %
+                                                                        CHART_COLORS.length
+                                                                ],
+                                                            },
+                                                        ]}>
+                                                        {(
+                                                            item.name[0] || "?"
+                                                        ).toUpperCase()}
+                                                    </Text>
+                                                </View>
+                                                <Text
+                                                    style={st.tdName}
+                                                    numberOfLines={1}>
+                                                    {item.name}
+                                                </Text>
+                                            </View>
+                                            <Text style={st.tdCell}>
+                                                {item.totalCalls}
+                                            </Text>
+                                            <Text style={st.tdCell}>
+                                                {formatDurationSec(
+                                                    item.totalDuration,
+                                                )}
+                                            </Text>
+                                            <Text style={st.tdCell}>
+                                                {item.missed +
+                                                    item.notAttended}
+                                            </Text>
                                         </View>
                                     ))
                                 )}
