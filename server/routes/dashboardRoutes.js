@@ -3,6 +3,7 @@ const router = express.Router();
 const mongoose = require("mongoose");
 const Enquiry = require("../models/Enquiry");
 const FollowUp = require("../models/FollowUp");
+const User = require("../models/User");
 const { verifyToken } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
 
@@ -180,121 +181,151 @@ router.get("/summary", verifyToken, async (req, res) => {
 
         // ⚡ Use cache.wrap to deduplicate concurrent requests
         // Keep TTL low because "Missed" is real-time (dueAt < now), and users expect it to update fast.
+        const today = toLocalIsoDate(parsedRef);
+        const realToday = toClientIsoDate(tzOffsetMinutes);
+        const isRealToday = today === realToday;
+        const now = new Date();
+        const nowMinutes = getClientNowMinutes(tzOffsetMinutes);
+
+        // Data isolation query (Optimized for company-wide admin visibility)
+        const role = String(req.user?.role || "").trim().toLowerCase();
+        const userId = req.userId;
+        const companyId = req.user?.company_id;
+
+        const query = {};
+        if (role === "staff") {
+            query.userId = new mongoose.Types.ObjectId(req.user?.parentUserId || userId);
+            query.assignedTo = new mongoose.Types.ObjectId(userId);
+        } else if (companyId) {
+            const companyUsers = await User.find({ company_id: companyId })
+                .select("_id")
+                .lean();
+            const ownerUserIds = companyUsers
+                .map((u) => u._id)
+                .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
+
+            if (ownerUserIds.length > 0) {
+                query.userId = { $in: ownerUserIds };
+            } else {
+                query.userId = new mongoose.Types.ObjectId(userId);
+            }
+        } else {
+            query.userId = new mongoose.Types.ObjectId(userId);
+        }
+
+        // ⚡ RUN AUTO-MARK BEFORE CACHE: Keep missed status fresh for today, 
+        // including legacy rows that don't have `dueAt` yet.
+        if (isRealToday) {
+            try {
+                // Main update for rows with dueAt
+                await FollowUp.updateMany(
+                    {
+                        ...query,
+                        isCurrent: { $ne: false },
+                        date: today,
+                        dueAt: { $lte: now },
+                        status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
+                    },
+                    { $set: { status: "Missed" } },
+                );
+
+                // Legacy update for rows with time-string only
+                const legacyRows = await FollowUp.find({
+                    ...query,
+                    isCurrent: { $ne: false },
+                    date: today,
+                    time: { $exists: true, $ne: null, $ne: "" },
+                    status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
+                    $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
+                })
+                    .select("_id time")
+                    .lean();
+
+                if (Array.isArray(legacyRows) && legacyRows.length > 0) {
+                    const ids = legacyRows
+                        .filter((row) => {
+                            const mins = parseTimeToMinutes(row?.time);
+                            return mins != null && mins <= nowMinutes;
+                        })
+                        .map((row) => row?._id);
+
+                    if (ids.length > 0) {
+                        await FollowUp.updateMany(
+                            { _id: { $in: ids } },
+                            {
+                                $set: {
+                                    status: "Missed",
+                                    dueAt: new Date(now.getTime() - 1000),
+                                },
+                            },
+                        );
+                    }
+                }
+
+                // Auto-unmiss: if a Missed follow-up is rescheduled into the future, remove it from Missed lists.
+                await FollowUp.updateMany(
+                    {
+                        ...query,
+                        isCurrent: { $ne: false },
+                        status: "Missed",
+                        $or: [{ date: { $gt: today } }, { date: today, dueAt: { $gt: now } }],
+                    },
+                    { $set: { status: "Scheduled" } },
+                );
+
+                // Legacy (no dueAt): if time is still ahead today, it's not missed.
+                const legacyMissed = await FollowUp.find({
+                    ...query,
+                    isCurrent: { $ne: false },
+                    status: "Missed",
+                    date: today,
+                    time: { $exists: true, $ne: null, $ne: "" },
+                    $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
+                })
+                    .select("_id time")
+                    .limit(500)
+                    .lean();
+
+                const unmissIds = legacyMissed
+                    .filter((row) => {
+                        const mins = parseTimeToMinutes(row?.time);
+                        return mins != null && mins > nowMinutes;
+                    })
+                    .map((row) => row._id);
+
+                if (unmissIds.length > 0) {
+                    await FollowUp.updateMany(
+                        { _id: { $in: unmissIds } },
+                        { $set: { status: "Scheduled" } },
+                    );
+                }
+            } catch (_missedSyncError) {
+                console.error("[Dashboard] Auto-mark Missed failed:", _missedSyncError.message);
+            }
+        }
+
         const { data: response, source } = await cache.wrap(cacheKey, async () => {
-            const today =
-                /^\d{4}-\d{2}-\d{2}$/.test(String(dateRef || "").trim())
-                    ? String(dateRef).trim()
-                    : toLocalIsoDate(parsedRef);
             const dateFilter = { date: { $gte: rangeFrom, $lte: rangeTo } };
             const prevDateFilter = { date: { $gte: prevFrom, $lte: prevTo } };
             const weekDateFilter = { date: { $gte: weekFrom, $lte: weekTo } };
 
-            // Data isolation query
-            const query = {};
-            if (req.user.role === "Staff" && req.user.parentUserId) {
-                query.userId = new mongoose.Types.ObjectId(req.user.parentUserId);
-                query.assignedTo = new mongoose.Types.ObjectId(req.userId);
-            } else {
-                query.userId = new mongoose.Types.ObjectId(req.userId);
-            }
-
-            const activeFollowUpFilter = {
-                status: { $nin: ["Completed", "Drop", "Dropped", "dropped", "drop"] },
-                nextAction: { $nin: ["Drop", "Dropped", "dropped", "drop"] },
-                activityType: { $ne: "System" },
-                type: { $ne: "System" },
-                // Only show the latest follow-up per enquiry as the priority item.
-                // Legacy rows without `isCurrent` should still be treated as current.
-                isCurrent: { $ne: false },
-                // Hide call-log derived follow-ups (calls should appear only in Call Log screen).
-                note: { $ne: "Enquiry created", $not: /^Call:/i },
-                remarks: { $ne: "Enquiry created", $not: /^Call:/i },
+            const CURRENT_FOLLOWUP_CLAUSE = { isCurrent: { $ne: false } };
+            const openFollowUpStatusFilter = {
+                status: { $nin: ["Missed", "Completed", "Drop", "Dropped", "Converted"] },
             };
-
-            const realToday = toClientIsoDate(tzOffsetMinutes);
-            const isRealToday = today === realToday;
-            const now = new Date();
-            const nowMinutes = getClientNowMinutes(tzOffsetMinutes);
-
-            // Keep missed status fresh for today, including legacy rows that don't have `dueAt` yet.
-            // (Many screens depend on Missed counts/lists to update without opening FollowUp first.)
-            if (isRealToday) {
-                try {
-                    await FollowUp.updateMany(
-                        {
-                            ...query,
-                            isCurrent: { $ne: false },
-                            date: today,
-                            dueAt: { $lte: now },
-                            status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
-                        },
-                        { $set: { status: "Missed" } },
-                    );
-
-                    const legacyRows = await FollowUp.find({
-                        ...query,
-                        isCurrent: { $ne: false },
-                        date: today,
-                        time: { $exists: true, $ne: null, $ne: "" },
-                        status: { $nin: ["Completed", "Drop", "Dropped", "Missed"] },
-                        $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
-                    })
-                        .select("_id time")
-                        .lean();
-
-                    if (Array.isArray(legacyRows) && legacyRows.length > 0) {
-                        const ids = legacyRows
-                            .filter((row) => {
-                                const mins = parseTimeToMinutes(row?.time);
-                                return mins != null && mins <= nowMinutes;
-                            })
-                            .map((row) => row?._id)
-                            .filter(Boolean);
-
-                        if (ids.length > 0) {
-                            // Set dueAt slightly in the past so `$lt: now` matches immediately.
-                            await FollowUp.updateMany(
-                                { _id: { $in: ids } },
-                                {
-                                    $set: {
-                                        status: "Missed",
-                                        dueAt: new Date(now.getTime() - 1000),
-                                    },
-                                },
-                            );
-                        }
-                    }
-                } catch (_missedSyncError) {
-                    // ignore sync errors; dashboard should still load
-                }
-            }
+            const missedFollowUpStatusFilter = { status: "Missed" };
 
             const todayOpenFollowUpQuery = {
                 ...query,
                 date: today,
-                ...activeFollowUpFilter,
-                ...(isRealToday
-                    ? {
-                          $or: [
-                              { dueAt: { $gte: now } },
-                              { dueAt: null },
-                              { dueAt: { $exists: false } },
-                          ],
-                      }
-                    : {}),
+                ...CURRENT_FOLLOWUP_CLAUSE,
+                ...openFollowUpStatusFilter,
             };
 
             const missedFollowUpQuery = {
                 ...query,
-                ...activeFollowUpFilter,
-                ...(isRealToday
-                    ? {
-                          $or: [
-                              { date: { $lt: today } },
-	                              { date: today, dueAt: { $lte: now } },
-                          ],
-                      }
-                    : { date: { $lt: today } }),
+                ...CURRENT_FOLLOWUP_CLAUSE,
+                ...missedFollowUpStatusFilter,
             };
 
             // Run all queries in parallel

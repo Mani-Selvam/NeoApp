@@ -85,32 +85,19 @@ const toIsoDate = (value) => {
     return d.toISOString().split("T")[0];
 };
 
+const escapeRegex = (value) =>
+    String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const getEnquiryAccessScope = async (req) => {
-    const normalizedRole = String(req.user?.role || "")
-        .trim()
-        .toLowerCase();
+    const role = String(req.user?.role || "").trim().toLowerCase();
     const companyId = req.user?.company_id;
+    const userId = req.userId;
 
-    if (normalizedRole === "staff") {
-        if (companyId) {
-            const companyUsers = await User.find({ company_id: companyId })
-                .select("_id")
-                .lean();
-
-            const ownerUserIds = companyUsers
-                .map((item) => item?._id)
-                .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
-
-            return {
-                ownerUserIds:
-                    ownerUserIds.length > 0 ? ownerUserIds : [req.userId],
-                scopingFilter: { assignedTo: req.userId },
-            };
-        }
-
+    if (role === "staff") {
         return {
-            ownerUserIds: [req.user?.parentUserId || req.userId],
-            scopingFilter: { assignedTo: req.userId },
+            companyId: companyId || null,
+            ownerUserIds: [req.user?.parentUserId || userId],
+            scopingFilter: { assignedTo: userId },
         };
     }
 
@@ -120,19 +107,19 @@ const getEnquiryAccessScope = async (req) => {
             .lean();
 
         const ownerUserIds = companyUsers
-            .map((item) => item?._id)
+            .map((u) => u._id)
             .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
 
-        if (ownerUserIds.length > 0) {
-            return {
-                ownerUserIds,
-                scopingFilter: {},
-            };
-        }
+        return {
+            companyId,
+            ownerUserIds: ownerUserIds.length > 0 ? ownerUserIds : [userId],
+            scopingFilter: {},
+        };
     }
 
     return {
-        ownerUserIds: [req.userId],
+        companyId: null,
+        ownerUserIds: [userId],
         scopingFilter: {},
     };
 };
@@ -150,6 +137,7 @@ const buildOwnerScopedFilter = (scope) => {
             : { $in: ownerUserIds };
 
     return {
+        ...(scope?.companyId ? { companyId: scope.companyId } : {}),
         userId,
         ...(scope?.scopingFilter || {}),
     };
@@ -187,7 +175,6 @@ const upload = multer({
     }),
 });
 
-// Helper: Generate next enquiry number by querying the database
 // Helper: Generate next enquiry number efficiently
 const generateEnquiryNumber = async (companyId) => {
     try {
@@ -326,6 +313,7 @@ router.get("/", verifyToken, async (req, res) => {
 
             if (followUpDate) {
                 const followUpScope = {
+                    ...(query.companyId ? { companyId: query.companyId } : {}),
                     userId: query.userId,
                     isCurrent: { $ne: false },
                     date: followUpDate,
@@ -333,19 +321,9 @@ router.get("/", verifyToken, async (req, res) => {
                 if (query.assignedTo)
                     followUpScope.assignedTo = query.assignedTo;
 
-                const matchingFollowUps = await FollowUp.find(followUpScope)
-                    .select("enqId")
-                    .lean();
-
-                const followUpEnquiryIds = [
-                    ...new Set(
-                        matchingFollowUps
-                            .map((item) => item.enqId)
-                            .filter((id) =>
-                                mongoose.Types.ObjectId.isValid(String(id)),
-                            ),
-                    ),
-                ];
+                const followUpEnquiryIds = (
+                    await FollowUp.distinct("enqId", followUpScope)
+                ).filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
 
                 if (followUpEnquiryIds.length === 0) {
                     return {
@@ -363,12 +341,25 @@ router.get("/", verifyToken, async (req, res) => {
             }
 
             if (search) {
-                query.$or = [
-                    { name: { $regex: search, $options: "i" } },
-                    { mobile: { $regex: search, $options: "i" } },
-                    { email: { $regex: search, $options: "i" } },
-                    { enqNo: { $regex: search, $options: "i" } },
-                ];
+                const raw = String(search || "").trim();
+                const s = raw.slice(0, 60);
+                const digits = s.replace(/\D/g, "");
+
+                // Fast paths that can use normal indexes (prefix regex).
+                if (digits && digits.length >= 5 && digits.length === s.length) {
+                    const re = `^${escapeRegex(digits)}`;
+                    query.$or = [{ mobile: { $regex: re } }];
+                } else if (/^enq[\s\-_]?\d+/i.test(s)) {
+                    query.enqNo = { $regex: `^${escapeRegex(s)}`, $options: "i" };
+                } else {
+                    const re = escapeRegex(s);
+                    query.$or = [
+                        { name: { $regex: re, $options: "i" } },
+                        { mobile: { $regex: re, $options: "i" } },
+                        { email: { $regex: re, $options: "i" } },
+                        { enqNo: { $regex: re, $options: "i" } },
+                    ];
+                }
             }
 
             const selectedStatusFilter =
@@ -389,7 +380,7 @@ router.get("/", verifyToken, async (req, res) => {
 
             const enquiries = await Enquiry.find(query)
                 .select(
-                    "name mobile email image product enqNo status enqType date enquiryDateTime createdAt cost address source lastContactedAt assignedTo",
+                    "name mobile email image product enqNo status enqType date enquiryDateTime createdAt cost address source lastContactedAt assignedTo lastFollowUpDate lastFollowUpStatus nextFollowUpDate lastActivityAt",
                 )
                 .populate("assignedTo", "name email mobile role")
                 .sort({ createdAt: -1 })
@@ -398,84 +389,35 @@ router.get("/", verifyToken, async (req, res) => {
                 .lean();
 
             const scopedEnquiries = enquiries.slice(0, limitNum);
-            const enquiryIds = scopedEnquiries
-                .map((item) => item._id)
-                .filter(Boolean);
 
-            if (enquiryIds.length > 0) {
-                const followUpScope = {
-                    userId: query.userId,
-                    enqId: { $in: enquiryIds },
-                    isCurrent: { $ne: false },
-                };
-                if (query.assignedTo)
-                    followUpScope.assignedTo = query.assignedTo;
-                if (followUpDate) followUpScope.date = followUpDate;
+            // Map denormalized fields
+            scopedEnquiries.forEach((item) => {
+                item.latestFollowUpDate = item.nextFollowUpDate || item.lastFollowUpDate || null;
+                item.latestFollowUpAt = item.lastActivityAt || item.createdAt || null;
+                item.selectedFollowUpDate = followUpDate || item.lastFollowUpDate || item.nextFollowUpDate || null;
 
-                const latestFollowUps = await FollowUp.find(followUpScope)
-                    .select(
-                        "enqId nextFollowUpDate followUpDate date activityTime createdAt enquiryStatus nextAction activityType type note remarks",
-                    )
-                    .sort({ activityTime: -1, createdAt: -1 })
-                    .lean();
+                if (followUpDate) {
+                    item.currentEnquiryStatus = item.status;
+                }
+            });
 
-                const latestByEnquiryId = new Map();
-                latestFollowUps.forEach((item) => {
-                    const key = String(item.enqId || "");
-                    if (!key || latestByEnquiryId.has(key)) return;
-                    latestByEnquiryId.set(key, item);
-                });
-
-                enquiries.forEach((item) => {
-                    const latest = latestByEnquiryId.get(String(item._id));
-                    if (!latest) return;
-                    item.latestFollowUpDate =
-                        latest.nextFollowUpDate ||
-                        latest.followUpDate ||
-                        latest.date ||
-                        null;
-                    item.latestFollowUpAt =
-                        latest.activityTime || latest.createdAt || null;
-                    item.selectedFollowUpDate =
-                        latest.date ||
-                        latest.nextFollowUpDate ||
-                        latest.followUpDate ||
-                        null;
-                    item.selectedEnquiryStatus = deriveFollowUpEnquiryStatus(
-                        latest,
-                        item.status,
-                    );
-                    if (followUpDate) {
-                        item.currentEnquiryStatus = item.status;
-                        item.status = item.selectedEnquiryStatus;
-                    }
-                });
-
-                if (selectedStatusFilter && followUpDate) {
-                    const acceptedStatuses = ENQUIRY_STATUS_QUERY_MAP[
-                        selectedStatusFilter
-                    ] || [selectedStatusFilter];
-                    for (let i = enquiries.length - 1; i >= 0; i -= 1) {
-                        if (
-                            !acceptedStatuses.includes(
-                                normalizeEnquiryStatus(enquiries[i]?.status),
-                            )
-                        ) {
-                            enquiries.splice(i, 1);
-                        }
+            if (selectedStatusFilter && followUpDate) {
+                const acceptedStatuses = ENQUIRY_STATUS_QUERY_MAP[selectedStatusFilter] || [selectedStatusFilter];
+                for (let i = scopedEnquiries.length - 1; i >= 0; i -= 1) {
+                    const s = normalizeEnquiryStatus(scopedEnquiries[i]?.status);
+                    if (!acceptedStatuses.includes(s)) {
+                        scopedEnquiries.splice(i, 1);
                     }
                 }
             }
 
             const hasMore = enquiries.length > limitNum;
-            if (hasMore) enquiries.pop();
+            if (hasMore) scopedEnquiries.pop();
 
             return {
-                data: enquiries,
+                data: scopedEnquiries,
                 pagination: {
-                    total: hasMore
-                        ? pageNum * limitNum + 1
-                        : skip + enquiries.length,
+                    total: hasMore ? pageNum * limitNum + 1 : skip + scopedEnquiries.length,
                     page: pageNum,
                     limit: limitNum,
                     pages: hasMore ? pageNum + 1 : pageNum,
@@ -484,9 +426,6 @@ router.get("/", verifyToken, async (req, res) => {
         })();
 
         res.json(response);
-        console.log(
-            `⚡ GET /enquiries — ${Date.now() - _start}ms DB (${response.data?.length || 0} items, status=${status || "all"}, page ${page})`,
-        );
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -953,20 +892,16 @@ router.get("/meta/report-summary", verifyToken, async (req, res) => {
             FollowUp.countDocuments({
                 ...followFilter,
                 isCurrent: { $ne: false },
-                status: { $nin: ["Completed", "Drop", "Dropped"] },
+                status: { $nin: ["Completed", "Drop", "Dropped", "Converted", "Missed"] },
                 $or: [
-                    { nextFollowUpDate: { $gte: today } },
-                    { date: { $gte: today } },
+                    { date: { $gt: today } },
+                    { date: today, dueAt: { $gte: new Date() } },
                 ],
             }),
             FollowUp.countDocuments({
                 ...followFilter,
                 isCurrent: { $ne: false },
-                status: { $nin: ["Completed", "Drop", "Dropped"] },
-                $or: [
-                    { nextFollowUpDate: { $lt: today } },
-                    { date: { $lt: today } },
-                ],
+                status: "Missed",
             }),
         ]);
 

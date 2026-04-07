@@ -11,6 +11,11 @@ const FOLLOWUP_ACTIVITIES = [
 ];
 
 const followUpSchema = new mongoose.Schema({
+    companyId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Company",
+        index: true,
+    },
     enqId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Enquiry",
@@ -68,6 +73,45 @@ followUpSchema.index({ userId: 1, nextFollowUpDate: 1, status: 1 });
 followUpSchema.index({ assignedTo: 1, nextFollowUpDate: 1, status: 1 });
 followUpSchema.index({ userId: 1, enqNo: 1, isCurrent: 1, date: -1 });
 
+// Multi-tenant + list endpoints (preferred: companyId first)
+followUpSchema.index({ companyId: 1, date: -1, status: 1, isCurrent: 1 });
+followUpSchema.index({
+    companyId: 1,
+    assignedTo: 1,
+    date: 1,
+    isCurrent: 1,
+    enqId: 1,
+});
+followUpSchema.index({
+    companyId: 1,
+    enqId: 1,
+    isCurrent: 1,
+    activityTime: -1,
+    createdAt: -1,
+});
+
+// Optimization for "Missed" status auto-update and dashboard counts
+followUpSchema.index({ companyId: 1, isCurrent: 1, status: 1, dueAt: 1 });
+followUpSchema.index({ userId: 1, isCurrent: 1, status: 1, dueAt: 1 });
+followUpSchema.index({ assignedTo: 1, isCurrent: 1, status: 1, dueAt: 1 });
+followUpSchema.index({ companyId: 1, isCurrent: 1, status: 1, date: -1 });
+
+// Fast "followUpDate -> enquiryIds" lookup and "latest followup per enquiry" for /enquiries
+followUpSchema.index({
+    userId: 1,
+    assignedTo: 1,
+    date: 1,
+    isCurrent: 1,
+    enqId: 1,
+});
+followUpSchema.index({
+    userId: 1,
+    enqId: 1,
+    isCurrent: 1,
+    activityTime: -1,
+    createdAt: -1,
+});
+
 followUpSchema.pre("validate", function syncLegacyFields() {
   if (!this.activityType) this.activityType = this.type || "WhatsApp";
   if (!this.type) this.type = this.activityType || "WhatsApp";
@@ -108,4 +152,77 @@ followUpSchema.pre("validate", function syncLegacyFields() {
   if (dueAt) this.dueAt = dueAt;
 });
 
-module.exports = mongoose.model("FollowUp", followUpSchema);
+// Ensure indexes + backfill companyId for multi-tenant queries.
+const FollowUp = mongoose.models.FollowUp || mongoose.model("FollowUp", followUpSchema);
+
+const backfillMissingCompanyIds = async () => {
+    try {
+        if (mongoose.connection.readyState !== 1) return;
+        const UserModel = mongoose.models.User;
+        if (!UserModel) return;
+
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+            const rows = await FollowUp.find({
+                $or: [{ companyId: { $exists: false } }, { companyId: null }],
+            })
+                .select("_id userId")
+                .limit(300)
+                .lean();
+            if (!rows.length) break;
+
+            const userIds = [
+                ...new Set(
+                    rows
+                        .map((item) => String(item?.userId || ""))
+                        .filter((value) => mongoose.Types.ObjectId.isValid(value)),
+                ),
+            ];
+            if (!userIds.length) break;
+
+            const users = await UserModel.find({ _id: { $in: userIds } })
+                .select("_id company_id")
+                .lean();
+            const companyByUserId = new Map(
+                users
+                    .filter((item) => item?.company_id)
+                    .map((item) => [String(item._id), item.company_id]),
+            );
+
+            const ops = rows
+                .map((item) => {
+                    const companyId = companyByUserId.get(String(item?.userId || ""));
+                    if (!companyId) return null;
+                    return {
+                        updateOne: {
+                            filter: { _id: item._id },
+                            update: { $set: { companyId } },
+                        },
+                    };
+                })
+                .filter(Boolean);
+
+            if (!ops.length) break;
+            await FollowUp.bulkWrite(ops, { ordered: false });
+        }
+    } catch (_error) {
+        // ignore startup migration issues
+    }
+};
+
+const ensureFollowUpIndexes = async () => {
+    try {
+        if (mongoose.connection.readyState !== 1) return;
+        await backfillMissingCompanyIds();
+        await FollowUp.syncIndexes().catch(() => {});
+    } catch (_error) {
+        // ignore startup index migration issues
+    }
+};
+
+if (mongoose.connection.readyState === 1) {
+    ensureFollowUpIndexes();
+} else {
+    mongoose.connection.once("connected", ensureFollowUpIndexes);
+}
+
+module.exports = FollowUp;

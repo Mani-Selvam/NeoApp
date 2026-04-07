@@ -58,13 +58,19 @@ const enquirySchema = new mongoose.Schema(
       default: "New",
     },
 
+    // Denormalized fields for lightning-fast list performance
+    lastFollowUpDate: { type: String },
+    lastFollowUpStatus: { type: String },
+    nextFollowUpDate: { type: String },
+    lastActivityAt: { type: Date },
+
     createdAt: { type: Date, default: Date.now },
   },
   { timestamps: true },
 );
 
 // Indexes for performance
-enquirySchema.index({ userId: 1, status: 1 });
+enquirySchema.index({ userId: 1, status: 1, createdAt: -1 });
 enquirySchema.index({ userId: 1, date: -1 });
 enquirySchema.index(
   { companyId: 1, enqNo: 1 },
@@ -80,8 +86,16 @@ enquirySchema.index({ assignedTo: 1, status: 1 });
 enquirySchema.index({ assignedTo: 1, date: -1 });
 enquirySchema.index({ userId: 1, assignedTo: 1, createdAt: -1 });
 enquirySchema.index({ companyId: 1, createdAt: -1 });
+
+// Lightning fast list view index (Multi-tenant + ESR)
+enquirySchema.index({ companyId: 1, status: 1, lastActivityAt: -1, createdAt: -1 });
+enquirySchema.index({ companyId: 1, assignedTo: 1, status: 1, lastActivityAt: -1, createdAt: -1 });
+
+enquirySchema.index({ companyId: 1, date: 1, createdAt: -1 });
+enquirySchema.index({ companyId: 1, assignedTo: 1, date: 1, createdAt: -1 });
 enquirySchema.index({ name: "text", mobile: "text", email: "text" });
 enquirySchema.index({ mobile: 1 });
+enquirySchema.index({ companyId: 1, mobile: 1 });
 
 const Enquiry = mongoose.models.Enquiry || mongoose.model("Enquiry", enquirySchema);
 

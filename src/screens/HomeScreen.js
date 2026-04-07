@@ -15,6 +15,7 @@ import {
 import { Calendar } from "react-native-calendars";
 import {
     Animated,
+    AppState,
     DeviceEventEmitter,
     Easing,
     Image,
@@ -1205,8 +1206,42 @@ export default function HomeScreen({ navigation }) {
         useCallback(() => {
             // ⚡ Always fetch fresh data in background, but show cache instantly
             fetchData({ force: false, showLoading: false });
+
+            // Auto refresh (minute-aligned) so due/missed counts update even without manual refresh.
+            // This complements socket updates (for create/edit) by handling time-based transitions.
+            let intervalId = null;
+            let timeoutId = null;
+
+            const refreshNow = () => fetchData({ force: true, showLoading: false });
+            const now = Date.now();
+            const msToNextMinute = 60000 - (now % 60000);
+            timeoutId = setTimeout(() => {
+                refreshNow();
+                intervalId = setInterval(refreshNow, 60000);
+            }, Math.max(1000, msToNextMinute + 250));
+
+            return () => {
+                if (timeoutId) clearTimeout(timeoutId);
+                if (intervalId) clearInterval(intervalId);
+            };
         }, [fetchData]),
     );
+
+    useEffect(() => {
+        // Refresh when app returns to foreground while staying on Home screen.
+        const sub = AppState.addEventListener("change", (nextState) => {
+            if (nextState === "active") {
+                fetchData({ force: true, showLoading: false });
+            }
+        });
+        return () => {
+            try {
+                sub?.remove?.();
+            } catch (_err) {
+                // ignore
+            }
+        };
+    }, [fetchData]);
 
     useEffect(() => {
         const refreshDashboard = () =>
