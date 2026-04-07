@@ -1,5 +1,12 @@
 import getApiClient from "./apiClient";
-import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+import { emitEnquiryCreated, emitEnquiryUpdated } from "./appEvents";
+import {
+    buildCacheKey,
+    getCacheEntry,
+    invalidateCacheTags,
+    isFresh,
+    setCacheEntry,
+} from "./appCache";
 
 const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000);
 
@@ -8,6 +15,10 @@ export const createEnquiry = async (enquiryData) => {
     try {
         const client = await getApiClient();
         const response = await client.post("/enquiries", enquiryData);
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        emitEnquiryCreated(response.data);
         return response.data;
     } catch (error) {
         console.error(
@@ -64,7 +75,9 @@ export const getEnquiryById = async (id, options = {}) => {
                     .then(async () => {
                         const client = await getApiClient();
                         const response = await client.get(`/enquiries/${id}`);
-                        await setCacheEntry(key, response.data).catch(() => {});
+                        await setCacheEntry(key, response.data, { tags: ["enquiries"] }).catch(
+                            () => {},
+                        );
                     })
                     .catch(() => {});
                 return cached.value;
@@ -73,7 +86,9 @@ export const getEnquiryById = async (id, options = {}) => {
 
         const client = await getApiClient();
         const response = await client.get(`/enquiries/${id}`);
-        await setCacheEntry(key, response.data).catch(() => {});
+        await setCacheEntry(key, response.data, { tags: ["enquiries"] }).catch(
+            () => {},
+        );
         return response.data;
     } catch (error) {
         console.error(
@@ -104,6 +119,10 @@ export const updateEnquiry = async (id, enquiryData) => {
     try {
         const client = await getApiClient();
         const response = await client.put(`/enquiries/${id}`, enquiryData);
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        emitEnquiryUpdated(response.data);
         return response.data;
     } catch (error) {
         // Backward-compatible retry for older backend enum sets.
@@ -127,6 +146,10 @@ export const updateEnquiry = async (id, enquiryData) => {
                         ...enquiryData,
                         status: legacyStatus,
                     });
+                    Promise.resolve(
+                        invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+                    ).catch(() => {});
+                    emitEnquiryUpdated(retryResponse.data);
                     return retryResponse.data;
                 } catch (retryError) {
                     console.error(
@@ -150,6 +173,10 @@ export const updateEnquiryStatus = async (id, status) => {
     try {
         const client = await getApiClient();
         const response = await client.patch(`/enquiries/${id}/status`, { status });
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        emitEnquiryUpdated(response.data);
         return response.data;
     } catch (error) {
         console.error(
@@ -198,6 +225,10 @@ export const deleteEnquiry = async (id) => {
     try {
         const client = await getApiClient();
         const response = await client.delete(`/enquiries/${id}`);
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        emitEnquiryUpdated({ action: "delete", id });
         return response.data;
     } catch (error) {
         console.error(

@@ -1,6 +1,6 @@
-import { DeviceEventEmitter } from "react-native";
 import getApiClient from "./apiClient";
-import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+import { buildCacheKey, getCacheEntry, invalidateCacheTags, isFresh, setCacheEntry } from "./appCache";
+import { emitFollowupChanged } from "./appEvents";
 
 const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 60000);
 
@@ -47,7 +47,10 @@ export const createFollowUp = async (followUpData) => {
             payload.tzOffsetMinutes = new Date().getTimezoneOffset();
         }
         const response = await client.post("/followups", payload);
-        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "followups", "enquiries", "reports"]),
+        ).catch(() => {});
+        emitFollowupChanged({
             action: "create",
             item: response.data,
         });
@@ -72,7 +75,10 @@ export const updateFollowUp = async (id, followUpData) => {
             payload.tzOffsetMinutes = new Date().getTimezoneOffset();
         }
         const response = await client.put(`/followups/${id}`, payload);
-        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "followups", "enquiries", "reports"]),
+        ).catch(() => {});
+        emitFollowupChanged({
             action: "update",
             item: response.data,
         });
@@ -91,7 +97,10 @@ export const deleteFollowUp = async (id) => {
     try {
         const client = await getApiClient();
         const response = await client.delete(`/followups/${id}`);
-        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "followups", "enquiries", "reports"]),
+        ).catch(() => {});
+        emitFollowupChanged({
             action: "delete",
             id,
         });
@@ -119,7 +128,7 @@ export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
                     .then(async () => {
                         const client = await getApiClient();
                         const response = await client.get(`/followups/history/${enqNoOrId}`);
-                        await setCacheEntry(key, response.data).catch(() => {});
+                        await setCacheEntry(key, response.data, { tags: ["followups"] }).catch(() => {});
                     })
                     .catch(() => {});
                 return cached.value;
@@ -128,7 +137,7 @@ export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
 
         const client = await getApiClient();
         const response = await client.get(`/followups/history/${enqNoOrId}`);
-        await setCacheEntry(key, response.data).catch(() => {});
+        await setCacheEntry(key, response.data, { tags: ["followups"] }).catch(() => {});
         return response.data;
     } catch (error) {
         console.error(

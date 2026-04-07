@@ -723,6 +723,13 @@ router.get("/", verifyToken, async (req, res) => {
                             { nextAction: DROP_REGEX },
                         ],
                     });
+                    // "Dropped" should behave like a stage list, not timeline history:
+                    // keep only the latest/current follow-up per enquiry to avoid double-counting
+                    // the same enquiry when it was dropped multiple times.
+                    query.$and = [
+                        ...(Array.isArray(query.$and) ? query.$and : []),
+                        CURRENT_FOLLOWUP_CLAUSE,
+                    ];
                 } else if (tab === "All") {
                     // "All" is still a priority list (not timeline history).
                     // Keep only the latest/current follow-up per enquiry to avoid old missed items

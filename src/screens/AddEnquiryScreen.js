@@ -36,6 +36,7 @@ import {
 import ConfettiBurst from "../components/ConfettiBurst";
 import * as addressService from "../services/addressService";
 import getApiClient from "../services/apiClient";
+import { emitEnquiryCreated, emitEnquiryUpdated } from "../services/appEvents";
 import * as leadSourceService from "../services/leadSourceService";
 import notificationService from "../services/notificationService";
 import * as productService from "../services/productService";
@@ -1146,10 +1147,8 @@ export default function AddEnquiryScreen({ route, navigation }) {
                             image: null,
                             assignedTo: "",
                         });
-                    DeviceEventEmitter.emit(
-                        isEditMode ? "ENQUIRY_UPDATED" : "ENQUIRY_CREATED",
-                        data,
-                    );
+                    if (isEditMode) emitEnquiryUpdated(data);
+                    else emitEnquiryCreated(data);
                     setTimeout(() => navigation.goBack(), 800);
                 }, 300);
             } else {

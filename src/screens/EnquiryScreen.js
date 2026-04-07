@@ -55,6 +55,13 @@ import notificationService from "../services/notificationService";
 import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
 import { getAuthToken } from "../services/secureTokenStorage";
 import {
+    APP_EVENTS,
+    emitEnquiryCreated,
+    emitFollowupChanged,
+    onAppEvent,
+} from "../services/appEvents";
+import { cancelDebounceKey, debounceByKey } from "../services/debounce";
+import {
     confirmPermissionRequest,
     getUserFacingError,
 } from "../utils/appFeedback";
@@ -1044,6 +1051,7 @@ export default function EnquiryListScreen({ navigation, route }) {
     const [datePickerVisible, setDatePickerVisible] = useState(false);
     const [deleteEnquiryId, setDeleteEnquiryId] = useState(null);
     const [deletingEnquiryId, setDeletingEnquiryId] = useState(null);
+    const enquiriesFetchInFlightRef = useRef(false);
 
     // Detail page
     const [detailEnquiry, setDetailEnquiry] = useState(null);
@@ -1110,6 +1118,8 @@ export default function EnquiryListScreen({ navigation, route }) {
                 allowCache = true,
             } = opts || {};
 
+            if (enquiriesFetchInFlightRef.current) return;
+            enquiriesFetchInFlightRef.current = true;
             const cacheKey = buildCacheKey(
                 "enquiries:list:v1",
                 user?.id || user?._id || "",
@@ -1195,11 +1205,15 @@ export default function EnquiryListScreen({ navigation, route }) {
                     setEnquiries(nextItems);
                     setHasMore(nextHasMore);
                     setPage(nextPage);
-                    await setCacheEntry(cacheKey, {
+                    await setCacheEntry(
+                        cacheKey,
+                        {
                         items: nextItems,
                         hasMore: nextHasMore,
                         page: nextPage,
-                    }).catch(() => {});
+                        },
+                        { tags: ["enquiries"] },
+                    ).catch(() => {});
                 } else {
                     const pg = page;
                     const res = await enquiryService.getAllEnquiries(
@@ -1231,17 +1245,22 @@ export default function EnquiryListScreen({ navigation, route }) {
                     setEnquiries(nextItems);
                     setHasMore(nextHasMore);
                     setPage(nextPage);
-                    await setCacheEntry(cacheKey, {
+                    await setCacheEntry(
+                        cacheKey,
+                        {
                         items: nextItems,
                         hasMore: nextHasMore,
                         page: nextPage,
-                    }).catch(() => {});
+                        },
+                        { tags: ["enquiries"] },
+                    ).catch(() => {});
                 }
             } catch (e) {
                 console.error(e);
             } finally {
                 setIsLoading(false);
                 setIsLoadingMore(false);
+                enquiriesFetchInFlightRef.current = false;
             }
         },
         [
@@ -1344,7 +1363,6 @@ export default function EnquiryListScreen({ navigation, route }) {
                 )
                     .then((saved) => {
                         if (!saved?._id) return;
-                        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
                         fetchEnquiries(true, {
                             showIndicator: false,
                             force: true,
@@ -1409,7 +1427,6 @@ export default function EnquiryListScreen({ navigation, route }) {
                         deviceCallId,
                     });
                     if (saved?._id) {
-                        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
                         fetchEnquiries(true, {
                             showIndicator: false,
                             force: true,
@@ -1427,47 +1444,30 @@ export default function EnquiryListScreen({ navigation, route }) {
     }, [callStarted, callStartTime, callEnquiry]);
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () =>
-            fetchEnquiries(true, {
-                showIndicator: false,
-                force: true,
-                allowCache: true,
-            }),
-        );
-        return () => sub.remove();
-    }, []);
+        const refresh = () =>
+            debounceByKey(
+                "enquiry-refresh",
+                () =>
+                    fetchEnquiries(true, {
+                        showIndicator: false,
+                        force: true,
+                        allowCache: true,
+                    }),
+                300,
+            );
 
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("ENQUIRY_CREATED", () =>
-            fetchEnquiries(true, {
-                showIndicator: false,
-                force: true,
-                allowCache: true,
-            }),
-        );
-        return () => sub.remove();
-    }, [fetchEnquiries]);
+        const unsub1 = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, refresh);
+        const unsub2 = onAppEvent(APP_EVENTS.ENQUIRY_CREATED, refresh);
+        const unsub3 = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, refresh);
+        const unsub4 = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, refresh);
 
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () =>
-            fetchEnquiries(true, {
-                showIndicator: false,
-                force: true,
-                allowCache: true,
-            }),
-        );
-        return () => sub.remove();
-    }, [fetchEnquiries]);
-
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () =>
-            fetchEnquiries(true, {
-                showIndicator: false,
-                force: true,
-                allowCache: true,
-            }),
-        );
-        return () => sub.remove();
+        return () => {
+            cancelDebounceKey("enquiry-refresh");
+            unsub1();
+            unsub2();
+            unsub3();
+            unsub4();
+        };
     }, [fetchEnquiries]);
 
     useEffect(() => {
@@ -1610,7 +1610,7 @@ export default function EnquiryListScreen({ navigation, route }) {
 
             // Trigger a follow-up resync so hourly/time reminders reflect the deletion immediately.
             try {
-                DeviceEventEmitter.emit("FOLLOWUP_CHANGED", {
+                emitFollowupChanged({
                     item: {
                         status: "deleted",
                         enqId: id,
@@ -1746,6 +1746,11 @@ export default function EnquiryListScreen({ navigation, route }) {
                         "Failed to save enquiry",
                 );
             }
+
+            // Notify other screens (Home/Report/etc.) to refresh immediately.
+            try {
+                emitEnquiryCreated(responseData);
+            } catch (_e) {}
 
             Alert.alert(
                 "\u2713 Success",

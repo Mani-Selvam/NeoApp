@@ -46,6 +46,8 @@ import {
     getLatestDeviceCallLogForNumber,
     isRestrictedCallMonitoringEnabled,
 } from "../services/CallMonitorService";
+import { APP_EVENTS, onAppEvent } from "../services/appEvents";
+import { cancelDebounceKey, debounceByKey } from "../services/debounce";
 
 // ─── Design tokens (matches app design system) ────────────────────────────────
 const C = {
@@ -822,7 +824,7 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     const sc = useScale();
     const { user } = useAuth();
 
-    const debounceRef = useRef(null);
+    const calllogsFetchInFlightRef = useRef(false);
     const hasLoadedRef = useRef(false);
     const skipFocusRef = useRef(true);
     const lastAutoSyncRef = useRef(0);
@@ -881,6 +883,8 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     // ── Fetch ────────────────────────────────────────────────────────────────
     const fetchData = useCallback(
         async ({ refresh = false } = {}) => {
+            if (calllogsFetchInFlightRef.current) return;
+            calllogsFetchInFlightRef.current = true;
             try {
                 if (refresh) setIsRefreshing(true);
                 else if (!hasLoadedRef.current) setIsLoading(true);
@@ -901,6 +905,7 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
             } finally {
                 setIsLoading(false);
                 setIsRefreshing(false);
+                calllogsFetchInFlightRef.current = false;
             }
         },
         [typeFilter, periodFilter, searchQuery],
@@ -934,21 +939,17 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     );
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener(
-            "CALL_LOG_CREATED",
-            (payload) => {
-                if (!payload?.type && !payload?._id && !payload?.phoneNumber)
-                    return;
-                clearTimeout(debounceRef.current);
-                debounceRef.current = setTimeout(
-                    () => fetchData({ refresh: true }),
-                    300,
-                );
-            },
-        );
+        const unsub = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, (payload) => {
+            if (!payload?.type && !payload?._id && !payload?.phoneNumber) return;
+            debounceByKey(
+                "calllog-refresh",
+                () => fetchData({ refresh: true }),
+                300,
+            );
+        });
         return () => {
-            sub.remove();
-            clearTimeout(debounceRef.current);
+            cancelDebounceKey("calllog-refresh");
+            unsub();
         };
     }, [fetchData]);
 
@@ -998,7 +999,6 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
             try {
                 const saved = await callLogService.createCallLog(data);
                 if (!saved?._id) return;
-                DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
                 fetchData({ refresh: true });
             } catch (e) {
                 console.error(e);

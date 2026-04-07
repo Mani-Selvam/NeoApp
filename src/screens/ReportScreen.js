@@ -37,6 +37,8 @@ import {
     isFresh,
     setCacheEntry,
 } from "../services/appCache";
+import { APP_EVENTS, onAppEvent } from "../services/appEvents";
+import { cancelDebounceKey, debounceByKey } from "../services/debounce";
 import {
     SkeletonBox,
     SkeletonCard,
@@ -631,6 +633,7 @@ const CardHeader = ({ title, icon, accent, right }) => (
 export default function ReportScreen({ navigation }) {
     const insets = useSafeAreaInsets();
     const { user, logout } = useAuth();
+    const reportFetchInFlightRef = useRef(false);
     const selfId = useMemo(
         () => normalizeId(user?.id || user?._id),
         [user?.id, user?._id],
@@ -673,6 +676,8 @@ export default function ReportScreen({ navigation }) {
 
     const loadReportData = useCallback(
         async ({ force = false, showLoading = true } = {}) => {
+            if (reportFetchInFlightRef.current) return;
+            reportFetchInFlightRef.current = true;
             let usedCache = false;
             const cached = await getCacheEntry(reportCacheKey).catch(
                 () => null,
@@ -702,11 +707,14 @@ export default function ReportScreen({ navigation }) {
                     callLogs: normalizeList(callR),
                 };
                 setReportData(payload);
-                await setCacheEntry(reportCacheKey, payload).catch(() => {});
+                await setCacheEntry(reportCacheKey, payload, {
+                    tags: ["reports"],
+                }).catch(() => {});
             } catch (e) {
                 console.error(e);
             } finally {
                 setIsLoading(false);
+                reportFetchInFlightRef.current = false;
             }
         },
         [reportCacheKey],
@@ -719,35 +727,23 @@ export default function ReportScreen({ navigation }) {
     );
 
     useEffect(() => {
-        const subEnquiry = DeviceEventEmitter.addListener(
-            "ENQUIRY_UPDATED",
-            () => {
-                loadReportData({ force: true, showLoading: false });
-            },
-        );
-        const subFollowup = DeviceEventEmitter.addListener(
-            "FOLLOWUP_CHANGED",
-            () => {
-                loadReportData({ force: true, showLoading: false });
-            },
-        );
-        const subCreated = DeviceEventEmitter.addListener(
-            "ENQUIRY_CREATED",
-            () => {
-                loadReportData({ force: true, showLoading: false });
-            },
-        );
-        const subCall = DeviceEventEmitter.addListener(
-            "CALL_LOG_CREATED",
-            () => {
-                loadReportData({ force: true, showLoading: false });
-            },
-        );
+        const refresh = () =>
+            debounceByKey(
+                "report-refresh",
+                () => loadReportData({ force: true, showLoading: false }),
+                300,
+            );
+
+        const unsub1 = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, refresh);
+        const unsub2 = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, refresh);
+        const unsub3 = onAppEvent(APP_EVENTS.ENQUIRY_CREATED, refresh);
+        const unsub4 = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, refresh);
         return () => {
-            subEnquiry.remove();
-            subFollowup.remove();
-            subCreated.remove();
-            subCall.remove();
+            cancelDebounceKey("report-refresh");
+            unsub1();
+            unsub2();
+            unsub3();
+            unsub4();
         };
     }, [loadReportData]);
 

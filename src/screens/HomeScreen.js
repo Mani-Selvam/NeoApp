@@ -54,6 +54,8 @@ import {
     isFresh,
     setCacheEntry,
 } from "../services/appCache";
+import { APP_EVENTS, onAppEvent } from "../services/appEvents";
+import { cancelDebounceKey, debounceByKey } from "../services/debounce";
 import * as dashboardService from "../services/dashboardService";
 import { getBillingCoupons } from "../services/userService";
 import notificationService from "../services/notificationService";
@@ -1015,6 +1017,7 @@ export default function HomeScreen({ navigation }) {
     const [showLogout, setShowLogout] = useState(false);
     const [skipAnim, setSkipAnim] = useState(false);
     const couponCopyResetRef = useRef(null);
+    const dashboardFetchInFlightRef = useRef(false);
     useEffect(() => {
         AsyncStorage.getItem("homeIntroPlayed")
             .then((val) => {
@@ -1120,6 +1123,8 @@ export default function HomeScreen({ navigation }) {
 
     const fetchData = useCallback(
         async ({ force = false, showLoading = true } = {}) => {
+            if (dashboardFetchInFlightRef.current) return;
+            dashboardFetchInFlightRef.current = true;
             try {
                 let usedCache = false;
                 const cached = await getCacheEntry(dashboardCacheKey).catch(
@@ -1154,7 +1159,9 @@ export default function HomeScreen({ navigation }) {
                     coupons: couponData?.coupons || [],
                 };
                 hydrateDashboard(payload);
-                await setCacheEntry(dashboardCacheKey, payload).catch(() => {});
+                await setCacheEntry(dashboardCacheKey, payload, {
+                    tags: ["dashboard"],
+                }).catch(() => {});
             } catch (err) {
                 const status = err?.response?.status;
                 const code = err?.response?.data?.code;
@@ -1178,6 +1185,7 @@ export default function HomeScreen({ navigation }) {
             } finally {
                 setLoading(false);
                 setRefreshing(false);
+                dashboardFetchInFlightRef.current = false;
             }
         },
         [dashboardCacheKey, hydrateDashboard, rangeType, rangeAnchor],
@@ -1201,30 +1209,32 @@ export default function HomeScreen({ navigation }) {
     );
 
     useEffect(() => {
-        const refreshDashboard = () => {
-            fetchData({ force: true, showLoading: false });
-        };
-        const announcementSub = DeviceEventEmitter.addListener(
-            "COUPON_ANNOUNCEMENT",
+        const refreshDashboard = () =>
+            debounceByKey(
+                "home-refresh",
+                () => fetchData({ force: true, showLoading: false }),
+                300,
+            );
+
+        const unsubAnnouncement = onAppEvent(
+            APP_EVENTS.COUPON_ANNOUNCEMENT,
             refreshDashboard,
         );
-        const syncSub = DeviceEventEmitter.addListener(
-            "COUPON_SYNC",
+        const unsubSync = onAppEvent(APP_EVENTS.COUPON_SYNC, refreshDashboard);
+        const unsubFollowup = onAppEvent(
+            APP_EVENTS.FOLLOWUP_CHANGED,
             refreshDashboard,
         );
-        const followupSub = DeviceEventEmitter.addListener(
-            "FOLLOWUP_CHANGED",
-            refreshDashboard,
-        );
-        const enquiryUpdatedSub = DeviceEventEmitter.addListener(
-            "ENQUIRY_UPDATED",
+        const unsubEnquiry = onAppEvent(
+            APP_EVENTS.ENQUIRY_UPDATED,
             refreshDashboard,
         );
         return () => {
-            announcementSub.remove();
-            syncSub.remove();
-            followupSub.remove();
-            enquiryUpdatedSub.remove();
+            cancelDebounceKey("home-refresh");
+            unsubAnnouncement();
+            unsubSync();
+            unsubFollowup();
+            unsubEnquiry();
         };
     }, [fetchData]);
 

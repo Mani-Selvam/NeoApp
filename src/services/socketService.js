@@ -7,6 +7,8 @@ import {
     showTeamChatNotification,
 } from "./notificationService";
 import { getAuthToken } from "./secureTokenStorage";
+import { invalidateCacheTags } from "./appCache";
+import { APP_EVENTS, emitAppEvent } from "./appEvents";
 
 let socket = null;
 let currentSocketUserId = "";
@@ -48,6 +50,7 @@ export const initSocket = async () => {
 
     socket.on("CALL_LOG_CREATED", (log) => {
         console.log("New call log via socket:", log);
+        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(() => {});
 
         if (Platform.OS === "android" && log?.callType) {
             const message = log.contactName
@@ -56,12 +59,13 @@ export const initSocket = async () => {
             ToastAndroid.show(message, ToastAndroid.LONG);
         }
 
-        DeviceEventEmitter.emit("CALL_LOG_CREATED", log);
+        emitAppEvent(APP_EVENTS.CALL_LOG_CREATED, log);
     });
 
     socket.on("CALL_LOG_REFRESH", (payload) => {
         console.log("Call log refresh via socket:", payload);
-        DeviceEventEmitter.emit("CALL_LOG_CREATED", payload);
+        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(() => {});
+        emitAppEvent(APP_EVENTS.CALL_LOG_CREATED, payload);
     });
 
     socket.on("CALL_SESSION_UPDATED", (session) => {
@@ -90,22 +94,31 @@ export const initSocket = async () => {
 
     socket.on("ENQUIRY_CREATED", (payload) => {
         console.log("Enquiry created via socket:", payload);
-        DeviceEventEmitter.emit("ENQUIRY_CREATED", payload);
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        emitAppEvent(APP_EVENTS.ENQUIRY_CREATED, payload);
     });
 
     socket.on("ENQUIRY_UPDATED", (payload) => {
         console.log("Enquiry updated via socket:", payload);
-        DeviceEventEmitter.emit("ENQUIRY_UPDATED", payload);
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        emitAppEvent(APP_EVENTS.ENQUIRY_UPDATED, payload);
     });
 
     socket.on("FOLLOWUP_CHANGED", (payload) => {
         console.log("Follow-up changed via socket:", payload);
-        DeviceEventEmitter.emit("FOLLOWUP_CHANGED", payload);
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "followups", "enquiries", "reports"]),
+        ).catch(() => {});
+        emitAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, payload);
     });
 
     socket.on("COUPON_ANNOUNCEMENT", (payload) => {
         console.log("Coupon announcement via socket:", payload);
-        DeviceEventEmitter.emit("COUPON_ANNOUNCEMENT", payload);
+        emitAppEvent(APP_EVENTS.COUPON_ANNOUNCEMENT, payload);
 
         Promise.resolve(showCouponOfferNotification(payload)).catch(() => {});
 
@@ -120,7 +133,7 @@ export const initSocket = async () => {
 
     socket.on("COUPON_SYNC", (payload) => {
         console.log("Coupon sync via socket:", payload);
-        DeviceEventEmitter.emit("COUPON_SYNC", payload);
+        emitAppEvent(APP_EVENTS.COUPON_SYNC, payload);
     });
 
     socket.on("COMMUNICATION_MESSAGE_CREATED", async (payload) => {

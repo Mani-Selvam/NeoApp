@@ -1,5 +1,12 @@
 import getApiClient from "./apiClient";
-import { buildCacheKey, getCacheEntry, isFresh, setCacheEntry } from "./appCache";
+import {
+    buildCacheKey,
+    getCacheEntry,
+    invalidateCacheTags,
+    isFresh,
+    setCacheEntry,
+} from "./appCache";
+import { emitCallLogCreated } from "./appEvents";
 
 const DEFAULT_TTL_MS = 60_000;
 
@@ -29,7 +36,7 @@ export const getCallLogs = async (params = {}, options = {}) => {
                 .then(async () => {
                     const client = await getApiClient();
                     const response = await client.get(`/calllogs?${query}`);
-                    await setCacheEntry(cacheKey, response.data).catch(() => {});
+                    await setCacheEntry(cacheKey, response.data, { tags: ["calllogs"] }).catch(() => {});
                 })
                 .catch(() => {});
             return cached.value;
@@ -38,13 +45,15 @@ export const getCallLogs = async (params = {}, options = {}) => {
 
     const client = await getApiClient();
     const response = await client.get(`/calllogs?${query}`);
-    await setCacheEntry(cacheKey, response.data).catch(() => {});
+    await setCacheEntry(cacheKey, response.data, { tags: ["calllogs"] }).catch(() => {});
     return response.data;
 };
 
 export const createCallLog = async (callData) => {
     const client = await getApiClient();
     const response = await client.post(`/calllogs`, callData);
+    Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(() => {});
+    emitCallLogCreated(response.data);
     return response.data;
 };
 

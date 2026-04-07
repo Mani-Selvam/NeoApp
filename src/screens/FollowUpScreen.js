@@ -52,6 +52,8 @@ import {
     isFresh,
     setCacheEntry,
 } from "../services/appCache";
+import { APP_EVENTS, emitEnquiryUpdated, onAppEvent } from "../services/appEvents";
+import { cancelDebounceKey, debounceByKey } from "../services/debounce";
 import * as callLogService from "../services/callLogService";
 import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
@@ -4491,7 +4493,6 @@ export default function FollowUpScreen({ navigation, route }) {
                     )
                         .then((saved) => {
                             if (!saved?._id) return;
-                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
                             lastFetch.current = 0;
                             fetchFollowUps(activeTab, true, {
                                 force: true,
@@ -4572,7 +4573,6 @@ export default function FollowUpScreen({ navigation, route }) {
                         deviceCallId,
                     });
                     if (saved?._id) {
-                        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
                         lastFetch.current = 0;
                         fetchFollowUps(activeTab, true, {
                             force: true,
@@ -4591,46 +4591,56 @@ export default function FollowUpScreen({ navigation, route }) {
     }, [callStarted, callStartTime, callEnquiry]);
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-            lastFetch.current = 0;
-            fetchFollowUps(activeTab, true, {
-                force: true,
-                showIndicator: false,
-                allowCache: true,
-            });
-        });
-        return () => sub.remove();
-    }, [activeTab]);
+        let pendingArgs = {
+            clear: false,
+            refreshCounts: false,
+            refreshModals: false,
+        };
 
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("FOLLOWUP_CHANGED", () => {
+        const flush = () => {
+            const { clear, refreshCounts, refreshModals } = pendingArgs || {};
+            if (clear) setFollowUps([]);
             lastFetch.current = 0;
             fetchFollowUps(activeTab, true, {
                 force: true,
                 showIndicator: false,
                 allowCache: true,
             });
-            if (showMissedModal) loadMissedModalItems(selectedDate);
-            if (showDroppedModal) loadDroppedModalItems();
-        });
-        return () => sub.remove();
+            if (refreshCounts) fetchTabCounts(selectedDate).catch(() => {});
+            if (refreshModals) {
+                if (showMissedModal) loadMissedModalItems(selectedDate);
+                if (showDroppedModal) loadDroppedModalItems();
+            }
+        };
+
+        const refresh = (args = {}) => {
+            pendingArgs = {
+                clear: pendingArgs.clear || Boolean(args.clear),
+                refreshCounts:
+                    pendingArgs.refreshCounts || Boolean(args.refreshCounts),
+                refreshModals:
+                    pendingArgs.refreshModals || Boolean(args.refreshModals),
+            };
+            debounceByKey("followup-refresh", flush, 300);
+        };
+
+        const unsubCall = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, () =>
+            refresh({ clear: false, refreshCounts: false, refreshModals: false }),
+        );
+        const unsubFollowup = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, () =>
+            refresh({ clear: false, refreshCounts: false, refreshModals: true }),
+        );
+        const unsubEnquiry = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, () =>
+            refresh({ clear: true, refreshCounts: true, refreshModals: false }),
+        );
+
+        return () => {
+            cancelDebounceKey("followup-refresh");
+            unsubCall();
+            unsubFollowup();
+            unsubEnquiry();
+        };
     }, [activeTab, selectedDate, showMissedModal, showDroppedModal]);
-
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("ENQUIRY_UPDATED", () => {
-            // FIX #15: Clear list when enquiry is updated to properly handle
-            // status changes across tabs (prevents stale items from old sections)
-            setFollowUps([]);
-            lastFetch.current = 0;
-            fetchFollowUps(activeTab, true, {
-                force: true,
-                showIndicator: false,
-                allowCache: true,
-            });
-            fetchTabCounts(selectedDate).catch(() => {});
-        });
-        return () => sub.remove();
-    }, [activeTab, selectedDate]);
 
     useEffect(() => {
         const unsub = navigation.addListener("blur", () => {
@@ -4861,11 +4871,15 @@ export default function FollowUpScreen({ navigation, route }) {
                           : [];
 
                     // Cache silently
-                    await setCacheEntry(cacheKey, {
+                    await setCacheEntry(
+                        cacheKey,
+                        {
                         items: data.map(mapFollowUpItemToEnquiryCard),
                         hasMore: !Array.isArray(res),
                         page: 1,
-                    }).catch(() => {});
+                        },
+                        { tags: ["followups"] },
+                    ).catch(() => {});
 
                     console.log(
                         `[FollowUpScreen] Prefetched ${tabName}: ${data.length} items`,
@@ -4984,11 +4998,15 @@ export default function FollowUpScreen({ navigation, route }) {
                 if (refresh) fetchTabCounts(selectedDate);
                 lastFetch.current = Date.now();
                 setPage(nextPage);
-                await setCacheEntry(cacheKey, {
+                await setCacheEntry(
+                    cacheKey,
+                    {
                     items: nextItems,
                     hasMore: nextHasMore,
                     page: nextPage,
-                }).catch(() => {});
+                    },
+                    { tags: ["followups"] },
+                ).catch(() => {});
                 return;
             }
             const requestParams = tab === "All" ? monthRange : {};
@@ -5071,11 +5089,15 @@ export default function FollowUpScreen({ navigation, route }) {
             if (refresh) fetchTabCounts(filterDate || selectedDate);
             lastFetch.current = Date.now();
             setPage(nextPage);
-            await setCacheEntry(cacheKey, {
+            await setCacheEntry(
+                cacheKey,
+                {
                 items: nextItems,
                 hasMore: nextHasMore,
                 page: nextPage,
-            }).catch(() => {});
+                },
+                { tags: ["followups"] },
+            ).catch(() => {});
         } catch (e) {
             // FIX #5: Handle AbortError silently (expected when request cancelled)
             if (e?.name === "AbortError") {
@@ -5370,7 +5392,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 }),
             ).catch(() => {});
             // FIX #15b: Emit event so listeners refresh the list
-            DeviceEventEmitter.emit("ENQUIRY_UPDATED");
+            emitEnquiryUpdated();
 
             const focusDate = effDate || toIso(new Date());
             const today = toIso(new Date());
