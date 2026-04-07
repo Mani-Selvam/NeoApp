@@ -12,6 +12,56 @@ import { APP_EVENTS, emitAppEvent } from "./appEvents";
 
 let socket = null;
 let currentSocketUserId = "";
+let listenersAttached = false;
+let lastSocketAuthToken = "";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const ensureSocketListeners = () => {
+    if (!socket || listenersAttached) return;
+    listenersAttached = true;
+
+    socket.on("connect", () => {
+        console.log("Socket connected");
+        if (currentSocketUserId) {
+            try {
+                socket.emit("join_user_room", currentSocketUserId);
+            } catch (_error) {
+                // ignore
+            }
+        }
+    });
+
+    socket.on("connect_error", (error) => {
+        const msg = String(error?.message || "");
+        const desc = String(error?.description || "");
+        const ctx = error?.context;
+        const ctxStatus = ctx?.statusCode ?? ctx?.status ?? "";
+        const ctxUrl = ctx?.url || "";
+
+        console.warn(
+            "Socket connect error:",
+            msg || error,
+            desc ? `| ${desc}` : "",
+            ctxStatus ? `| status=${ctxStatus}` : "",
+            ctxUrl ? `| url=${ctxUrl}` : "",
+            `| base=${SOCKET_URL}`,
+        );
+
+        if (
+            /authentication|required|token|jwt|unauthorized|invalid/i.test(msg)
+        ) {
+            try {
+                socket.disconnect();
+            } catch (_err) {
+                // ignore
+            }
+            socket = null;
+            listenersAttached = false;
+            lastSocketAuthToken = "";
+        }
+    });
+};
 
 const loadCurrentSocketUserId = async () => {
     try {
@@ -32,25 +82,56 @@ const getCurrentSocketUserId = async () => {
 };
 
 export const initSocket = async () => {
-    if (socket) return socket;
     const token = await getAuthToken();
     if (!token) return null;
     await loadCurrentSocketUserId();
 
+    if (socket) {
+        if (lastSocketAuthToken !== token) {
+            socket.auth = { token };
+            lastSocketAuthToken = token;
+        }
+        ensureSocketListeners();
+        if (!socket.connected) {
+            try {
+                socket.connect();
+            } catch (_error) {
+                // ignore
+            }
+        }
+        if (currentSocketUserId) {
+            try {
+                socket.emit("join_user_room", currentSocketUserId);
+            } catch (_error) {
+                // ignore
+            }
+        }
+        return socket;
+    }
+
     console.log("Initializing socket connection to:", SOCKET_URL);
 
+    lastSocketAuthToken = token;
     socket = io(SOCKET_URL, {
-        transports: ["websocket"],
+        // IMPORTANT: Keep default transport order (polling -> websocket upgrade).
+        // Forcing websocket first often fails on some networks/dev setups and
+        // prevents fallback to polling, causing "websocket error" loops.
+        transports: ["polling", "websocket"],
         auth: { token },
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 500,
+        reconnectionDelayMax: 5000,
+        timeout: 10000,
     });
 
-    socket.on("connect", () => {
-        console.log("Socket connected");
-    });
+    ensureSocketListeners();
 
     socket.on("CALL_LOG_CREATED", (log) => {
         console.log("New call log via socket:", log);
-        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(() => {});
+        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(
+            () => {},
+        );
 
         if (Platform.OS === "android" && log?.callType) {
             const message = log.contactName
@@ -64,7 +145,9 @@ export const initSocket = async () => {
 
     socket.on("CALL_LOG_REFRESH", (payload) => {
         console.log("Call log refresh via socket:", payload);
-        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(() => {});
+        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(
+            () => {},
+        );
         emitAppEvent(APP_EVENTS.CALL_LOG_CREATED, payload);
     });
 
@@ -95,7 +178,12 @@ export const initSocket = async () => {
     socket.on("ENQUIRY_CREATED", (payload) => {
         console.log("Enquiry created via socket:", payload);
         Promise.resolve(
-            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+            invalidateCacheTags([
+                "dashboard",
+                "enquiries",
+                "followups",
+                "reports",
+            ]),
         ).catch(() => {});
         emitAppEvent(APP_EVENTS.ENQUIRY_CREATED, payload);
     });
@@ -103,7 +191,12 @@ export const initSocket = async () => {
     socket.on("ENQUIRY_UPDATED", (payload) => {
         console.log("Enquiry updated via socket:", payload);
         Promise.resolve(
-            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+            invalidateCacheTags([
+                "dashboard",
+                "enquiries",
+                "followups",
+                "reports",
+            ]),
         ).catch(() => {});
         emitAppEvent(APP_EVENTS.ENQUIRY_UPDATED, payload);
     });
@@ -111,7 +204,12 @@ export const initSocket = async () => {
     socket.on("FOLLOWUP_CHANGED", (payload) => {
         console.log("Follow-up changed via socket:", payload);
         Promise.resolve(
-            invalidateCacheTags(["dashboard", "followups", "enquiries", "reports"]),
+            invalidateCacheTags([
+                "dashboard",
+                "followups",
+                "enquiries",
+                "reports",
+            ]),
         ).catch(() => {});
         emitAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, payload);
     });
@@ -147,7 +245,9 @@ export const initSocket = async () => {
             payload?.senderId?._id || payload?.senderId || "",
         );
         const isIncoming = Boolean(
-            activeUserId && receiverId === activeUserId && senderId !== activeUserId,
+            activeUserId &&
+            receiverId === activeUserId &&
+            senderId !== activeUserId,
         );
 
         if (!isIncoming) {
@@ -157,14 +257,28 @@ export const initSocket = async () => {
         Promise.resolve(showTeamChatNotification(payload)).catch(() => {});
 
         if (Platform.OS === "android") {
-            const senderName = String(payload?.senderId?.name || "Team member").trim();
-            const preview = String(payload?.message || "").trim() || "Sent a new message";
+            const senderName = String(
+                payload?.senderId?.name || "Team member",
+            ).trim();
+            const preview =
+                String(payload?.message || "").trim() || "Sent a new message";
             ToastAndroid.show(`${senderName}: ${preview}`, ToastAndroid.LONG);
         }
     });
 
-    socket.on("disconnect", () => {
-        console.log("Socket disconnected");
+    socket.on("COMMUNICATION_TASK_UPDATED", (payload) => {
+        DeviceEventEmitter.emit("COMMUNICATION_TASK_UPDATED", payload);
+    });
+
+    socket.on("disconnect", (reason) => {
+        console.log("Socket disconnected", reason);
+        if (reason === "io server disconnect") {
+            try {
+                socket.connect();
+            } catch (_error) {
+                // ignore
+            }
+        }
     });
 
     return socket;
@@ -172,9 +286,43 @@ export const initSocket = async () => {
 
 export const getSocket = () => socket;
 
+// Best-effort helper to avoid "socket not ready yet" races after login/app resume.
+export const ensureSocketReady = async ({
+    timeoutMs = 60000,
+    initialDelayMs = 250,
+    maxDelayMs = 5000,
+} = {}) => {
+    const start = Date.now();
+    let delay = Math.max(50, Number(initialDelayMs) || 250);
+    const maxDelay = Math.max(delay, Number(maxDelayMs) || 5000);
+
+    // Try immediately first
+    try {
+        const s = await initSocket();
+        if (s) return s;
+    } catch (_error) {
+        // ignore
+    }
+
+    while (Date.now() - start < timeoutMs) {
+        await sleep(delay);
+        try {
+            const s = await initSocket();
+            if (s) return s;
+        } catch (_error) {
+            // ignore
+        }
+        delay = Math.min(maxDelay, Math.floor(delay * 1.6));
+    }
+
+    return getSocket();
+};
+
 export const disconnectSocket = () => {
     if (socket) {
         socket.disconnect();
         socket = null;
+        listenersAttached = false;
+        lastSocketAuthToken = "";
     }
 };

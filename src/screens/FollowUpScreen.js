@@ -4667,6 +4667,60 @@ export default function FollowUpScreen({ navigation, route }) {
     const fetchTabCounts = async (referenceDate = selectedDate) => {
         try {
             const monthRange = getMonthDateRange(referenceDate);
+            const todayIso = toIso(new Date());
+
+            const getMissedCountWithRealtime = async () => {
+                // For "today", some items can be considered missed by UI time logic
+                // before the server marks them as Missed. Count the union so the
+                // badge matches the Missed Activity list.
+                const [missedRes, todayRes] = await Promise.all([
+                    followupService.getFollowUps(
+                        "Missed",
+                        1,
+                        50,
+                        referenceDate,
+                    ),
+                    referenceDate === todayIso
+                        ? followupService.getFollowUps(
+                              "Today",
+                              1,
+                              50,
+                              referenceDate,
+                          )
+                        : Promise.resolve(null),
+                ]);
+
+                const missedRaw = Array.isArray(missedRes?.data)
+                    ? missedRes.data
+                    : Array.isArray(missedRes)
+                      ? missedRes
+                      : [];
+
+                if (referenceDate !== todayIso) return missedRaw.length;
+
+                const todayRaw = Array.isArray(todayRes?.data)
+                    ? todayRes.data
+                    : Array.isArray(todayRes)
+                      ? todayRes
+                      : [];
+
+                const ids = new Set(
+                    missedRaw
+                        .map((i) => String(i?._id || i?.id || ""))
+                        .filter(Boolean),
+                );
+
+                for (const item of todayRaw) {
+                    if (getFollowUpCalendarDate(item) !== referenceDate)
+                        continue;
+                    if (getCalendarSummaryBucket(item) !== "missed") continue;
+                    const id = String(item?._id || item?.id || "");
+                    if (id) ids.add(id);
+                }
+
+                return ids.size;
+            };
+
             const [
                 allCount,
                 todayCount,
@@ -4683,7 +4737,7 @@ export default function FollowUpScreen({ navigation, route }) {
                     useEnquirySource: true,
                     allowedStatuses: ["New", "Contacted", "Interested"],
                 }),
-                getTabUniqueCount("Missed", referenceDate),
+                getMissedCountWithRealtime(),
                 getTabUniqueCount("Sales", referenceDate, {
                     useEnquirySource: true,
                     allowedStatuses: ["Converted"],

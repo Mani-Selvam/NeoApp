@@ -278,29 +278,29 @@ app.get("/", (req, res) => {
     res.send("CRM API with Socket.io is running...");
 });
 
-app.get("/api/health", (req,res)=>{
-  res.json({status:"ok"})
-})
-
+app.get("/api/health", (req, res) => {
+    res.json({ status: "ok" });
+});
 
 const startServer = async () => {
     const PORT = process.env.API_PORT || 5000;
+
     try {
         await connectDB();
 
-        // âš¡ Pre-warm MongoDB connection â€” first query on Atlas M0 is always slow
-        // This "heats up" the connection so actual API requests are faster
         const mongoose = require("mongoose");
         const warmStart = Date.now();
         await mongoose.connection.db.admin().ping();
-        console.log(`âš¡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
+        console.log(`⚡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
     } catch (e) {
         console.error("DB Connection failed:", e.message);
     }
 
-    server.listen(PORT, "0.0.0.0", () => {
-        console.log(`ðŸš€ Server + Real-time engine started on port ${PORT}`);
-    });
+    if (!server.listening) {
+        server.listen(PORT, () => {
+            console.log(`Server + Real-time engine started on port ${PORT}`);
+        });
+    }
 };
 
 startServer();

@@ -34,9 +34,15 @@ export const getCommunicationThreads = async () => {
   return response.data;
 };
 
-export const getConversationMessages = async (memberId) => {
+export const getConversationMessages = async (memberId, options = {}) => {
   const client = await getApiClient();
-  const response = await client.get(`/communication/messages/${memberId}`);
+  const params = {};
+  if (options?.limit != null) params.limit = options.limit;
+  if (options?.before) params.before = options.before;
+  if (options?.beforeId) params.beforeId = options.beforeId;
+  const response = await client.get(`/communication/messages/${memberId}`, {
+    params,
+  });
   return response.data;
 };
 

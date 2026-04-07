@@ -265,6 +265,17 @@ router.get(
       const teammate = await getTeamMember(req.companyId, req.params.memberId);
       if (!teammate) return res.status(404).json({ error: "Team member not found" });
 
+      const rawLimit = Number(req.query.limit);
+      const limit = Math.min(
+        300,
+        Math.max(10, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 50),
+      );
+
+      const beforeRaw = String(req.query.before || "").trim();
+      const beforeDate = beforeRaw ? new Date(beforeRaw) : null;
+      const hasValidBefore = Boolean(beforeDate && !Number.isNaN(beforeDate.getTime()));
+      const beforeId = toObjectId(req.query.beforeId);
+
       await CommunicationMessage.updateMany(
         {
           companyId: req.companyId,
@@ -275,21 +286,50 @@ router.get(
         { $addToSet: { readBy: req.userId } },
       );
 
-      const messages = await CommunicationMessage.find({
+      const baseQuery = {
         companyId: req.companyId,
         $or: [
           { senderId: req.userId, receiverId: req.params.memberId },
           { senderId: req.params.memberId, receiverId: req.userId },
         ],
-      })
+      };
+
+      const query = { ...baseQuery };
+      if (hasValidBefore) {
+        const cursorClause = beforeId
+          ? {
+              $or: [
+                { createdAt: { $lt: beforeDate } },
+                { createdAt: beforeDate, _id: { $lt: beforeId } },
+              ],
+            }
+          : { createdAt: { $lt: beforeDate } };
+        query.$and = [cursorClause];
+      }
+
+      const rows = await CommunicationMessage.find(query)
         .populate("senderId", "name role")
         .populate("receiverId", "name role")
         .populate("taskId", "title status dueDate priority")
-        .sort({ createdAt: 1 })
-        .limit(300)
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(limit + 1)
         .lean();
 
-      res.json({ teammate, messages });
+      const hasMore = rows.length > limit;
+      const pageRows = hasMore ? rows.slice(0, limit) : rows;
+      const messages = pageRows.reverse(); // client expects ascending
+      const oldest = messages[0] || null;
+
+      res.json({
+        teammate,
+        messages,
+        page: {
+          limit,
+          hasMore,
+          before: oldest?.createdAt || null,
+          beforeId: oldest?._id || null,
+        },
+      });
     } catch (error) {
       res.status(500).json({ error: error.message });
     }

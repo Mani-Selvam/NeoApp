@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+    SafeAreaProvider,
+    initialWindowMetrics,
+} from "react-native-safe-area-context";
 import { AuthProvider } from "./src/contexts/AuthContext";
 import "./src/firebaseConfig"; // Initialize Firebase first
 import AppNavigator from "./src/navigation/AppNavigator";
@@ -18,7 +21,9 @@ export default function App() {
 
     return (
         <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
-            <SafeAreaProvider style={{ backgroundColor: "#FFFFFF" }}>
+            <SafeAreaProvider
+                initialMetrics={initialWindowMetrics}
+                style={{ backgroundColor: "#FFFFFF" }}>
                 <AuthProvider>
                     <StatusBar
                         barStyle="dark-content"

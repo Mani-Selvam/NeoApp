@@ -1317,11 +1317,13 @@ export default function HomeScreen({ navigation }) {
         } catch {}
     };
 
-    const todayActivityCount = Number(
-        stats.todayFollowup || todayTasks.length || 0,
+    const todayActivityCount = Math.max(
+        Number(stats.todayFollowup || 0),
+        Number(todayTasks.length || 0),
     );
-    const missedActivityCount = Number(
-        stats.missedFollowup || missedTasks.length || 0,
+    const missedActivityCount = Math.max(
+        Number(stats.missedFollowup || 0),
+        Number(missedTasks.length || 0),
     );
 
     const weekSeries = Array.isArray(stats.weekSales) ? stats.weekSales : [];

@@ -45,7 +45,7 @@ import {
     updateCommunicationTask,
     updateCommunicationTaskStatus,
 } from "../services/communicationService";
-import { getSocket } from "../services/socketService";
+import { ensureSocketReady, getSocket } from "../services/socketService";
 import {
     confirmPermissionRequest,
     getUserFacingError,
@@ -400,6 +400,10 @@ export default function CommunicationScreen({ navigation }) {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [messageLoading, setMessageLoading] = useState(false);
+    const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+    const [hasOlderMessages, setHasOlderMessages] = useState(false);
+    const [olderCursorBefore, setOlderCursorBefore] = useState("");
+    const [olderCursorBeforeId, setOlderCursorBeforeId] = useState("");
     const [messageText, setMessageText] = useState("");
     const [messageAttachment, setMessageAttachment] = useState(null);
     const [sendingMessage, setSendingMessage] = useState(false);
@@ -432,6 +436,13 @@ export default function CommunicationScreen({ navigation }) {
     const soundRef = useRef(null);
     const swipeStartXRef = useRef(0);
     const swipeStartYRef = useRef(0);
+    const messageSyncTimerRef = useRef(null);
+    const loadingOlderRef = useRef(false);
+    const lastOlderLoadAtRef = useRef(0);
+    const isAtBottomRef = useRef(true);
+    const shouldAutoScrollRef = useRef(true);
+
+    const MESSAGE_PAGE_SIZE = 50;
 
     useEffect(() => {
         if (view !== "taskDetail") return;
@@ -646,12 +657,21 @@ export default function CommunicationScreen({ navigation }) {
     const loadMessages = useCallback(async (memberId) => {
         if (!memberId) {
             setMessages([]);
+            setHasOlderMessages(false);
+            setOlderCursorBefore("");
+            setOlderCursorBeforeId("");
             return;
         }
         setMessageLoading(true);
         try {
-            const r = await getConversationMessages(memberId);
+            const r = await getConversationMessages(memberId, {
+                limit: MESSAGE_PAGE_SIZE,
+            });
             setMessages(uniqueMessages(r?.messages));
+            setHasOlderMessages(Boolean(r?.page?.hasMore));
+            setOlderCursorBefore(String(r?.page?.before || ""));
+            setOlderCursorBeforeId(String(r?.page?.beforeId || ""));
+            shouldAutoScrollRef.current = true;
         } catch (e) {
             Alert.alert(
                 "Error",
@@ -661,6 +681,63 @@ export default function CommunicationScreen({ navigation }) {
             setMessageLoading(false);
         }
     }, []);
+
+    const loadOlder = useCallback(async () => {
+        const memberId = String(selectedMemberId || "");
+        if (!memberId) return;
+        if (!hasOlderMessages) return;
+        if (!olderCursorBefore) return;
+        if (loadingOlderRef.current) return;
+
+        const now = Date.now();
+        if (now - lastOlderLoadAtRef.current < 800) return;
+        lastOlderLoadAtRef.current = now;
+
+        loadingOlderRef.current = true;
+        setLoadingOlderMessages(true);
+        shouldAutoScrollRef.current = false;
+        try {
+            const r = await getConversationMessages(memberId, {
+                limit: MESSAGE_PAGE_SIZE,
+                before: olderCursorBefore,
+                beforeId: olderCursorBeforeId || undefined,
+            });
+            const older = uniqueMessages(r?.messages);
+            if (older.length) {
+                setMessages((prev) => uniqueMessages([...older, ...prev]));
+            }
+            setHasOlderMessages(Boolean(r?.page?.hasMore));
+            setOlderCursorBefore(String(r?.page?.before || ""));
+            setOlderCursorBeforeId(String(r?.page?.beforeId || ""));
+        } catch (_e) {
+            // ignore (user can retry by scrolling again)
+        } finally {
+            loadingOlderRef.current = false;
+            setLoadingOlderMessages(false);
+        }
+    }, [
+        MESSAGE_PAGE_SIZE,
+        hasOlderMessages,
+        olderCursorBefore,
+        olderCursorBeforeId,
+        selectedMemberId,
+    ]);
+
+    const syncLatestMessages = useCallback(
+        async (memberId) => {
+            if (!memberId) return;
+            try {
+                const r = await getConversationMessages(memberId, {
+                    limit: MESSAGE_PAGE_SIZE,
+                });
+                const latest = uniqueMessages(r?.messages);
+                setMessages((prev) => uniqueMessages([...prev, ...latest]));
+            } catch {
+                // ignore
+            }
+        },
+        [MESSAGE_PAGE_SIZE],
+    );
 
     const loadOverview = useCallback(async () => {
         try {
@@ -683,14 +760,84 @@ export default function CommunicationScreen({ navigation }) {
         }
     }, [loadTasks]);
 
+    const handleMessageScroll = useCallback(
+        (e) => {
+            const n = e?.nativeEvent || {};
+            const y = Number(n?.contentOffset?.y || 0);
+            const h = Number(n?.layoutMeasurement?.height || 0);
+            const ch = Number(n?.contentSize?.height || 0);
+
+            const distanceFromBottom = ch - (y + h);
+            const atBottom = distanceFromBottom < 120;
+            isAtBottomRef.current = atBottom;
+            if (atBottom) {
+                shouldAutoScrollRef.current = true;
+            } else if (distanceFromBottom > 240) {
+                shouldAutoScrollRef.current = false;
+            }
+
+            if (y < 60) {
+                Promise.resolve(loadOlder()).catch(() => {});
+            }
+        },
+        [loadOlder],
+    );
+
     useEffect(() => {
         loadOverview();
     }, [loadOverview]);
 
+    const allTasks = useMemo(
+        () => [...(pendingTasks || []), ...(completedTasks || [])],
+        [pendingTasks, completedTasks],
+    );
+
+    const taskStatusCountsFor = useCallback((tasks = []) => {
+        const counts = { pending: 0, inProgress: 0, completed: 0 };
+        for (const t of Array.isArray(tasks) ? tasks : []) {
+            const s = String(t?.status || "").trim();
+            if (s === "Completed") counts.completed += 1;
+            else if (s === "In Progress") counts.inProgress += 1;
+            else if (s === "Cancelled") {
+                // skip (not shown in header counts)
+            } else counts.pending += 1;
+        }
+        return counts;
+    }, []);
+
+    // Header counts: only tasks assigned to the current user.
+    // (Admin-created tasks assigned to staff should NOT increase admin header counts.)
+    const assignedToMeTasks = useMemo(() => {
+        return allTasks.filter((t) => {
+            const assignedId = resolveUserId(t?.assignedTo);
+            return assignedId && assignedId === selfId;
+        });
+    }, [allTasks, selfId]);
+
+    const selfTaskCounts = useMemo(
+        () => taskStatusCountsFor(assignedToMeTasks),
+        [assignedToMeTasks, taskStatusCountsFor],
+    );
+
+    const openTaskDashboard = useCallback(() => {
+        navigation.navigate("TaskDashboard");
+    }, [navigation]);
+
     // ── Socket ─────────────────────────────────────────────────────────────────
     useEffect(() => {
-        const socket = getSocket();
-        if (!socket) return undefined;
+        let disposed = false;
+        let sock = null;
+
+        // Ensure socket is initialized so real-time events flow without manual refresh.
+        Promise.resolve()
+            .then(async () => {
+                sock = getSocket();
+                if (!sock) sock = await ensureSocketReady({ timeoutMs: 15000 });
+                if (disposed || !sock) return;
+                sock.on("COMMUNICATION_TASK_UPDATED", loadTasks);
+            })
+            .catch(() => {});
+
         const handleMsg = (payload) => {
             const senderId = String(
                 payload?.senderId?._id || payload?.senderId || "",
@@ -698,22 +845,58 @@ export default function CommunicationScreen({ navigation }) {
             const receiverId = String(
                 payload?.receiverId?._id || payload?.receiverId || "",
             );
+            if (!senderId || !receiverId) return;
             const teammateId = senderId === selfId ? receiverId : senderId;
+
             upsertThreadFromMessage(
                 payload,
                 receiverId === selfId &&
                     String(selectedMemberId) !== String(teammateId),
             );
-            if (String(selectedMemberId) === String(teammateId))
+            if (String(selectedMemberId) === String(teammateId)) {
+                shouldAutoScrollRef.current =
+                    isAtBottomRef.current || senderId === selfId;
                 setMessages((prev) => uniqueMessages([...prev, payload]));
+
+                // Hard guarantee: ensure we sync latest messages from server too.
+                // This fixes cases where local append is missed due to state races.
+                try {
+                    if (messageSyncTimerRef.current) {
+                        clearTimeout(messageSyncTimerRef.current);
+                    }
+                    messageSyncTimerRef.current = setTimeout(() => {
+                        syncLatestMessages(String(selectedMemberId)).catch(
+                            () => {},
+                        );
+                    }, 250);
+                } catch {
+                    /* ignore */
+                }
+            }
         };
-        socket.on("COMMUNICATION_MESSAGE_CREATED", handleMsg);
-        socket.on("COMMUNICATION_TASK_UPDATED", loadTasks);
+
+        const msgSub = DeviceEventEmitter.addListener(
+            "COMMUNICATION_MESSAGE_CREATED",
+            handleMsg,
+        );
+        const taskSub = DeviceEventEmitter.addListener(
+            "COMMUNICATION_TASK_UPDATED",
+            () => loadTasks(),
+        );
+
         return () => {
-            socket.off("COMMUNICATION_MESSAGE_CREATED", handleMsg);
-            socket.off("COMMUNICATION_TASK_UPDATED", loadTasks);
+            disposed = true;
+            msgSub?.remove?.();
+            taskSub?.remove?.();
+            if (sock) {
+                sock.off("COMMUNICATION_TASK_UPDATED", loadTasks);
+            }
+            if (messageSyncTimerRef.current) {
+                clearTimeout(messageSyncTimerRef.current);
+                messageSyncTimerRef.current = null;
+            }
         };
-    }, [loadTasks, selectedMemberId, selfId, upsertThreadFromMessage]);
+    }, [loadTasks, selectedMemberId, selfId, syncLatestMessages, upsertThreadFromMessage]);
 
     useEffect(
         () => () => {
@@ -732,6 +915,8 @@ export default function CommunicationScreen({ navigation }) {
     // Auto-scroll on new messages — single timeout, no retry chain
     useEffect(() => {
         if (!messages.length) return;
+        if (!shouldAutoScrollRef.current) return;
+        if (loadingOlderRef.current) return;
         const t = setTimeout(() => scrollToEnd(true), 80);
         return () => clearTimeout(t);
     }, [messages, scrollToEnd]);
@@ -847,6 +1032,9 @@ export default function CommunicationScreen({ navigation }) {
         async (memberId) => {
             await unloadCurrentSound();
             setAudioDraft(null);
+            setHasOlderMessages(false);
+            setOlderCursorBefore("");
+            setOlderCursorBeforeId("");
             setSelectedMemberId(String(memberId));
             setView("chat");
             await loadMessages(String(memberId));
@@ -1523,6 +1711,9 @@ export default function CommunicationScreen({ navigation }) {
                             }
                             setView("list");
                             setMessages([]);
+                            setHasOlderMessages(false);
+                            setOlderCursorBefore("");
+                            setOlderCursorBeforeId("");
                         }}
                         style={S.chatBackBtn}>
                         <Ionicons name="arrow-back" size={22} color={T.ink} />
@@ -1536,7 +1727,10 @@ export default function CommunicationScreen({ navigation }) {
                     <View style={S.chatHeaderActions}>
                         {isAdminUser && (
                             <TouchableOpacity
-                                style={S.chatHeaderIcon}
+                                style={[
+                                    S.chatHeaderIcon,
+                                    S.chatHeaderIconPrimary,
+                                ]}
                                 onPress={() =>
                                     openCreateTaskModal(
                                         String(selectedMember._id),
@@ -1605,9 +1799,34 @@ export default function CommunicationScreen({ navigation }) {
                                     },
                                 ]}
                                 keyboardShouldPersistTaps="handled"
-                                // Scroll to bottom whenever messages or layout change
-                                onContentSizeChange={() => scrollToEnd(false)}
-                                onLayout={() => scrollToEnd(false)}
+                                maintainVisibleContentPosition={{
+                                    minIndexForVisible: 1,
+                                }}
+                                scrollEventThrottle={16}
+                                onScroll={handleMessageScroll}
+                                ListHeaderComponent={
+                                    hasOlderMessages || loadingOlderMessages ? (
+                                        <View style={S.loadOlderWrap}>
+                                            {loadingOlderMessages ? (
+                                                <ActivityIndicator
+                                                    size="small"
+                                                    color={T.accent}
+                                                />
+                                            ) : (
+                                                <TouchableOpacity
+                                                    onPress={loadOlder}
+                                                    activeOpacity={0.9}>
+                                                    <Text
+                                                        style={
+                                                            S.loadOlderText
+                                                        }>
+                                                        Load older messages
+                                                    </Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                    ) : null
+                                }
                                 ListEmptyComponent={
                                     <View style={S.msgEmptyWrap}>
                                         <View style={S.msgEmptyBadge}>
@@ -1950,27 +2169,24 @@ export default function CommunicationScreen({ navigation }) {
         return (
             <Modal
                 visible={showTaskModal}
-                transparent
                 animationType="slide"
                 onRequestClose={() => {
                     if (taskSaving) return;
                     setShowTaskModal(false);
                     resetTaskComposer();
                 }}>
-                <View style={S.modalOverlay}>
+                <View style={S.taskModalOverlay}>
                     <KeyboardAvoidingView
-                        style={S.modalKav}
+                        style={S.taskModalKav}
                         behavior={Platform.OS === "ios" ? "padding" : undefined}
                         keyboardVerticalOffset={
                             Platform.OS === "ios" ? insets.top + 8 : 0
                         }>
                         <View
                             style={[
-                                S.modalSheet,
-                                isCompactHeight && S.modalSheetCompact,
+                                S.taskModalSheet,
                                 { paddingBottom: insets.bottom + 14 },
                             ]}>
-                            <View style={S.modalPull} />
                             <View style={S.modalHdr}>
                                 <View>
                                     <Text style={S.modalEye}>
@@ -2001,7 +2217,7 @@ export default function CommunicationScreen({ navigation }) {
                             <View style={S.modalDivider} />
                             <ScrollView
                                 contentContainerStyle={[
-                                    S.modalBody,
+                                    S.taskModalBody,
                                     isCompactHeight && S.modalBodyCompact,
                                     { paddingBottom: insets.bottom + 26 },
                                 ]}
@@ -2413,7 +2629,6 @@ export default function CommunicationScreen({ navigation }) {
                                                 {showTaskImage &&
                                                 attachmentSource ? (
                                                     <TouchableOpacity
-                                                        activeOpacity={0.92}
                                                         onPress={() => {
                                                             setPreviewImageUri(
                                                                 attachmentSource,
@@ -2629,7 +2844,7 @@ export default function CommunicationScreen({ navigation }) {
         return (
             <SafeAreaView
                 style={S.taskDetailFsScreen}
-                edges={["top", "bottom", "left", "right"]}>
+                edges={["bottom", "left", "right"]}>
                 <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
 
                 <View
@@ -2906,19 +3121,51 @@ export default function CommunicationScreen({ navigation }) {
                         <Text style={S.listHeaderUnread}>({totalUnread})</Text>
                     ) : null}
                 </Text>
-                {isAdminUser && (
-                    <View style={S.listHeaderRight}>
-                        <TouchableOpacity
-                            style={S.listHeaderIcon}
-                            onPress={() => openCreateTaskModal()}>
-                            <Ionicons
-                                name="create-outline"
-                                size={22}
-                                color={T.ink}
-                            />
-                        </TouchableOpacity>
+                <View style={S.listHeaderRight}>
+                    {/* Self task counts (staff + admin self) */}
+                    <View style={S.taskCountRow}>
+                        <View style={[S.taskCountPill, S.taskPillPending]}>
+                            <Text style={S.taskCountTxt}>
+                                P {selfTaskCounts.pending}
+                            </Text>
+                        </View>
+                        <View style={[S.taskCountPill, S.taskPillProgress]}>
+                            <Text style={S.taskCountTxt}>
+                                I {selfTaskCounts.inProgress}
+                            </Text>
+                        </View>
+                        <View style={[S.taskCountPill, S.taskPillDone]}>
+                            <Text style={S.taskCountTxt}>
+                                C {selfTaskCounts.completed}
+                            </Text>
+                        </View>
                     </View>
-                )}
+
+                    {isAdminUser && (
+                        <>
+                            <TouchableOpacity
+                                style={S.listHeaderIcon}
+                                onPress={openTaskDashboard}
+                                activeOpacity={0.85}>
+                                <Ionicons
+                                    name="stats-chart-outline"
+                                    size={21}
+                                    color={T.accentDark}
+                                />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[S.listHeaderIcon, S.listHeaderIconPrimary]}
+                                onPress={() => openCreateTaskModal()}
+                                activeOpacity={0.85}>
+                                <Ionicons
+                                    name="create-outline"
+                                    size={22}
+                                    color={T.accentDark}
+                                />
+                            </TouchableOpacity>
+                        </>
+                    )}
+                </View>
             </View>
 
             <View style={S.tabBar}>
@@ -3159,7 +3406,47 @@ const S = StyleSheet.create({
     },
     listHeaderUnread: { color: T.accent, fontSize: 16, fontWeight: "700" },
     listHeaderRight: { flexDirection: "row", alignItems: "center" },
-    listHeaderIcon: { padding: 8 },
+    listHeaderIcon: {
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        backgroundColor: T.bgSecondary,
+        borderWidth: 1,
+        borderColor: T.line,
+        alignItems: "center",
+        justifyContent: "center",
+        marginLeft: 8,
+    },
+    listHeaderIconPrimary: {
+        backgroundColor: T.accentSoft,
+        borderColor: T.accentBorder,
+    },
+
+    taskCountRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        marginRight: 4,
+    },
+    taskCountPill: {
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    taskCountTxt: { fontSize: 11, fontWeight: "800", color: T.ink },
+    taskPillPending: {
+        backgroundColor: T.accentSoft,
+        borderColor: T.accentBorder,
+    },
+    taskPillProgress: {
+        backgroundColor: T.warnSoft,
+        borderColor: T.warnBorder,
+    },
+    taskPillDone: {
+        backgroundColor: T.successSoft,
+        borderColor: T.successBorder,
+    },
 
     tabBar: {
         flexDirection: "row",
@@ -3303,7 +3590,21 @@ const S = StyleSheet.create({
     chatHeaderName: { fontSize: 16, fontWeight: "700", color: T.ink },
     chatHeaderRole: { fontSize: 12, color: T.mute, marginTop: 1 },
     chatHeaderActions: { flexDirection: "row" },
-    chatHeaderIcon: { padding: 8 },
+    chatHeaderIcon: {
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        backgroundColor: T.bgSecondary,
+        borderWidth: 1,
+        borderColor: T.line,
+        alignItems: "center",
+        justifyContent: "center",
+        marginLeft: 8,
+    },
+    chatHeaderIconPrimary: {
+        backgroundColor: T.accentSoft,
+        borderColor: T.accentBorder,
+    },
 
     // chatBody: the animated block that rises with the keyboard
     chatBody: { flex: 1 },
@@ -3315,6 +3616,19 @@ const S = StyleSheet.create({
         paddingTop: 60,
     },
     msgList: { paddingHorizontal: 10, paddingVertical: 10 },
+    loadOlderWrap: { alignItems: "center", paddingVertical: 8 },
+    loadOlderText: {
+        fontSize: 12,
+        fontWeight: "800",
+        color: T.accentDark,
+        backgroundColor: "rgba(0,168,132,0.08)",
+        borderWidth: 1,
+        borderColor: "rgba(0,168,132,0.18)",
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 14,
+        overflow: "hidden",
+    },
     msgEmptyWrap: { alignItems: "center", paddingTop: 40 },
     msgEmptyBadge: {
         backgroundColor: "rgba(0,168,132,0.1)",
@@ -3940,7 +4254,7 @@ const S = StyleSheet.create({
     },
 
     // Full-screen Task Detail
-    taskDetailFsScreen: { flex: 1, backgroundColor: T.bgSecondary, top: -40 },
+    taskDetailFsScreen: { flex: 1, backgroundColor: T.bgSecondary },
     taskDetailFsHeader: {
         flexDirection: "row",
         alignItems: "center",
@@ -4074,10 +4388,15 @@ const S = StyleSheet.create({
         backgroundColor: "rgba(11,20,28,0.38)",
         justifyContent: "flex-end",
     },
+    taskModalOverlay: {
+        flex: 1,
+        backgroundColor: T.bg,
+    },
     modalBackdrop: {
         ...StyleSheet.absoluteFillObject,
     },
     modalKav: { flex: 1, justifyContent: "flex-end" },
+    taskModalKav: { flex: 1 },
     modalSheet: {
         backgroundColor: T.bg,
         borderTopLeftRadius: 22,
@@ -4087,6 +4406,13 @@ const S = StyleSheet.create({
         minHeight: 420,
     },
     modalSheetCompact: { maxHeight: "94%" },
+    taskModalSheet: {
+        flex: 1,
+        backgroundColor: T.bg,
+        borderTopLeftRadius: 0,
+        borderTopRightRadius: 0,
+        paddingTop: 10,
+    },
     modalPull: {
         width: 40,
         height: 4,
@@ -4132,6 +4458,7 @@ const S = StyleSheet.create({
         marginBottom: 2,
     },
     modalBody: { paddingHorizontal: 20, paddingBottom: 18 },
+    taskModalBody: { paddingHorizontal: 20, paddingBottom: 18 },
     modalBodyCompact: { paddingBottom: 10 },
 
     fLbl: {

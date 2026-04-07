@@ -17,7 +17,6 @@ import {
     Keyboard,
     Modal,
     Platform,
-    StatusBar,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -32,6 +31,7 @@ import OtpVerificationScreen from "../screens/Auth/OtpVerificationScreen";
 import SignupScreen from "../screens/Auth/SignupScreen";
 import CallLogScreen from "../screens/CallLogScreen";
 import CommunicationScreen from "../screens/CommunicationScreen";
+import TaskDashboardScreen from "../screens/TaskDashboardScreen";
 import EnquiryScreen from "../screens/EnquiryScreen";
 import FollowUpScreen from "../screens/FollowUpScreen";
 import Home from "../screens/HomeScreen";
@@ -118,6 +118,21 @@ function EnquiryStackNavigator() {
     );
 }
 
+function CommunicationStackNavigator() {
+    return (
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Screen
+                name="CommunicationHome"
+                component={CommunicationAccessScreen}
+            />
+            <Stack.Screen
+                name="TaskDashboard"
+                component={TaskDashboardAccessScreen}
+            />
+        </Stack.Navigator>
+    );
+}
+
 function MainTabNavigator() {
     const [keyboardVisible, setKeyboardVisible] = useState(false);
     const insets = useSafeAreaInsets();
@@ -125,23 +140,71 @@ function MainTabNavigator() {
     const selfId = String(user?.id || user?._id || "");
     const currentTabRef = useRef("Home");
     const [chatBadgeCount, setChatBadgeCount] = useState(0);
+    const lastGoodBottomInsetRef = useRef(0);
+    const lastGoodNavBarHeightRef = useRef(0);
+    const [appActiveTick, setAppActiveTick] = useState(0);
+    const [dimTick, setDimTick] = useState(0);
+    const wentBackgroundRef = useRef(false);
+    const resumeFixUntilRef = useRef(0);
+    const resumeRecalcTimersRef = useRef<any[]>([]);
 
-    const androidBottomInset = (() => {
-        if (Platform.OS !== "android") return 0;
+    // Some Android share/download flows (e.g. report CSV export) can temporarily
+    // cause safe-area bottom inset to report `0` on return, which makes the tab
+    // bar drop into the system navigation area. Keep the last known non-zero
+    // bottom inset as a fallback.
+    if (typeof insets?.bottom === "number" && insets.bottom > 0) {
+        lastGoodBottomInsetRef.current = insets.bottom;
+    }
 
-        // `react-native-safe-area-context` can report `0` for the bottom inset on
-        // Android when 3-button navigation is enabled. Fallback to a dimension-based
-        // navigation bar height estimate in that case.
-        const window = Dimensions.get("window");
-        const screen = Dimensions.get("screen");
-        const statusBarHeight = StatusBar.currentHeight ?? 0;
-        const rawNavBarHeight = Math.max(
-            0,
-            screen.height - window.height - statusBarHeight,
-        );
-        const navBarHeight = rawNavBarHeight >= 24 ? rawNavBarHeight : 0;
-        return Math.max(insets.bottom, navBarHeight);
-    })();
+    useEffect(() => {
+        if (Platform.OS !== "android") return undefined;
+        const sub = AppState.addEventListener("change", (next) => {
+            if (next === "background" || next === "inactive") {
+                wentBackgroundRef.current = true;
+            }
+            if (next === "active") {
+                if (wentBackgroundRef.current) {
+                    // After returning from external activities (Share/SAF),
+                    // some devices briefly report bottom inset as 0.
+                    resumeFixUntilRef.current = Date.now() + 4000;
+                    wentBackgroundRef.current = false;
+                }
+                setAppActiveTick((t) => t + 1);
+
+                // Force a couple of delayed recalculations because insets/window
+                // sizes can update a bit later after the activity returns.
+                try {
+                    resumeRecalcTimersRef.current.forEach((id) =>
+                        clearTimeout(id),
+                    );
+                    resumeRecalcTimersRef.current = [];
+                    resumeRecalcTimersRef.current.push(
+                        setTimeout(() => setAppActiveTick((t) => t + 1), 250),
+                    );
+                    resumeRecalcTimersRef.current.push(
+                        setTimeout(() => setAppActiveTick((t) => t + 1), 1100),
+                    );
+                } catch (_e) {}
+            }
+        });
+        return () => {
+            try {
+                resumeRecalcTimersRef.current.forEach((id) =>
+                    clearTimeout(id),
+                );
+                resumeRecalcTimersRef.current = [];
+            } catch (_e) {}
+            sub.remove();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (Platform.OS !== "android") return undefined;
+        const sub = Dimensions.addEventListener("change", () => {
+            setDimTick((t) => t + 1);
+        });
+        return () => sub.remove();
+    }, []);
 
     useEffect(() => {
         if (Platform.OS !== "android") return undefined;
@@ -201,16 +264,66 @@ function MainTabNavigator() {
         };
     }, [selfId]);
 
+    const currentInsetBottom = insets?.bottom || 0;
+    const effectiveBottomInset =
+        currentInsetBottom > 0
+            ? currentInsetBottom
+            : lastGoodBottomInsetRef.current || 0;
+
+    // Extra Android fallback: sometimes after leaving to a system activity
+    // (e.g. CSV download/share), `insets.bottom` becomes 0 even when a 3-button
+    // nav bar is present. Use a conservative dimension-based estimate then.
+    let navBarHeight = 0;
+    if (Platform.OS === "android") {
+        const window = Dimensions.get("window");
+        const screen = Dimensions.get("screen");
+        const raw = Math.max(0, (screen?.height || 0) - (window?.height || 0));
+        // Treat >= 24 as a real 3-button navigation bar. Smaller values are
+        // usually gesture indicator / transient and shouldn't move the tab bar.
+        const clamped = raw >= 24 ? Math.min(raw, 56) : 0;
+        if (clamped > 0) lastGoodNavBarHeightRef.current = clamped;
+        navBarHeight = clamped || lastGoodNavBarHeightRef.current || 0;
+    }
+
+    // Force recompute on return from system activities.
+    void appActiveTick;
+    void dimTick;
+
+    const isThreeButtonNav =
+        Platform.OS === "android" &&
+        (navBarHeight >= 24 || lastGoodNavBarHeightRef.current >= 24);
+
+    // Gesture navigation: keep padding small/consistent.
+    // 3-button navigation: ensure padding is enough to avoid overlap with system nav.
+    let bottomPad = isThreeButtonNav
+        ? Math.max(
+              8,
+              Math.min(
+                  navBarHeight || lastGoodNavBarHeightRef.current || 0,
+                  56,
+              ),
+          )
+        : Math.max(8, Math.min(effectiveBottomInset || 0, 18));
+
+    // Last-resort guard: right after returning from a system activity, if our computed
+    // pad is still tiny AND we previously detected a nav bar height (3-button mode),
+    // temporarily bump it so the tab bar doesn't overlap system navigation.
+    if (
+        isThreeButtonNav &&
+        Date.now() < resumeFixUntilRef.current &&
+        bottomPad < 24 &&
+        (lastGoodNavBarHeightRef.current > 0 || navBarHeight > 0)
+    ) {
+        bottomPad = Math.max(
+            bottomPad,
+            Math.min(lastGoodNavBarHeightRef.current || navBarHeight, 56),
+        );
+    }
+
     const baseTabBarStyle = {
-        height:
-            Platform.OS === "android"
-                ? 68 + androidBottomInset
-                : 68 + Math.min(insets.bottom, 10),
+        height: 60 + bottomPad,
         paddingTop: 8,
-        paddingBottom:
-            Platform.OS === "android"
-                ? Math.max(androidBottomInset, 8)
-                : Math.max(insets.bottom, 8),
+        paddingBottom: bottomPad,
         paddingHorizontal: 10,
         borderTopWidth: 1,
         borderTopColor: "#E5EAF3",
@@ -321,7 +434,7 @@ function MainTabNavigator() {
             />
             <Tab.Screen
                 name="Communication"
-                component={CommunicationScreen}
+                component={CommunicationStackNavigator}
                 options={getTabOptions(
                     "Task",
                     "chatbubbles-outline",
@@ -491,6 +604,11 @@ const CommunicationAccessScreen = createPlanRestrictedScreen(
     "team_chat",
     "Team Chat",
 );
+const TaskDashboardAccessScreen = createPlanRestrictedScreen(
+    TaskDashboardScreen as any,
+    "team_chat",
+    "Team Chat",
+);
 const TargetsAccessScreen = createPlanRestrictedScreen(
     TargetsScreen as any,
     "targets",
@@ -576,13 +694,18 @@ export default function AppNavigator() {
     // Initialize Socket & Call Monitor when logged in
     useEffect(() => {
         if (isLoggedIn && user) {
-            import("../services/socketService").then(({ initSocket }) => {
-                initSocket();
+            let cancelled = false;
+            import("../services/socketService").then(({ ensureSocketReady }) => {
+                if (cancelled) return;
+                ensureSocketReady({ timeoutMs: 60000 }).catch(() => {});
             });
             // Start Call Monitoring with user's mobile context
             startCallMonitoring(user).catch((err) =>
                 console.error("Call monitor init error:", err),
             );
+            return () => {
+                cancelled = true;
+            };
         } else {
             import("../services/socketService").then(({ disconnectSocket }) => {
                 disconnectSocket();

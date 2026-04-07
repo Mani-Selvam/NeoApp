@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "NeoGroww",
-    "slug": "neoapp-manibro13",
-    "owner": "manibro13",
+    "slug": "neoapp-manibro14",
+    "owner": "manibro14",
     "version": "1.0.0",
     "icon": "./src/assets/app-icon.png",
     "orientation": "portrait",
@@ -60,7 +60,7 @@
       ]
     ],
     "extra": {
-      "playStoreSafeMode": true,
+      "playStoreSafeMode": false,
       "privacyPolicyUrl": "https://neophrondev.in/privacy/",
       "accountDeletionUrl": "https://neophrondev.in/privacy/",
       "firebase": {
@@ -72,7 +72,7 @@
         "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
       },
       "eas": {
-        "projectId": "9a5972f7-b6b2-459d-b0d7-faae101ec1c9"
+        "projectId": "f86e3bf2-24b0-4351-b202-c349ebb5c17c"
       }
     }
   }

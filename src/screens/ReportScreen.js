@@ -1076,7 +1076,8 @@ export default function ReportScreen({ navigation }) {
         });
 
         return Object.values(map).sort((a, b) => {
-            if (b.totalCalls !== a.totalCalls) return b.totalCalls - a.totalCalls;
+            if (b.totalCalls !== a.totalCalls)
+                return b.totalCalls - a.totalCalls;
             return b.totalDuration - a.totalDuration;
         });
     }, [adminName, filteredCalls, isStaffUser, user?.name]);
@@ -1367,9 +1368,7 @@ export default function ReportScreen({ navigation }) {
                                 size={15}
                                 color={C.gold}
                             />
-                            <Text style={st.exportHeaderText}>
-                                CSV
-                            </Text>
+                            <Text style={st.exportHeaderText}>CSV</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={st.exportHeaderBtn}
@@ -1380,9 +1379,7 @@ export default function ReportScreen({ navigation }) {
                                 size={15}
                                 color={C.violet}
                             />
-                            <Text style={st.exportHeaderText}>
-                                Staff
-                            </Text>
+                            <Text style={st.exportHeaderText}>Staff</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={st.avatarBtn}
@@ -2135,8 +2132,7 @@ export default function ReportScreen({ navigation }) {
                                                 )}
                                             </Text>
                                             <Text style={st.tdCell}>
-                                                {item.missed +
-                                                    item.notAttended}
+                                                {item.missed + item.notAttended}
                                             </Text>
                                         </View>
                                     ))
