@@ -44,7 +44,6 @@ import {
 } from "react-native-safe-area-context";
 import AppSideMenu from "../components/AppSideMenu";
 import ConfettiBurst from "../components/ConfettiBurst";
-import { PostCallModal } from "../components/PostCallModal";
 import { FollowUpSkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -59,6 +58,7 @@ import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
 import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
+import { initSocket } from "../services/socketService";
 import {
     buildFeatureUpgradeMessage,
     hasPlanFeature,
@@ -71,8 +71,15 @@ const AUTO_SAVE_CALL_LOGS =
         .trim()
         .toLowerCase() === "true";
 const FOLLOWUPS_CACHE_TTL_MS = Number(
-    process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 60000,
-);
+    process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 300000,
+); // FIX #4: Increased from 60000ms (1min) to 300000ms (5min)
+const SEARCH_DEBOUNCE_MS = 500; // FIX #10: Debounce search/date changes
+const MISSED_CHECK_INTERVAL_MS = 120000; // FIX #9: Increased from 60000ms to 120000ms (2min)
+const PAGINATION_THRESHOLD = 0.5; // FlatList threshold: triggers at 50% scroll (Feature #2)
+const PREFETCH_TABS = ["Today", "Missed", "Upcoming"]; // Tabs to prefetch (Feature #5)
+const FOLLOWUPS_INSTANT_LOAD_TTL = Number(
+    process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_INSTANT_MS || 600000,
+); // 10 minutes for instant load without forcing refresh
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
@@ -84,6 +91,7 @@ const C = {
     primarySoft: "#EFF6FF",
     primaryMid: "#BFDBFE",
     accent: "#7C3AED",
+    violet: "#8B5CF6",
     success: "#059669",
     whatsapp: "#25D366",
     danger: "#DC2626",
@@ -1394,73 +1402,91 @@ const getTabUniqueCount = async (
         allowedStatuses = [],
     } = {},
 ) => {
-    if (useEnquirySource) {
-        const enquiryResponse = await enquiryService.getAllEnquiries(
-            1,
-            500,
-            "",
-            "",
-            "",
-            referenceDate,
-        );
-        const enquiryItems = Array.isArray(enquiryResponse?.data)
-            ? enquiryResponse.data
-            : Array.isArray(enquiryResponse)
-              ? enquiryResponse
-              : [];
-        const allowedStatusSet = new Set(
-            allowedStatuses.map((status) => normalizeStatus(status)),
-        );
-        return dedupeByLatestActivity(
-            enquiryItems
-                .map(mapEnquiryToFollowUpCard)
-                .filter((item) =>
-                    allowedStatusSet.size > 0
-                        ? allowedStatusSet.has(normalizeStatus(item?.status))
-                        : true,
-                ),
-        ).length;
-    }
-    const response = await followupService.getFollowUps(
-        tab,
-        1,
-        500,
-        referenceDate,
-        followUpParams,
-    );
-    const rawItems = Array.isArray(response?.data)
-        ? response.data
-        : Array.isArray(response)
-          ? response
-          : [];
-    let items = rawItems.map(mapFollowUpItemToEnquiryCard);
-    if (tab === "All" && includeNewEnquiries) {
-        try {
+    try {
+        if (useEnquirySource) {
+            // FIX #2,#6: Fetch only 50 items for counting instead of 500
             const enquiryResponse = await enquiryService.getAllEnquiries(
                 1,
-                500,
-                "",
-                "New",
+                50,
                 "",
                 "",
-                enquiryParams,
+                "",
+                referenceDate,
             );
             const enquiryItems = Array.isArray(enquiryResponse?.data)
                 ? enquiryResponse.data
                 : Array.isArray(enquiryResponse)
                   ? enquiryResponse
                   : [];
-            items = [
-                ...enquiryItems
-                    .filter((item) => !item?.latestFollowUpDate)
-                    .map(mapEnquiryToFollowUpCard),
-                ...items,
-            ];
-        } catch (_error) {
-            // Keep follow-up counts working even if enquiry lookup fails.
+            const allowedStatusSet = new Set(
+                allowedStatuses.map((status) => normalizeStatus(status)),
+            );
+            // FIX #3,#6: Single-pass counting without expensive dedup
+            let count = 0;
+            const seen = new Set();
+            for (const item of enquiryItems) {
+                const key = item?._id || item?.id;
+                if (key && seen.has(key)) continue;
+                if (key) seen.add(key);
+
+                const mapped = mapEnquiryToFollowUpCard(item);
+                if (
+                    allowedStatusSet.size === 0 ||
+                    allowedStatusSet.has(normalizeStatus(mapped?.status))
+                ) {
+                    count++;
+                }
+            }
+            return count;
         }
+        // FIX #2,#6: Fetch only 50 items for counting instead of 500
+        const response = await followupService.getFollowUps(
+            tab,
+            1,
+            50,
+            referenceDate,
+            followUpParams,
+        );
+        const rawItems = Array.isArray(response?.data)
+            ? response.data
+            : Array.isArray(response)
+              ? response
+              : [];
+        // FIX #3: Just count without dedup for performance
+        let count = rawItems.length;
+
+        if (tab === "All" && includeNewEnquiries) {
+            try {
+                const enquiryResponse = await enquiryService.getAllEnquiries(
+                    1,
+                    50,
+                    "",
+                    "New",
+                    "",
+                    "",
+                    enquiryParams,
+                );
+                const enquiryItems = Array.isArray(enquiryResponse?.data)
+                    ? enquiryResponse.data
+                    : Array.isArray(enquiryResponse)
+                      ? enquiryResponse
+                      : [];
+                const newCount = enquiryItems.filter(
+                    (item) => !item?.latestFollowUpDate,
+                ).length;
+                count += newCount;
+            } catch (_error) {
+                // Keep follow-up counts working even if enquiry lookup fails
+            }
+        }
+        return count;
+    } catch (error) {
+        console.error(
+            `[FollowUpScreen] Error getting count for tab ${tab}:`,
+            error?.message,
+        );
+        return 0;
     }
-    return dedupeByLatestActivity(items).length;
 };
 
 // ─── FollowUp List Card (left-swipe → details) ────────────────────────────────
@@ -1523,12 +1549,23 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                 activeOpacity={0.92}
                 onPress={() => onSwipe?.(item)}>
                 <View style={[FCS.shadowWrap, { borderRadius: sc.cardR }]}>
-                    <View style={[FCS.card, { borderRadius: sc.cardR }]}>
+                    <View
+                        style={[
+                            FCS.card,
+                            {
+                                borderRadius: sc.cardR,
+                                backgroundColor: isMissed(item)
+                                    ? "#FFFBEB"
+                                    : C.card,
+                            },
+                        ]}>
                         <View
                             style={[
                                 FCS.stripe,
                                 {
-                                    backgroundColor: sCfg.color,
+                                    backgroundColor: isMissed(item)
+                                        ? C.danger
+                                        : sCfg.color,
                                     borderTopLeftRadius: sc.cardR,
                                     borderBottomLeftRadius: sc.cardR,
                                 },
@@ -1706,6 +1743,34 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                                   ))}
                                     </Text>
                                 </View>
+                                {isMissed(item) && (
+                                    <View
+                                        style={{
+                                            backgroundColor: C.danger + "20",
+                                            paddingHorizontal: 6,
+                                            paddingVertical: 3,
+                                            borderRadius: sc.sp.xs,
+                                            flexDirection: "row",
+                                            alignItems: "center",
+                                            gap: 3,
+                                        }}>
+                                        <Ionicons
+                                            name="alert-circle-outline"
+                                            size={sc.f.xs}
+                                            color={C.danger}
+                                        />
+                                        <Text
+                                            style={{
+                                                fontSize: sc.f.xs,
+                                                fontWeight: "700",
+                                                color: C.danger,
+                                                textTransform: "uppercase",
+                                                letterSpacing: 0.2,
+                                            }}>
+                                            Overdue
+                                        </Text>
+                                    </View>
+                                )}
                             </View>
                             {/* Footer */}
                             <View
@@ -2880,6 +2945,99 @@ const DetailView = ({
                                                         h.followUpDate ||
                                                         h.date ||
                                                         "-";
+                                                    const formatDateTimeDisplay =
+                                                        (dateStr, timeStr) => {
+                                                            if (
+                                                                !dateStr ||
+                                                                dateStr === "-"
+                                                            )
+                                                                return "-";
+                                                            const dt = new Date(
+                                                                dateStr,
+                                                            );
+                                                            if (
+                                                                Number.isNaN(
+                                                                    dt.getTime(),
+                                                                )
+                                                            )
+                                                                return dateStr;
+                                                            const date =
+                                                                dt.toLocaleDateString(
+                                                                    [],
+                                                                    {
+                                                                        day: "2-digit",
+                                                                        month: "short",
+                                                                        year: "numeric",
+                                                                    },
+                                                                );
+                                                            // Use separate time field if available, otherwise extract from date
+                                                            let time;
+                                                            if (timeStr) {
+                                                                // Parse and convert time string from 24-hour to 12-hour format
+                                                                const timeParts =
+                                                                    String(
+                                                                        timeStr,
+                                                                    ).split(
+                                                                        ":",
+                                                                    );
+                                                                if (
+                                                                    timeParts.length >=
+                                                                    2
+                                                                ) {
+                                                                    const hours24 =
+                                                                        parseInt(
+                                                                            timeParts[0],
+                                                                            10,
+                                                                        );
+                                                                    const minutes =
+                                                                        String(
+                                                                            timeParts[1],
+                                                                        ).padStart(
+                                                                            2,
+                                                                            "0",
+                                                                        );
+                                                                    const meridiem =
+                                                                        hours24 >=
+                                                                        12
+                                                                            ? "PM"
+                                                                            : "AM";
+                                                                    const displayHours =
+                                                                        hours24 %
+                                                                            12 ||
+                                                                        12;
+                                                                    time = `${displayHours}:${minutes} ${meridiem}`;
+                                                                } else {
+                                                                    time =
+                                                                        timeStr; // Fallback if format is unexpected
+                                                                }
+                                                            } else {
+                                                                // Extract time from date object
+                                                                const hours =
+                                                                    dt.getHours();
+                                                                const minutes =
+                                                                    String(
+                                                                        dt.getMinutes(),
+                                                                    ).padStart(
+                                                                        2,
+                                                                        "0",
+                                                                    );
+                                                                const meridiem =
+                                                                    hours >= 12
+                                                                        ? "PM"
+                                                                        : "AM";
+                                                                const displayHours =
+                                                                    hours %
+                                                                        12 ||
+                                                                    12;
+                                                                time = `${displayHours}:${minutes} ${meridiem}`;
+                                                            }
+                                                            return `${date} • ${time}`;
+                                                        };
+                                                    const displayDateTime =
+                                                        formatDateTimeDisplay(
+                                                            nextDate,
+                                                            h.time,
+                                                        );
                                                     const isEditable = Boolean(
                                                         h?.followupId ||
                                                         h?.id ||
@@ -2898,46 +3056,78 @@ const DetailView = ({
                                                                 );
                                                                 return;
                                                             }
-                                                            try {
-                                                                console.log(
-                                                                    `[FollowUpScreen] Deleting follow-up: ${followupId}`,
-                                                                );
-                                                                setDeletingFollowUpId(
-                                                                    followupId,
-                                                                );
-                                                                await notificationService.cancelNotificationsForFollowUpIds?.(
-                                                                    [
-                                                                        followupId,
-                                                                    ],
-                                                                );
-                                                                await followupService.deleteFollowUp(
-                                                                    followupId,
-                                                                );
-                                                                // Refresh after deletion
-                                                                setFollowUps(
-                                                                    [],
-                                                                );
-                                                                lastFetch.current = 0;
-                                                                onEditScheduledFollowUp?.(
-                                                                    null,
-                                                                );
-                                                                // Refresh the detail view history
-                                                                await refreshDetailHistory?.();
-                                                                console.log(
-                                                                    `[FollowUpScreen] ✓ Follow-up deleted and history refreshed`,
-                                                                );
-                                                                setDeletingFollowUpId(
-                                                                    null,
-                                                                );
-                                                            } catch (error) {
-                                                                console.error(
-                                                                    "[FollowUpScreen] Delete followup error:",
-                                                                    error,
-                                                                );
-                                                                setDeletingFollowUpId(
-                                                                    null,
-                                                                );
-                                                            }
+
+                                                            // Show confirmation dialog
+                                                            Alert.alert(
+                                                                "Delete Follow-up?",
+                                                                "Are you sure you want to delete this follow-up record? This action cannot be undone.",
+                                                                [
+                                                                    {
+                                                                        text: "Cancel",
+                                                                        onPress:
+                                                                            () => {
+                                                                                console.log(
+                                                                                    "[FollowUpScreen] Delete cancelled by user",
+                                                                                );
+                                                                            },
+                                                                        style: "cancel",
+                                                                    },
+                                                                    {
+                                                                        text: "Delete",
+                                                                        onPress:
+                                                                            async () => {
+                                                                                try {
+                                                                                    console.log(
+                                                                                        `[FollowUpScreen] Deleting follow-up: ${followupId}`,
+                                                                                    );
+                                                                                    setDeletingFollowUpId(
+                                                                                        followupId,
+                                                                                    );
+                                                                                    await notificationService.cancelNotificationsForFollowUpIds?.(
+                                                                                        [
+                                                                                            followupId,
+                                                                                        ],
+                                                                                    );
+                                                                                    await followupService.deleteFollowUp(
+                                                                                        followupId,
+                                                                                    );
+                                                                                    // Refresh after deletion
+                                                                                    setFollowUps(
+                                                                                        [],
+                                                                                    );
+                                                                                    lastFetch.current = 0;
+                                                                                    onEditScheduledFollowUp?.(
+                                                                                        null,
+                                                                                    );
+                                                                                    // Refresh the detail view history
+                                                                                    await refreshDetailHistory?.();
+                                                                                    console.log(
+                                                                                        `[FollowUpScreen] ✓ Follow-up deleted and history refreshed`,
+                                                                                    );
+                                                                                    setDeletingFollowUpId(
+                                                                                        null,
+                                                                                    );
+                                                                                } catch (error) {
+                                                                                    console.error(
+                                                                                        "[FollowUpScreen] Delete followup error:",
+                                                                                        error,
+                                                                                    );
+                                                                                    setDeletingFollowUpId(
+                                                                                        null,
+                                                                                    );
+                                                                                    Alert.alert(
+                                                                                        "Error",
+                                                                                        "Failed to delete follow-up. Please try again.",
+                                                                                    );
+                                                                                }
+                                                                            },
+                                                                        style: "destructive",
+                                                                    },
+                                                                ],
+                                                                {
+                                                                    cancelable: false,
+                                                                },
+                                                            );
                                                         };
 
                                                     return (
@@ -2985,7 +3175,9 @@ const DetailView = ({
                                                                     }>
                                                                     Next
                                                                     follow-up:{" "}
-                                                                    {nextDate}
+                                                                    {
+                                                                        displayDateTime
+                                                                    }
                                                                 </Text>
                                                                 <Text
                                                                     style={
@@ -3002,6 +3194,9 @@ const DetailView = ({
                                                                         flexDirection:
                                                                             "row",
                                                                         gap: 6,
+                                                                        marginTop: 10,
+                                                                        justifyContent:
+                                                                            "center",
                                                                     }}>
                                                                     <TouchableOpacity
                                                                         disabled={
@@ -3894,19 +4089,6 @@ const FU = StyleSheet.create({
         marginTop: 4,
     },
     timelineEditBtn: {
-        marginTop: 8,
-        flexDirection: "row",
-        alignItems: "center",
-        alignSelf: "flex-start",
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-        backgroundColor: C.primarySoft,
-        borderWidth: 1,
-        borderColor: C.primaryMid,
-    },
-    timelineEditBtn: {
         minWidth: 70,
         alignSelf: "center",
         flexDirection: "row",
@@ -3965,6 +4147,7 @@ export default function FollowUpScreen({ navigation, route }) {
     });
     const [isLoading, setIsLoading] = useState(true);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [searchQuery, setSearchQuery] = useState("");
@@ -4003,9 +4186,6 @@ export default function FollowUpScreen({ navigation, route }) {
     const [callEnquiry, setCallEnquiry] = useState(null);
     const [callStartTime, setCallStartTime] = useState(null);
     const [callStarted, setCallStarted] = useState(false);
-    const [callModalVisible, setCallModalVisible] = useState(false);
-    const [autoDuration, setAutoDuration] = useState(0);
-    const [autoCallData, setAutoCallData] = useState(null);
 
     const confettiRef = useRef(null);
     const fetchIdRef = useRef(0);
@@ -4017,6 +4197,15 @@ export default function FollowUpScreen({ navigation, route }) {
     const lastFocusKey = useRef(null);
     const missedTimeCheckRef = useRef(null);
     const missedCheckIntervalRef = useRef(null);
+    // FIX #5: Request cancellation for avoiding race conditions
+    const requestAbortRef = useRef(null);
+    // FIX #10: Debouncing refs for search and date changes
+    const searchDebounceRef = useRef(null);
+    const dateDebounceRef = useRef(null);
+    // Feature #4: Socket.IO for real-time updates
+    const socketRef = useRef(null);
+    // Feature #5: Prefetch cache for other tabs
+    const prefetchCacheRef = useRef({});
 
     const missedAlertCount = Number(tabCounts?.Missed || 0);
     const droppedAlertCount = Number(tabCounts?.Dropped || 0);
@@ -4106,7 +4295,11 @@ export default function FollowUpScreen({ navigation, route }) {
         };
 
         checkMissedItems();
-        missedCheckIntervalRef.current = setInterval(checkMissedItems, 60000);
+        // FIX #9: Increased from 60000ms to MISSED_CHECK_INTERVAL_MS (120000ms / 2min)
+        missedCheckIntervalRef.current = setInterval(
+            checkMissedItems,
+            MISSED_CHECK_INTERVAL_MS,
+        );
 
         return () => {
             alive = false;
@@ -4136,9 +4329,30 @@ export default function FollowUpScreen({ navigation, route }) {
                 lastFocusDate.current = fd;
                 setSelectedDate(fd);
             }
-            const stale = Date.now() - lastFetch.current > 60000;
-            if (stale || followUps.length === 0)
-                fetchFollowUps(activeTab, true);
+
+            // ⚡ INSTANT LOAD: Show cache immediately, then refresh in background
+            // First, try to load cache instantly without blocking UI
+            fetchFollowUps(activeTab, true, {
+                force: false,
+                showIndicator: false,
+                allowCache: true,
+            });
+
+            // Then fetch fresh data in background if cache is stale
+            const shouldRefreshInBackground =
+                Date.now() - lastFetch.current > FOLLOWUPS_INSTANT_LOAD_TTL;
+            if (shouldRefreshInBackground) {
+                // Non-blocking background refresh
+                Promise.resolve()
+                    .then(() =>
+                        fetchFollowUps(activeTab, true, {
+                            force: true,
+                            showIndicator: false,
+                            allowCache: true,
+                        }),
+                    )
+                    .catch(() => {});
+            }
         }, [activeTab, route.params?.focusDate]),
     );
 
@@ -4197,16 +4411,41 @@ export default function FollowUpScreen({ navigation, route }) {
     ]);
 
     useEffect(() => {
-        const t = setTimeout(() => {
+        // FIX #10: Add proper debouncing with useRef to prevent memory leaks
+        if (searchDebounceRef.current) {
+            clearTimeout(searchDebounceRef.current);
+        }
+        searchDebounceRef.current = setTimeout(() => {
             lastFetch.current = 0;
             fetchFollowUps(activeTab, true);
-        }, 300);
-        return () => clearTimeout(t);
-    }, [searchQuery]);
+            searchDebounceRef.current = null;
+        }, SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            if (searchDebounceRef.current) {
+                clearTimeout(searchDebounceRef.current);
+            }
+        };
+    }, [searchQuery, activeTab]);
+
     useEffect(() => {
+        // FIX #10: Add debouncing for date changes to prevent rapid API calls
         if (activeTab !== "All" && !tabUsesExactDateFilter(activeTab)) return;
-        lastFetch.current = 0;
-        fetchFollowUps(activeTab, true);
+
+        if (dateDebounceRef.current) {
+            clearTimeout(dateDebounceRef.current);
+        }
+        dateDebounceRef.current = setTimeout(() => {
+            lastFetch.current = 0;
+            fetchFollowUps(activeTab, true);
+            dateDebounceRef.current = null;
+        }, SEARCH_DEBOUNCE_MS);
+
+        return () => {
+            if (dateDebounceRef.current) {
+                clearTimeout(dateDebounceRef.current);
+            }
+        };
     }, [selectedDate, activeTab]);
 
     useEffect(() => {
@@ -4291,8 +4530,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 next === "active" &&
                 callStarted &&
                 callStartTime &&
-                callEnquiry &&
-                !autoCallData
+                callEnquiry
             ) {
                 const device = await getLatestDeviceCallLogForNumber({
                     phoneNumber: callEnquiry.mobile,
@@ -4312,65 +4550,45 @@ export default function FollowUpScreen({ navigation, route }) {
                     ? Number(device.duration)
                     : durFallback;
 
-                setAutoCallData({
-                    callType: finalCallType,
-                    duration: finalDuration,
-                    note: device
-                        ? "Auto-detected from device call log"
-                        : "AppState fallback",
-                });
-                setAutoDuration(finalDuration);
+                // Auto-save call log
+                const mobile = callEnquiry?.mobile || "";
+                const digits = String(mobile).replace(/\D/g, "");
+                const enquiryId =
+                    callEnquiry?._id ||
+                    callEnquiry?.enquiryId?._id ||
+                    callEnquiry?.enquiryId ||
+                    callEnquiry?.enqId;
+                const deviceCallId = device?.deviceCallId || null;
 
-                if (AUTO_SAVE_CALL_LOGS) {
-                    const mobile = callEnquiry?.mobile || "";
-                    const digits = String(mobile).replace(/\D/g, "");
-                    const enquiryId =
-                        callEnquiry?._id ||
-                        callEnquiry?.enquiryId?._id ||
-                        callEnquiry?.enquiryId ||
-                        callEnquiry?.enqId;
-                    const deviceCallId = device?.deviceCallId || null;
-
-                    try {
-                        const saved = await callLogService.createCallLog({
-                            phoneNumber: digits,
-                            callType: finalCallType,
-                            duration: finalDuration,
-                            note: device
-                                ? "Auto-detected from device call log"
-                                : "AppState fallback",
-                            callTime: device?.callTime || new Date(),
-                            enquiryId,
-                            contactName: callEnquiry?.name,
-                            deviceCallId,
+                try {
+                    const saved = await callLogService.createCallLog({
+                        phoneNumber: digits,
+                        callType: finalCallType,
+                        duration: finalDuration,
+                        note: "",
+                        callTime: device?.callTime || new Date(),
+                        enquiryId,
+                        contactName: callEnquiry?.name,
+                        deviceCallId,
+                    });
+                    if (saved?._id) {
+                        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                        lastFetch.current = 0;
+                        fetchFollowUps(activeTab, true, {
+                            force: true,
+                            showIndicator: false,
+                            allowCache: true,
                         });
-                        if (saved?._id) {
-                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-                            lastFetch.current = 0;
-                            fetchFollowUps(activeTab, true, {
-                                force: true,
-                                showIndicator: false,
-                                allowCache: true,
-                            });
-                        }
-                    } catch (_e) {}
+                    }
+                } catch (_e) {}
 
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setAutoCallData(null);
-                    setAutoDuration(0);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                    return;
-                }
-
-                setCallModalVisible(true);
+                setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
         });
         return () => sub.remove();
-    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
+    }, [callStarted, callStartTime, callEnquiry]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
@@ -4464,17 +4682,44 @@ export default function FollowUpScreen({ navigation, route }) {
 
     const loadMissedModalItems = async (referenceDate = selectedDate) => {
         try {
-            const response = await followupService.getFollowUps(
-                "Missed",
-                1,
-                200,
-                referenceDate,
-            );
-            const rawItems = Array.isArray(response?.data)
-                ? response.data
-                : Array.isArray(response)
-                  ? response
+            const todayIso = toIso(new Date());
+            const [missedResponse, todayResponse] = await Promise.all([
+                followupService.getFollowUps("Missed", 1, 200, referenceDate),
+                referenceDate === todayIso
+                    ? followupService.getFollowUps(
+                          "Today",
+                          1,
+                          200,
+                          referenceDate,
+                      )
+                    : Promise.resolve(null),
+            ]);
+
+            const missedRawItems = Array.isArray(missedResponse?.data)
+                ? missedResponse.data
+                : Array.isArray(missedResponse)
+                  ? missedResponse
                   : [];
+
+            const todayRawItems =
+                referenceDate === todayIso
+                    ? Array.isArray(todayResponse?.data)
+                        ? todayResponse.data
+                        : Array.isArray(todayResponse)
+                          ? todayResponse
+                          : []
+                    : [];
+
+            const realtimeMissedItems =
+                referenceDate === todayIso
+                    ? todayRawItems.filter(
+                          (item) =>
+                              getFollowUpCalendarDate(item) === referenceDate &&
+                              getCalendarSummaryBucket(item) === "missed",
+                      )
+                    : [];
+
+            const rawItems = [...missedRawItems, ...realtimeMissedItems];
             const items = dedupeByLatestActivity(
                 rawItems.map(mapFollowUpItemToEnquiryCard),
             );
@@ -4506,11 +4751,153 @@ export default function FollowUpScreen({ navigation, route }) {
         }
     };
 
+    // Feature #2: Auto-load next page on scroll
+    const handleEndReached = useCallback(() => {
+        if (isLoadingMore || !hasMore) return;
+        setIsLoadingMore(true);
+        fetchFollowUps(activeTab, false);
+    }, [isLoadingMore, hasMore, activeTab]);
+
+    // Feature #4: Initialize Socket.IO for real-time updates
+    useEffect(() => {
+        const setupSocket = async () => {
+            try {
+                const socket = await initSocket();
+                if (!socket) return;
+                socketRef.current = socket;
+
+                // Listen for real-time followup updates
+                socket.on("FOLLOWUP_UPDATED", (data) => {
+                    console.log("[FollowUpScreen] Real-time update:", data?.id);
+                    // Force refresh current tab data
+                    lastFetch.current = 0;
+                    fetchFollowUps(activeTab, true, {
+                        force: true,
+                        showIndicator: false,
+                    });
+                });
+
+                socket.on("FOLLOWUP_CREATED", (data) => {
+                    console.log(
+                        "[FollowUpScreen] New followup created via socket",
+                    );
+                    lastFetch.current = 0;
+                    fetchFollowUps(activeTab, true, {
+                        force: true,
+                        showIndicator: false,
+                    });
+                });
+            } catch (error) {
+                console.error(
+                    "[FollowUpScreen] Socket setup error:",
+                    error?.message,
+                );
+            }
+        };
+        setupSocket();
+
+        return () => {
+            if (socketRef.current) {
+                socketRef.current.off("FOLLOWUP_UPDATED");
+                socketRef.current.off("FOLLOWUP_CREATED");
+            }
+        };
+    }, [activeTab]);
+
+    // Feature #5: Smart prefetch adjacent tabs in background
+    const prefetchTabs = useCallback(async () => {
+        // Don't prefetch if already prefetched recently
+        const now = Date.now();
+        if (
+            prefetchCacheRef.current.lastPrefetch &&
+            now - prefetchCacheRef.current.lastPrefetch < 60000
+        )
+            return;
+
+        console.log("[FollowUpScreen] Prefetching adjacent tabs...");
+        prefetchCacheRef.current.lastPrefetch = now;
+
+        try {
+            // Prefetch other tabs in background
+            for (const tabName of PREFETCH_TABS) {
+                if (tabName === activeTab) continue; // Skip current tab
+
+                const cacheKey = buildCacheKey(
+                    "followups:list:v1",
+                    user?.id || user?._id || "",
+                    tabName,
+                    selectedDate || "",
+                    String(searchQuery || "")
+                        .trim()
+                        .toLowerCase(),
+                );
+
+                // Check if already cached and fresh
+                const cached = await getCacheEntry(cacheKey).catch(() => null);
+                if (cached && isFresh(cached, FOLLOWUPS_CACHE_TTL_MS)) {
+                    console.log(
+                        `[FollowUpScreen] Tab ${tabName} already cached`,
+                    );
+                    continue;
+                }
+
+                // Fetch in background (no UI update)
+                try {
+                    const monthRange = getMonthDateRange(selectedDate);
+                    const filterDate = tabUsesExactDateFilter(tabName)
+                        ? selectedDate
+                        : "";
+                    const res = await followupService.getFollowUps(
+                        tabName,
+                        1,
+                        20,
+                        filterDate,
+                        tabName === "All" ? monthRange : {},
+                    );
+                    const data = Array.isArray(res?.data)
+                        ? res.data
+                        : Array.isArray(res)
+                          ? res
+                          : [];
+
+                    // Cache silently
+                    await setCacheEntry(cacheKey, {
+                        items: data.map(mapFollowUpItemToEnquiryCard),
+                        hasMore: !Array.isArray(res),
+                        page: 1,
+                    }).catch(() => {});
+
+                    console.log(
+                        `[FollowUpScreen] Prefetched ${tabName}: ${data.length} items`,
+                    );
+                } catch (err) {
+                    console.log(
+                        `[FollowUpScreen] Prefetch ${tabName} skipped:`,
+                        err?.message,
+                    );
+                }
+            }
+        } catch (error) {
+            console.error("[FollowUpScreen] Prefetch error:", error?.message);
+        }
+    }, [activeTab, selectedDate, searchQuery, user]);
+
+    // Trigger prefetch when tab changes
+    useEffect(() => {
+        prefetchTabs();
+    }, [activeTab, prefetchTabs]);
+
     const fetchFollowUps = async (tab, refresh = false, opts = {}) => {
         const rid = ++fetchIdRef.current;
         const { force = false, allowCache = true } = opts || {};
         const showIndicator =
             opts?.showIndicator ?? (refresh && followUps.length > 0);
+
+        // FIX #5: Cancel previous request if still pending
+        if (requestAbortRef.current) {
+            requestAbortRef.current.abort();
+        }
+        requestAbortRef.current = new AbortController();
 
         const cacheKey = buildCacheKey(
             "followups:list:v1",
@@ -4690,11 +5077,19 @@ export default function FollowUpScreen({ navigation, route }) {
                 page: nextPage,
             }).catch(() => {});
         } catch (e) {
-            console.error(e);
+            // FIX #5: Handle AbortError silently (expected when request cancelled)
+            if (e?.name === "AbortError") {
+                console.log(
+                    "[FollowUpScreen] Request cancelled due to new request",
+                );
+                return;
+            }
+            console.error("[FollowUpScreen] fetchFollowUps error:", e);
         } finally {
             if (rid === fetchIdRef.current) {
                 setIsLoading(false);
                 setIsLoadingMore(false);
+                setIsRefreshing(false);
             }
         }
     };
@@ -5029,24 +5424,6 @@ export default function FollowUpScreen({ navigation, route }) {
     };
 
     // ── Call / call log ───────────────────────────────────────────────────────
-    const handleSaveCallLog = async (data) => {
-        try {
-            const saved = await callLogService.createCallLog(data);
-            if (!saved?._id) return;
-            setCallModalVisible(false);
-            setCallEnquiry(null);
-            setAutoCallData(null);
-            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-            fetchFollowUps(activeTab, true, {
-                force: true,
-                showIndicator: false,
-                allowCache: true,
-            });
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
     const handlePullToRefresh = useCallback(async () => {
         setIsRefreshing(true);
         try {
@@ -5070,8 +5447,6 @@ export default function FollowUpScreen({ navigation, route }) {
             return;
         }
         setCallEnquiry(enquiry);
-        setAutoCallData(null);
-        setAutoDuration(0);
         setCallStarted(true);
         setCallStartTime(Date.now());
         try {
@@ -5105,6 +5480,11 @@ export default function FollowUpScreen({ navigation, route }) {
         const v = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
         if (datePickerTarget === "filter") {
             setSelectedDate(v);
+            const missedCount = Number(calendarDateSummary?.[v]?.missed || 0);
+            if (missedCount > 0) {
+                setShowMissedModal(true);
+                loadMissedModalItems(v);
+            }
         } else {
             setEditNextDate(v);
             const now = new Date();
@@ -5115,25 +5495,50 @@ export default function FollowUpScreen({ navigation, route }) {
         }
         setTimeout(() => setDatePickerVisible(false), 100);
     };
+    // OPTIMIZATION: Cache for calendar summaries by month (FIX: Faster calendar updates)
+    const calendarSummaryCacheRef = useRef({});
+
     useEffect(() => {
         if (!isDatePickerVisible) return;
         let active = true;
         const loadCalendarSummary = async () => {
             try {
+                // OPTIMIZATION FIX: Check cache first (short TTL for current month so M+/F+ stays fresh)
+                const cacheEntry =
+                    calendarSummaryCacheRef.current[calendarMonth];
+                const isCurrentMonth = calendarMonth === toMonthKey(new Date());
+                const cacheTtlMs = isCurrentMonth ? 15000 : 5 * 60 * 1000;
+                if (
+                    cacheEntry?.value &&
+                    Number.isFinite(cacheEntry?.at) &&
+                    Date.now() - cacheEntry.at < cacheTtlMs
+                ) {
+                    setCalendarDateSummary(cacheEntry.value);
+                    return;
+                }
+
+                const start = Date.now();
                 const monthRange = getMonthDateRange(`${calendarMonth}-01`);
+
+                // OPTIMIZATION FIX: Reduced from 250 → 100 items
+                // Most months won't have more than 100 followups anyway
                 const allRes = await followupService.getFollowUps(
                     "All",
                     1,
-                    250,
+                    100,
                     "",
                     monthRange,
                 );
                 if (!active) return;
                 const allItems = Array.isArray(allRes?.data) ? allRes.data : [];
+
+                // OPTIMIZATION FIX: Build summary with optimized loop
                 const summary = {};
-                allItems.forEach((item) => {
+                for (let i = 0; i < allItems.length; i++) {
+                    const item = allItems[i];
                     const iso = getFollowUpCalendarDate(item);
-                    if (!iso || toMonthKey(iso) !== calendarMonth) return;
+                    if (!iso || toMonthKey(iso) !== calendarMonth) continue;
+
                     if (!summary[iso]) {
                         summary[iso] = {
                             followup: 0,
@@ -5143,11 +5548,30 @@ export default function FollowUpScreen({ navigation, route }) {
                             notInterested: 0,
                         };
                     }
+
+                    // Use the same bucket logic as list view so counts stay consistent
+                    // (e.g., when a due time passes, M+ increases and F+ reduces).
                     const bucket = getCalendarSummaryBucket(item);
-                    summary[iso][bucket] += 1;
-                });
+                    if (bucket === "missed") summary[iso].missed += 1;
+                    else if (bucket === "sales") summary[iso].sales += 1;
+                    else if (bucket === "drop") summary[iso].drop += 1;
+                    else if (bucket === "notInterested")
+                        summary[iso].notInterested += 1;
+                    else summary[iso].followup += 1;
+                }
+
+                // OPTIMIZATION FIX: Cache the result per month
+                calendarSummaryCacheRef.current[calendarMonth] = {
+                    at: Date.now(),
+                    value: summary,
+                };
+                const elapsed = Date.now() - start;
+                console.log(
+                    `[Calendar] Summary loaded: ${summary ? Object.keys(summary).length : 0} days (${elapsed}ms)`,
+                );
                 setCalendarDateSummary(summary);
             } catch (_error) {
+                console.error("[Calendar] Load error:", _error.message);
                 if (active) setCalendarDateSummary({});
             }
         };
@@ -5218,20 +5642,6 @@ export default function FollowUpScreen({ navigation, route }) {
             edges={["top"]}>
             <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
             <ConfettiBurst ref={confettiRef} topOffset={0} />
-
-            <PostCallModal
-                visible={callModalVisible}
-                enquiry={callEnquiry}
-                onSave={handleSaveCallLog}
-                initialDuration={autoDuration}
-                autoCallData={autoCallData}
-                onCancel={() => {
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setCallStarted(false);
-                    setAutoCallData(null);
-                }}
-            />
 
             <AppSideMenu
                 visible={menuVisible}
@@ -5463,6 +5873,7 @@ export default function FollowUpScreen({ navigation, route }) {
                     const active = activeTab === t.value;
                     const accent = t.color || C.primary;
                     const count = Number(tabCounts?.[t.value] || 0);
+                    const isToday = t.value === "Today";
                     return (
                         <TouchableOpacity
                             key={t.value}
@@ -5472,6 +5883,15 @@ export default function FollowUpScreen({ navigation, route }) {
                                 active && {
                                     backgroundColor: accent + "16",
                                     borderColor: accent,
+                                    borderWidth: isToday && active ? 2 : 1,
+                                    shadowColor:
+                                        isToday && active
+                                            ? accent
+                                            : "transparent",
+                                    shadowOffset: { width: 0, height: 2 },
+                                    shadowOpacity: isToday && active ? 0.15 : 0,
+                                    shadowRadius: 4,
+                                    elevation: isToday && active ? 3 : 0,
                                 },
                             ]}
                             activeOpacity={0.8}>
@@ -5526,7 +5946,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 })}
             </ScrollView>
 
-            {/* ── List ── */}
+            {/* Feature #2: Auto-load pagination on scroll (using FlatList) */}
             <FlatList
                 data={followUps}
                 keyExtractor={keyExtractor}
@@ -5536,25 +5956,24 @@ export default function FollowUpScreen({ navigation, route }) {
                         paddingHorizontal: sc.hPad,
                         paddingTop: 10,
                         paddingBottom: 90,
+                        backgroundColor:
+                            activeTab === "Today" ? "#F5F3FF" : C.bg,
                     },
-                    followUps.length === 0 && { flex: 1 },
+                    followUps.length === 0 && { flexGrow: 1 },
                 ]}
-                refreshing={isLoading && followUps.length > 0}
-                onRefresh={() =>
+                refreshing={isRefreshing}
+                onRefresh={() => {
+                    setIsRefreshing(true);
                     fetchFollowUps(activeTab, true, {
                         force: true,
-                        showIndicator: true,
+                        showIndicator: false,
                         allowCache: false,
-                    })
-                }
-                onEndReached={() => {
-                    if (!isLoading && !isLoadingMore && hasMore)
-                        fetchFollowUps(activeTab, false);
+                    }).finally(() => setIsRefreshing(false));
                 }}
+                // Feature #2: Auto-load pagination on scroll
+                onEndReached={handleEndReached}
                 onEndReachedThreshold={0.5}
-                initialNumToRender={10}
-                maxToRenderPerBatch={10}
-                windowSize={10}
+                numColumns={1}
                 // Android + complex cards (shadows/animations) can flicker with clipping enabled.
                 removeClippedSubviews={Platform.OS !== "android"}
                 ListFooterComponent={
@@ -5991,6 +6410,23 @@ export default function FollowUpScreen({ navigation, route }) {
                                             {date?.day}
                                         </Text>
                                         <View style={MS.calCountRow}>
+                                            {/* OPTIMIZATION FIX: Show only top 3 badges (most important) */}
+                                            {/* This reduces rendering complexity and speeds up calendar */}
+
+                                            {/* Priority 1: Missed (red) - most critical */}
+                                            {summary.missed > 0 ? (
+                                                <View
+                                                    style={[MS.calMissedBadge]}>
+                                                    <Text
+                                                        style={[
+                                                            MS.calMissedBadgeText,
+                                                        ]}>
+                                                        M+{summary.missed}
+                                                    </Text>
+                                                </View>
+                                            ) : null}
+
+                                            {/* Priority 2: Followup (blue) - most common */}
                                             {summary.followup > 0 ? (
                                                 <View
                                                     style={[
@@ -6008,17 +6444,8 @@ export default function FollowUpScreen({ navigation, route }) {
                                                     </Text>
                                                 </View>
                                             ) : null}
-                                            {summary.missed > 0 ? (
-                                                <View
-                                                    style={[MS.calMissedBadge]}>
-                                                    <Text
-                                                        style={[
-                                                            MS.calMissedBadgeText,
-                                                        ]}>
-                                                        M+{summary.missed}
-                                                    </Text>
-                                                </View>
-                                            ) : null}
+
+                                            {/* Priority 3: Sales (green) - revenue */}
                                             {summary.sales > 0 ? (
                                                 <View
                                                     style={[
@@ -6036,38 +6463,30 @@ export default function FollowUpScreen({ navigation, route }) {
                                                     </Text>
                                                 </View>
                                             ) : null}
-                                            {summary.drop > 0 ? (
+
+                                            {/* Show "+" indicator if there are hidden badges (Drop + Not Interested) */}
+                                            {summary.drop > 0 ||
+                                            summary.notInterested > 0 ? (
                                                 <View
                                                     style={[
-                                                        MS.calDropBadge,
+                                                        MS.calCountBadge,
                                                         isSelected &&
-                                                            MS.calStatusBadgeSelected,
+                                                            MS.calCountBadgeSelected,
+                                                        {
+                                                            minWidth: 16,
+                                                            paddingHorizontal: 3,
+                                                        },
                                                     ]}>
                                                     <Text
                                                         style={[
-                                                            MS.calDropBadgeText,
+                                                            MS.calCountBadgeText,
                                                             isSelected &&
-                                                                MS.calStatusBadgeTextSelected,
+                                                                MS.calCountBadgeTextSelected,
+                                                            {
+                                                                fontSize: 9,
+                                                            },
                                                         ]}>
-                                                        D+{summary.drop}
-                                                    </Text>
-                                                </View>
-                                            ) : null}
-                                            {summary.notInterested > 0 ? (
-                                                <View
-                                                    style={[
-                                                        MS.calNotInterestedBadge,
-                                                        isSelected &&
-                                                            MS.calStatusBadgeSelected,
-                                                    ]}>
-                                                    <Text
-                                                        style={[
-                                                            MS.calNotInterestedBadgeText,
-                                                            isSelected &&
-                                                                MS.calStatusBadgeTextSelected,
-                                                        ]}>
-                                                        N+
-                                                        {summary.notInterested}
+                                                        +
                                                     </Text>
                                                 </View>
                                             ) : null}

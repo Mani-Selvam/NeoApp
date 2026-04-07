@@ -38,7 +38,6 @@ import {
     SafeAreaView,
     useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { PostCallModal } from "../components/PostCallModal";
 import AppSideMenu from "../components/AppSideMenu";
 import { EnquirySkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
@@ -75,7 +74,6 @@ const ENQUIRIES_CACHE_TTL_MS = Number(
     process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000,
 );
 
-// â”€â”€â”€ Design tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const C = {
     bg: "#F1F5F9",
     card: "#FFFFFF",
@@ -1057,9 +1055,6 @@ export default function EnquiryListScreen({ navigation, route }) {
     const [callEnquiry, setCallEnquiry] = useState(null);
     const [callStartTime, setCallStartTime] = useState(null);
     const [callStarted, setCallStarted] = useState(false);
-    const [callModalVisible, setCallModalVisible] = useState(false);
-    const [autoDuration, setAutoDuration] = useState(0);
-    const [autoCallData, setAutoCallData] = useState(null);
 
     const [menuVisible, setMenuVisible] = useState(false);
     const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -1307,59 +1302,58 @@ export default function EnquiryListScreen({ navigation, route }) {
             if (callStarted && callEnquiry) {
                 global.__callClaimedByScreen = true;
 
-                if (AUTO_SAVE_CALL_LOGS) {
-                    const mobile = callEnquiry?.mobile || "";
-                    const digits = String(mobile).replace(/\D/g, "");
-                    const callType = data?.callType || "Outgoing";
-                    const duration = Number(data?.duration || 0);
-                    const callTime = data?.callTime || new Date();
-                    const note = data?.note || "";
-                    const deviceCallId = data?.deviceCallId || null;
-                    const enquiryId =
-                        callEnquiry?._id ||
-                        callEnquiry?.enquiryId?._id ||
-                        callEnquiry?.enquiryId ||
-                        callEnquiry?.enqId;
+                // Auto-save call log without user input
+                const mobile = callEnquiry?.mobile || "";
+                const digits = String(mobile).replace(/\D/g, "");
+                const rawCallType = data?.callType || "Outgoing";
+                const duration = Number(data?.duration || 0);
+                const callTime = data?.callTime || new Date();
+                const deviceCallId = data?.deviceCallId || null;
+                const enquiryId =
+                    callEnquiry?._id ||
+                    callEnquiry?.enquiryId?._id ||
+                    callEnquiry?.enquiryId ||
+                    callEnquiry?.enqId;
 
-                    Promise.resolve(
-                        callLogService.createCallLog({
-                            phoneNumber: digits,
-                            callType,
-                            duration,
-                            note,
-                            callTime,
-                            enquiryId,
-                            contactName: callEnquiry?.name,
-                            deviceCallId,
-                        }),
-                    )
-                        .then((saved) => {
-                            if (!saved?._id) return;
-                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-                            fetchEnquiries(true, {
-                                showIndicator: false,
-                                force: true,
-                                allowCache: true,
-                            });
-                        })
-                        .catch(() => {});
+                // 📊 Determine call type based on duration and direction
+                // Outgoing calls with 0 duration = "Not Attended" (not answered)
+                // Outgoing calls with duration > 0 = "Outgoing" (answered)
+                // Incoming calls with 0 duration = "Missed" (not answered)
+                // Incoming calls with duration > 0 = "Incoming" (answered)
+                let finalCallType = rawCallType;
+                const isOutgoing = rawCallType === "Outgoing";
+                const isIncoming = rawCallType === "Incoming";
 
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setAutoCallData(null);
-                    setAutoDuration(0);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                    return;
+                if (isOutgoing && duration === 0) {
+                    finalCallType = "Not Attended";
+                } else if (isIncoming && duration === 0) {
+                    finalCallType = "Missed";
                 }
 
-                setAutoCallData({
-                    callType: data?.callType,
-                    duration: Number(data?.duration || 0),
-                    note: data?.note,
-                });
-                setAutoDuration(Number(data?.duration || 0));
-                setCallModalVisible(true);
+                Promise.resolve(
+                    callLogService.createCallLog({
+                        phoneNumber: digits,
+                        callType: finalCallType,
+                        duration,
+                        note: "",
+                        callTime,
+                        enquiryId,
+                        contactName: callEnquiry?.name,
+                        deviceCallId,
+                    }),
+                )
+                    .then((saved) => {
+                        if (!saved?._id) return;
+                        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                        fetchEnquiries(true, {
+                            showIndicator: false,
+                            force: true,
+                            allowCache: true,
+                        });
+                    })
+                    .catch(() => {});
+
+                setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
@@ -1373,8 +1367,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                 next === "active" &&
                 callStarted &&
                 callStartTime &&
-                callEnquiry &&
-                !autoCallData
+                callEnquiry
             ) {
                 const device = await getLatestDeviceCallLogForNumber({
                     phoneNumber: callEnquiry.mobile,
@@ -1394,64 +1387,44 @@ export default function EnquiryListScreen({ navigation, route }) {
                     ? Number(device.duration)
                     : durFallback;
 
-                setAutoCallData({
-                    callType: finalCallType,
-                    duration: finalDuration,
-                    note: device
-                        ? "Auto-detected from device call log"
-                        : `Fallback timer. Duration: ${finalDuration}s`,
-                });
-                setAutoDuration(finalDuration);
+                // Auto-save call log
+                const mobile = callEnquiry?.mobile || "";
+                const digits = String(mobile).replace(/\D/g, "");
+                const enquiryId =
+                    callEnquiry?._id ||
+                    callEnquiry?.enquiryId?._id ||
+                    callEnquiry?.enquiryId ||
+                    callEnquiry?.enqId;
+                const deviceCallId = device?.deviceCallId || null;
 
-                if (AUTO_SAVE_CALL_LOGS) {
-                    const mobile = callEnquiry?.mobile || "";
-                    const digits = String(mobile).replace(/\D/g, "");
-                    const enquiryId =
-                        callEnquiry?._id ||
-                        callEnquiry?.enquiryId?._id ||
-                        callEnquiry?.enquiryId ||
-                        callEnquiry?.enqId;
-                    const deviceCallId = device?.deviceCallId || null;
-
-                    try {
-                        const saved = await callLogService.createCallLog({
-                            phoneNumber: digits,
-                            callType: finalCallType,
-                            duration: finalDuration,
-                            note: device
-                                ? "Auto-detected from device call log"
-                                : `Fallback timer. Duration: ${finalDuration}s`,
-                            callTime: device?.callTime || new Date(),
-                            enquiryId,
-                            contactName: callEnquiry?.name,
-                            deviceCallId,
+                try {
+                    const saved = await callLogService.createCallLog({
+                        phoneNumber: digits,
+                        callType: finalCallType,
+                        duration: finalDuration,
+                        note: "",
+                        callTime: device?.callTime || new Date(),
+                        enquiryId,
+                        contactName: callEnquiry?.name,
+                        deviceCallId,
+                    });
+                    if (saved?._id) {
+                        DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
+                        fetchEnquiries(true, {
+                            showIndicator: false,
+                            force: true,
+                            allowCache: true,
                         });
-                        if (saved?._id) {
-                            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-                            fetchEnquiries(true, {
-                                showIndicator: false,
-                                force: true,
-                                allowCache: true,
-                            });
-                        }
-                    } catch (_e) {}
+                    }
+                } catch (_e) {}
 
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setAutoCallData(null);
-                    setAutoDuration(0);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                    return;
-                }
-
-                setCallModalVisible(true);
+                setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
         });
         return () => sub.remove();
-    }, [callStarted, callStartTime, callEnquiry, autoCallData]);
+    }, [callStarted, callStartTime, callEnquiry]);
 
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () =>
@@ -1548,8 +1521,6 @@ export default function EnquiryListScreen({ navigation, route }) {
             return;
         }
         setCallEnquiry(enquiry);
-        setAutoCallData(null);
-        setAutoDuration(0);
         setCallStarted(true);
         setCallStartTime(Date.now());
         try {
@@ -1571,35 +1542,6 @@ export default function EnquiryListScreen({ navigation, route }) {
             );
         }
     }, []);
-
-    const handleSaveCallLog = async (data) => {
-        try {
-            const pendingEnquiry = callEnquiry;
-            const saved = await callLogService.createCallLog(data);
-            if (!saved?._id) return;
-            setCallModalVisible(false);
-            setCallEnquiry(null);
-            setAutoCallData(null);
-            DeviceEventEmitter.emit("CALL_LOG_CREATED", saved);
-            fetchEnquiries(true, {
-                showIndicator: false,
-                force: true,
-                allowCache: true,
-            });
-            if (data?.followUpCreated && pendingEnquiry) {
-                setTimeout(() => {
-                    navigation.navigate("FollowUp", {
-                        openComposer: true,
-                        composerToken: `${Date.now()}`,
-                        enquiry: pendingEnquiry,
-                        autoOpenForm: true,
-                    });
-                }, 250);
-            }
-        } catch (e) {
-            console.error(e);
-        }
-    };
 
     const handleWhatsApp = useCallback(
         (enquiry) => {
@@ -1886,20 +1828,6 @@ export default function EnquiryListScreen({ navigation, route }) {
         <SafeAreaView style={S.root} edges={["top"]}>
             <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
 
-            <PostCallModal
-                visible={callModalVisible}
-                enquiry={callEnquiry}
-                onSave={handleSaveCallLog}
-                initialDuration={autoDuration}
-                autoCallData={autoCallData}
-                onCancel={() => {
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setCallStarted(false);
-                    setAutoCallData(null);
-                }}
-            />
-
             <AppSideMenu
                 visible={menuVisible}
                 onClose={() => setMenuVisible(false)}
@@ -1983,7 +1911,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                         </View>
                     </View>
                     <View style={S.headerRight}>
-                        <TouchableOpacity
+                        {/* <TouchableOpacity
                             style={[S.headerBtn, S.headerBtnPrimary]}
                             accessibilityRole="button"
                             accessibilityLabel="Add website URL"
@@ -1993,7 +1921,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                                 size={20}
                                 color={C.primary}
                             />
-                        </TouchableOpacity>
+                        </TouchableOpacity> */}
 
                         <TouchableOpacity
                             style={S.profileBtn}

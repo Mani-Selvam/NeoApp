@@ -109,11 +109,12 @@ const saveCsvToDevice = async ({ fileName, content }) => {
 
     if (Platform.OS === "android" && FileSystem.StorageAccessFramework) {
         const writeToDirectory = async (directoryUri) => {
-            const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
-                directoryUri,
-                fileName,
-                "text/csv",
-            );
+            const targetUri =
+                await FileSystem.StorageAccessFramework.createFileAsync(
+                    directoryUri,
+                    fileName,
+                    "text/csv",
+                );
             await FileSystem.writeAsStringAsync(targetUri, content, {
                 encoding: FileSystem.EncodingType.UTF8,
             });
@@ -140,7 +141,9 @@ const saveCsvToDevice = async ({ fileName, content }) => {
                         String(permission.directoryUri),
                     );
                 } catch {}
-                const targetUri = await writeToDirectory(permission.directoryUri);
+                const targetUri = await writeToDirectory(
+                    permission.directoryUri,
+                );
                 return { uri: targetUri, downloaded: true };
             }
         } catch (error) {
@@ -671,7 +674,9 @@ export default function ReportScreen({ navigation }) {
     const loadReportData = useCallback(
         async ({ force = false, showLoading = true } = {}) => {
             let usedCache = false;
-            const cached = await getCacheEntry(reportCacheKey).catch(() => null);
+            const cached = await getCacheEntry(reportCacheKey).catch(
+                () => null,
+            );
             if (cached?.value) {
                 setReportData(cached.value);
                 usedCache = true;
@@ -1105,22 +1110,22 @@ export default function ReportScreen({ navigation }) {
                         .join(","),
                 ),
             ].join("\n");
-	            const fileName = `report-leads-${exportDate}.csv`;
-	            const savedFile = await saveCsvToDevice({
-	                fileName,
-	                content: csvText,
-	            });
+            const fileName = `report-leads-${exportDate}.csv`;
+            const savedFile = await saveCsvToDevice({
+                fileName,
+                content: csvText,
+            });
 
-	            Promise.resolve(
-	                notificationService.showReportCsvReadyNotification?.({
-	                    uri: savedFile?.uri,
-	                    fileName,
-	                }),
-	            ).catch(() => {});
+            Promise.resolve(
+                notificationService.showReportCsvReadyNotification?.({
+                    uri: savedFile?.uri,
+                    fileName,
+                }),
+            ).catch(() => {});
 
-	            if (savedFile.downloaded) {
-	                Alert.alert(
-	                    "Download Complete",
+            if (savedFile.downloaded) {
+                Alert.alert(
+                    "Download Complete",
                     `${fileName} saved successfully.`,
                 );
             } else if (available) {
@@ -1165,38 +1170,43 @@ export default function ReportScreen({ navigation }) {
                 <Text style={st.topHeaderTitle}>Reports</Text>
                 <View style={st.topHeaderRight}>
                     <View style={st.topHeaderRightRow}>
-                    <TouchableOpacity
-                        style={st.exportHeaderBtn}
-                        onPress={exportReport}
-                        activeOpacity={0.85}>
-                        <Ionicons
-                            name="download-outline"
-                            size={15}
-                            color={C.gold}
-                        />
-                        <Text style={st.exportHeaderText}>Download CSV</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={st.avatarBtn}
-                        activeOpacity={0.85}
-                        onPress={() => navigation.navigate("ProfileScreen")}>
-                        <LinearGradient
-                            colors={[C.sky, C.teal]}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 1 }}
-                            style={st.avatarGrad}>
-                            {user?.logo ? (
-                                <Image
-                                    source={{ uri: getImageUrl(user.logo) }}
-                                    style={st.avatarImg}
-                                />
-                            ) : (
-                                <Text style={st.avatarText}>
-                                    {user?.name?.[0]?.toUpperCase?.() ?? "M"}
-                                </Text>
-                            )}
-                        </LinearGradient>
-                    </TouchableOpacity>
+                        <TouchableOpacity
+                            style={st.exportHeaderBtn}
+                            onPress={exportReport}
+                            activeOpacity={0.85}>
+                            <Ionicons
+                                name="download-outline"
+                                size={15}
+                                color={C.gold}
+                            />
+                            <Text style={st.exportHeaderText}>
+                                Download CSV
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={st.avatarBtn}
+                            activeOpacity={0.85}
+                            onPress={() =>
+                                navigation.navigate("ProfileScreen")
+                            }>
+                            <LinearGradient
+                                colors={[C.sky, C.teal]}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={st.avatarGrad}>
+                                {user?.logo ? (
+                                    <Image
+                                        source={{ uri: getImageUrl(user.logo) }}
+                                        style={st.avatarImg}
+                                    />
+                                ) : (
+                                    <Text style={st.avatarText}>
+                                        {user?.name?.[0]?.toUpperCase?.() ??
+                                            "M"}
+                                    </Text>
+                                )}
+                            </LinearGradient>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </View>
@@ -1257,10 +1267,10 @@ export default function ReportScreen({ navigation }) {
                                     icon: "checkmark-circle-outline",
                                 },
                                 {
-                                    label: "Interested",
-                                    value: leadM.qualified,
-                                    color: C.sky,
-                                    icon: "sparkles-outline",
+                                    label: "Drop",
+                                    value: leadM.lost,
+                                    color: C.rose,
+                                    icon: "close-circle-outline",
                                 },
                                 {
                                     label: "Revenue",

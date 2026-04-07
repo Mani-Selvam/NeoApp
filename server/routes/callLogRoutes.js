@@ -624,15 +624,34 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
 
             if (existingLog) continue;
 
-            // determine proper call type rather than blindly defaulting
+            // Determine proper call type with intelligent fallback
             let callTypeToSave = normalizeCallType(rawCallType);
-            if (!callTypeToSave) {
-                // if device didn't supply a type we can infer based on duration
-                const dur = pickDurationSeconds(log);
-                callTypeToSave = dur > 0 ? "Incoming" : "Missed";
-            }
-
             const durationSeconds = pickDurationSeconds(log);
+
+            if (!callTypeToSave) {
+                // If device didn't supply a type, infer intelligently based on duration
+                // and any direction hints from the raw data
+                const hasOutgoingHint = /outgoing|dialed|placed|sent/i.test(
+                    String(rawCallType || ""),
+                );
+
+                if (durationSeconds === 0) {
+                    // 0 duration: "Missed" for incoming (default), "Not Attended" for outgoing
+                    callTypeToSave = hasOutgoingHint
+                        ? "Not Attended"
+                        : "Missed";
+                } else {
+                    // Duration > 0: "Outgoing" if hint exists, otherwise "Incoming"
+                    callTypeToSave = hasOutgoingHint ? "Outgoing" : "Incoming";
+                }
+            } else if (durationSeconds === 0) {
+                // Call came through with a type but 0 duration - mark as not answered
+                if (callTypeToSave === "Outgoing") {
+                    callTypeToSave = "Not Attended";
+                } else if (callTypeToSave === "Incoming") {
+                    callTypeToSave = "Missed";
+                }
+            }
 
             const newLog = new CallLog({
                 userId: ownerId,
@@ -654,6 +673,9 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
                 isRead: log.isRead !== false,
                 countryCode: log.countryCode,
                 note: `Synced from Device (${rawCallType || "unknown"})`,
+                isPendingCallback:
+                    callTypeToSave === "Missed" ||
+                    callTypeToSave === "Not Attended",
             });
 
             await newLog.save();
@@ -717,34 +739,44 @@ router.post("/sync-batch", verifyToken, async (req, res) => {
 
 // LOG A NEW CALL
 router.post("/", verifyToken, async (req, res) => {
-	    try {
-	        const { phoneNumber, callType, duration, note, enquiryId, callTime } =
-	            req.body;
+    try {
+        const { phoneNumber, callType, duration, note, enquiryId, callTime } =
+            req.body;
 
-	        const ownerId = getOwnerId(req);
+        const ownerId = getOwnerId(req);
 
-	        const cleanNum = (phoneNumber || "").replace(/\D/g, "");
-	        if (!cleanNum)
-	            return res.status(400).json({ message: "Invalid phone number" });
+        const cleanNum = (phoneNumber || "").replace(/\D/g, "");
+        if (!cleanNum)
+            return res.status(400).json({ message: "Invalid phone number" });
 
-	        const deviceCallId = pickRequestDeviceCallId(req);
-	        if (deviceCallId) {
-	            const existingByDeviceId = await CallLog.findOne({
-	                userId: ownerId,
-	                id: deviceCallId,
-	            }).lean();
-	            if (existingByDeviceId) {
-	                return res.status(200).json({
-	                    ...existingByDeviceId,
-	                    deduped: true,
-	                });
-	            }
-	        }
+        const deviceCallId = pickRequestDeviceCallId(req);
+        if (deviceCallId) {
+            const existingByDeviceId = await CallLog.findOne({
+                userId: ownerId,
+                id: deviceCallId,
+            }).lean();
+            if (existingByDeviceId) {
+                return res.status(200).json({
+                    ...existingByDeviceId,
+                    deduped: true,
+                });
+            }
+        }
 
-	        // Try to find an existing enquiry for this phone number if not provided
-	        let linkedEnquiryId = enquiryId;
-	        let contactName = req.body.contactName;
-	        const normalizedCallType = normalizeCallType(callType) || callType;
+        // Try to find an existing enquiry for this phone number if not provided
+        let linkedEnquiryId = enquiryId;
+        let contactName = req.body.contactName;
+        let normalizedCallType = normalizeCallType(callType) || callType;
+        const durationValue = duration || 0;
+
+        // 📊 Smart call type determination based on duration
+        // Outgoing calls with 0 duration should be "Not Attended"
+        // Incoming calls with 0 duration should be "Missed"
+        if (normalizedCallType === "Outgoing" && durationValue === 0) {
+            normalizedCallType = "Not Attended";
+        } else if (normalizedCallType === "Incoming" && durationValue === 0) {
+            normalizedCallType = "Missed";
+        }
 
         if (!linkedEnquiryId) {
             const existingEnquiry = await findEnquiryByPhone(
@@ -798,15 +830,15 @@ router.post("/", verifyToken, async (req, res) => {
             // do not block logging on dedupe failures
         }
 
-	        const newCallLog = new CallLog({
-	            userId: ownerId,
-	            staffId: req.userId,
-	            id: deviceCallId,
-	            phoneNumber: cleanNum,
-	            contactName,
-	            enquiryId: linkedEnquiryId,
-	            callType: normalizedCallType,
-	            duration: duration || 0,
+        const newCallLog = new CallLog({
+            userId: ownerId,
+            staffId: req.userId,
+            id: deviceCallId,
+            phoneNumber: cleanNum,
+            contactName,
+            enquiryId: linkedEnquiryId,
+            callType: normalizedCallType,
+            duration: duration || 0,
             businessNumber:
                 req.user.mobile ||
                 req.body.businessNumber ||
@@ -814,37 +846,40 @@ router.post("/", verifyToken, async (req, res) => {
             note,
             callTime: callTime || new Date(),
             followUpCreated: req.body.followUpCreated || false,
-	            isPendingCallback: normalizedCallType === "Missed",
-	            isPersonal: false,
-	        });
+            isPendingCallback:
+                normalizedCallType === "Missed" ||
+                normalizedCallType === "Not Attended",
+            isPersonal: false,
+        });
 
-	        let savedLog;
-	        try {
-	            savedLog = await newCallLog.save();
-	        } catch (e) {
-	            if (deviceCallId && e?.code === 11000) {
-	                const existingByDeviceId = await CallLog.findOne({
-	                    userId: ownerId,
-	                    id: deviceCallId,
-	                });
-	                if (existingByDeviceId) {
-	                    return res.status(200).json({
-	                        ...existingByDeviceId.toObject(),
-	                        deduped: true,
-	                    });
-	                }
-	            }
-	            throw e;
-	        }
+        let savedLog;
+        try {
+            savedLog = await newCallLog.save();
+        } catch (e) {
+            if (deviceCallId && e?.code === 11000) {
+                const existingByDeviceId = await CallLog.findOne({
+                    userId: ownerId,
+                    id: deviceCallId,
+                });
+                if (existingByDeviceId) {
+                    return res.status(200).json({
+                        ...existingByDeviceId.toObject(),
+                        deduped: true,
+                    });
+                }
+            }
+            throw e;
+        }
 
-	        emitCallLogCreated(req, savedLog, ownerId, req.userId);
+        emitCallLogCreated(req, savedLog, ownerId, req.userId);
 
         // If linked to an enquiry, update the enquiry's last contacted timestamp
         if (linkedEnquiryId) {
             const now = new Date();
             const dur = Number(savedLog?.duration || 0);
             const shouldMarkContacted =
-                ["Incoming", "Outgoing"].includes(savedLog?.callType) && dur > 0;
+                ["Incoming", "Outgoing"].includes(savedLog?.callType) &&
+                dur > 0;
 
             await Enquiry.findOneAndUpdate(
                 { _id: linkedEnquiryId, status: { $ne: "Converted" } },
@@ -865,7 +900,12 @@ router.post("/", verifyToken, async (req, res) => {
                         enquiryId: linkedEnquiryId,
                         isPendingCallback: true,
                     },
-                    { $set: { isPendingCallback: false, lastContactedAt: now } },
+                    {
+                        $set: {
+                            isPendingCallback: false,
+                            lastContactedAt: now,
+                        },
+                    },
                 );
             }
         }

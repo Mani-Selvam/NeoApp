@@ -532,11 +532,27 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
             return res.status(400).json({ message: "Missing required fields" });
         }
 
+        // 📷 Properly handle image: ensure it's a string or null
         let imageData = null;
         if (req.file) {
             imageData = `/uploads/${req.file.filename}`;
         } else if (req.body.image) {
-            imageData = req.body.image;
+            // Ensure image is a valid string
+            if (typeof req.body.image === "string" && req.body.image.trim()) {
+                imageData = req.body.image.trim();
+            } else if (
+                typeof req.body.image === "object" &&
+                Object.keys(req.body.image).length === 0
+            ) {
+                // Empty object {} - ignore it, keep imageData as null
+                imageData = null;
+            } else if (
+                typeof req.body.image === "string" &&
+                !req.body.image.trim()
+            ) {
+                // Empty string - ignore it
+                imageData = null;
+            }
         }
 
         const ownerId =
@@ -1016,8 +1032,22 @@ router.put("/:id", verifyToken, upload.single("image"), async (req, res) => {
             // File was uploaded via multipart/form-data
             updateData.image = `/uploads/${req.file.filename}`;
         } else if (req.body.image) {
-            // Image sent as base64 or URI string in JSON
-            updateData.image = req.body.image;
+            // 📷 Image sent as base64 or URI string in JSON - ensure it's a valid string
+            if (typeof req.body.image === "string" && req.body.image.trim()) {
+                updateData.image = req.body.image.trim();
+            } else if (
+                typeof req.body.image === "object" &&
+                Object.keys(req.body.image).length === 0
+            ) {
+                // Empty object {} - remove it
+                delete updateData.image;
+            } else if (
+                typeof req.body.image === "string" &&
+                !req.body.image.trim()
+            ) {
+                // Empty string - remove it
+                delete updateData.image;
+            }
         }
 
         let enquiry;
