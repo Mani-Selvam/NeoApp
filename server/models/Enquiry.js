@@ -105,12 +105,14 @@ const backfillMissingCompanyIds = async () => {
     const UserModel = mongoose.models.User;
     if (!UserModel) return;
 
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    const start = Date.now();
+    const maxMs = Number(process.env.BACKFILL_COMPANY_IDS_MAX_MS || 45000);
+    while (Date.now() - start < maxMs) {
       const enquiries = await Enquiry.find({
         $or: [{ companyId: { $exists: false } }, { companyId: null }],
       })
         .select("_id userId")
-        .limit(200)
+        .limit(1000)
         .lean();
 
       if (!enquiries.length) break;

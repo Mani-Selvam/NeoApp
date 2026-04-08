@@ -174,24 +174,24 @@ const getFollowUpAccessScope = async (req) => {
     const companyId = req.user?.company_id;
 
     if (role === "staff") {
+        const scopingFilter = { assignedTo: userId };
+        if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
+            scopingFilter.companyId = new mongoose.Types.ObjectId(companyId);
+        }
         return {
-            ownerUserIds: [req.user?.parentUserId || userId],
-            scopingFilter: { assignedTo: userId },
+            ownerUserIds: [],
+            scopingFilter,
         };
     }
 
     if (companyId) {
-        const companyUsers = await User.find({ company_id: companyId })
-            .select("_id")
-            .lean();
-
-        const ownerUserIds = companyUsers
-            .map((u) => u._id)
-            .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
-
+        const scopingFilter = {};
+        if (mongoose.Types.ObjectId.isValid(String(companyId))) {
+            scopingFilter.companyId = new mongoose.Types.ObjectId(companyId);
+        }
         return {
-            ownerUserIds: ownerUserIds.length > 0 ? ownerUserIds : [userId],
-            scopingFilter: {},
+            ownerUserIds: [],
+            scopingFilter,
         };
     }
 
@@ -208,6 +208,12 @@ const buildFollowUpScopedFilter = (scope) => {
           )
         : [];
 
+    if (ownerUserIds.length === 0) {
+        return {
+            ...(scope?.scopingFilter || {}),
+        };
+    }
+
     const userId =
         ownerUserIds.length <= 1
             ? ownerUserIds[0] || null
@@ -222,7 +228,20 @@ const buildFollowUpScopedFilter = (scope) => {
 const SALES_REGEX = /^(sales|converted)$/i;
 const DROP_REGEX = /^(drop|dropped|closed|not interested)$/i;
 const COMPLETED_REGEX = /^completed$/i;
-const CURRENT_FOLLOWUP_CLAUSE = { isCurrent: { $ne: false } };
+const CURRENT_FOLLOWUP_CLAUSE = { isCurrent: true };
+
+// In production, multiple screens hit /followups repeatedly (counts + lists).
+// Auto-marking missed followups via updateMany on every request can become very slow.
+// Throttle this work to run at most once per scope window.
+const AUTO_MISSED_SYNC_TTL_MS = Number(process.env.AUTO_MISSED_SYNC_TTL_MS || 20000);
+const lastAutoMissSyncAt = new Map();
+const shouldRunAutoMissSync = (key) => {
+    const now = Date.now();
+    const last = lastAutoMissSyncAt.get(key) || 0;
+    if (now - last < AUTO_MISSED_SYNC_TTL_MS) return false;
+    lastAutoMissSyncAt.set(key, now);
+    return true;
+};
 
 const emitFollowUpChanged = async (req, payload = {}) => {
     try {
@@ -276,57 +295,63 @@ router.get("/dashboard", verifyToken, async (req, res) => {
         const nowMinutes = getClientNowMinutes(tzOffsetMinutes);
 
         // Proactive auto-marker: Mark items as Missed if their dueAt has passed (for today or past)
-        try {
-            await FollowUp.updateMany(
-                {
-                    ...baseFilter,
-                    ...CURRENT_FOLLOWUP_CLAUSE,
-                    status: { $nin: ["Completed", "Dropped", "Converted", "Missed"] },
-                    $or: [
-                        { date: { $lt: clientIsoDate } },
-                        { date: clientIsoDate, dueAt: { $lt: now } },
-                    ],
-                },
-                { $set: { status: "Missed" } },
-            );
+        const autoSyncKey = `fuDash:${String(companyId || "")}:${String(userId || "")}:${clientIsoDate}`;
+        if (shouldRunAutoMissSync(autoSyncKey)) {
+            try {
+                await FollowUp.updateMany(
+                    {
+                        ...baseFilter,
+                        ...CURRENT_FOLLOWUP_CLAUSE,
+                        status: { $nin: ["Completed", "Dropped", "Converted", "Missed"] },
+                        $or: [
+                            { date: { $lt: clientIsoDate } },
+                            { date: clientIsoDate, dueAt: { $lt: now } },
+                        ],
+                    },
+                    { $set: { status: "Missed" } },
+                );
 
-            // Auto-unmiss: if a Missed follow-up gets rescheduled into the future, keep lists/counts correct.
-            await FollowUp.updateMany(
-                {
+                // Auto-unmiss: if a Missed follow-up gets rescheduled into the future, keep lists/counts correct.
+                await FollowUp.updateMany(
+                    {
+                        ...baseFilter,
+                        ...CURRENT_FOLLOWUP_CLAUSE,
+                        status: "Missed",
+                        $or: [
+                            { date: { $gt: clientIsoDate } },
+                            { date: clientIsoDate, dueAt: { $gt: now } },
+                        ],
+                    },
+                    { $set: { status: "Scheduled" } },
+                );
+
+                // Legacy (no dueAt): if time is still ahead today, it's not missed.
+                const legacyRows = await FollowUp.find({
                     ...baseFilter,
                     ...CURRENT_FOLLOWUP_CLAUSE,
                     status: "Missed",
-                    $or: [{ date: { $gt: clientIsoDate } }, { date: clientIsoDate, dueAt: { $gt: now } }],
-                },
-                { $set: { status: "Scheduled" } },
-            );
-
-            // Legacy (no dueAt): if time is still ahead today, it's not missed.
-            const legacyRows = await FollowUp.find({
-                ...baseFilter,
-                ...CURRENT_FOLLOWUP_CLAUSE,
-                status: "Missed",
-                date: clientIsoDate,
-                time: { $exists: true, $ne: null, $ne: "" },
-                $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
-            })
-                .select("_id time")
-                .limit(500)
-                .lean();
-            const legacyUnmissIds = legacyRows
-                .filter((row) => {
-                    const mins = parseTimeToMinutes(row?.time);
-                    return mins != null && mins > nowMinutes;
+                    date: clientIsoDate,
+                    time: { $exists: true, $ne: null, $ne: "" },
+                    $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
                 })
-                .map((row) => row._id);
-            if (legacyUnmissIds.length > 0) {
-                await FollowUp.updateMany(
-                    { _id: { $in: legacyUnmissIds } },
-                    { $set: { status: "Scheduled" } },
-                );
+                    .select("_id time")
+                    .limit(500)
+                    .lean();
+                const legacyUnmissIds = legacyRows
+                    .filter((row) => {
+                        const mins = parseTimeToMinutes(row?.time);
+                        return mins != null && mins > nowMinutes;
+                    })
+                    .map((row) => row._id);
+                if (legacyUnmissIds.length > 0) {
+                    await FollowUp.updateMany(
+                        { _id: { $in: legacyUnmissIds } },
+                        { $set: { status: "Scheduled" } },
+                    );
+                }
+            } catch (_autoErr) {
+                console.error("[Dashboard] Auto-mark Missed failed:", _autoErr.message);
             }
-        } catch (_autoErr) {
-            console.error("[Dashboard] Auto-mark Missed failed:", _autoErr.message);
         }
 
         const [
@@ -342,16 +367,22 @@ router.get("/dashboard", verifyToken, async (req, res) => {
             FollowUp.countDocuments({ ...baseFilter, ...CURRENT_FOLLOWUP_CLAUSE, date: clientIsoDate, status: { $ne: "Missed" } }),
             FollowUp.countDocuments({ ...baseFilter, ...CURRENT_FOLLOWUP_CLAUSE, status: "Missed" }),
             Enquiry.countDocuments({
-                ...(scope.ownerUserIds.length === 1 ? { userId: scope.ownerUserIds[0] } : { userId: { $in: scope.ownerUserIds } }),
-                ...(scope.scopingFilter || {}),
+                ...(baseFilter?.companyId ? { companyId: baseFilter.companyId } : {}),
+                ...(baseFilter?.assignedTo ? { assignedTo: baseFilter.assignedTo } : {}),
                 status: "Converted",
             }),
             FollowUp.countDocuments({ ...baseFilter, ...CURRENT_FOLLOWUP_CLAUSE, status: "Dropped" }),
             FollowUp.find({ ...baseFilter, ...CURRENT_FOLLOWUP_CLAUSE })
+                .select(
+                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo createdAt activityTime",
+                )
                 .limit(parseInt(pageSize))
                 .sort({ date: -1, createdAt: -1 })
                 .lean(),
             FollowUp.find({ ...baseFilter, ...CURRENT_FOLLOWUP_CLAUSE, status: "Missed" })
+                .select(
+                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo createdAt activityTime",
+                )
                 .limit(50)
                 .sort({ date: -1 })
                 .lean(),
@@ -398,7 +429,8 @@ router.get("/", verifyToken, async (req, res) => {
         let query = buildFollowUpScopedFilter(scope);
 
         // Proactive auto-marker: Mark items as Missed if their dueAt has passed (for today or past)
-        if (isRealToday) {
+        const listAutoSyncKey = `fuList:${String(req.user?.company_id || "")}:${String(req.userId || "")}:${realToday}`;
+        if (isRealToday && shouldRunAutoMissSync(listAutoSyncKey)) {
             try {
                 await FollowUp.updateMany(
                     {
@@ -464,13 +496,8 @@ router.get("/", verifyToken, async (req, res) => {
             if (dateTo) query.date.$lte = dateTo;
         }
 
-        // Exclude system and call log patterns
-        query.$nor = [
-            { activityType: "System" },
-            { type: "System" },
-            { note: { $regex: /^Call:/i } },
-            { remarks: { $regex: /^Call:/i } },
-        ];
+        // Exclude system-generated rows (avoid regex filters here; they force collection scans in production).
+        query.$nor = [{ activityType: "System" }, { type: "System" }];
 
         // Status logic
         if (tab === "Today") {
@@ -485,8 +512,10 @@ router.get("/", verifyToken, async (req, res) => {
             Object.assign(query, CURRENT_FOLLOWUP_CLAUSE);
         } else if (tab === "Sales") {
             query.status = "Converted";
+            Object.assign(query, CURRENT_FOLLOWUP_CLAUSE);
         } else if (tab === "Dropped") {
             query.status = "Dropped";
+            Object.assign(query, CURRENT_FOLLOWUP_CLAUSE);
         } else if (tab === "All") {
             Object.assign(query, CURRENT_FOLLOWUP_CLAUSE);
         }
@@ -494,11 +523,19 @@ router.get("/", verifyToken, async (req, res) => {
         const pageNum = parseInt(page);
         const limitNum = parseInt(limit);
         const skip = (pageNum - 1) * limitNum;
-        const sortOrder = tab === "Upcoming" ? 1 : -1;
+        const sort =
+            tab === "Today"
+                ? { dueAt: 1, activityTime: -1, createdAt: -1 }
+                : tab === "Upcoming"
+                  ? { date: 1, dueAt: 1, activityTime: -1, createdAt: -1 }
+                  : { date: -1, dueAt: -1, activityTime: -1, createdAt: -1 };
 
         const followUps = await FollowUp.find(query)
+            .select(
+                "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo createdAt activityTime",
+            )
             .populate("assignedTo", "name")
-            .sort({ date: sortOrder, activityTime: -1, createdAt: -1 })
+            .sort(sort)
             .skip(skip)
             .limit(limitNum + 1)
             .lean();

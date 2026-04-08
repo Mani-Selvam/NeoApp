@@ -75,6 +75,8 @@ followUpSchema.index({ userId: 1, enqNo: 1, isCurrent: 1, date: -1 });
 
 // Multi-tenant + list endpoints (preferred: companyId first)
 followUpSchema.index({ companyId: 1, date: -1, status: 1, isCurrent: 1 });
+followUpSchema.index({ companyId: 1, userId: 1, isCurrent: 1, status: 1, date: -1, dueAt: 1 });
+followUpSchema.index({ companyId: 1, assignedTo: 1, isCurrent: 1, status: 1, date: -1, dueAt: 1 });
 followUpSchema.index({
     companyId: 1,
     assignedTo: 1,
@@ -148,8 +150,17 @@ followUpSchema.pre("validate", function syncLegacyFields() {
     return Number.isNaN(dt.getTime()) ? null : dt;
   };
 
-  const dueAt = parseDueAt(dateStr, timeStr);
-  if (dueAt) this.dueAt = dueAt;
+  const currentDueAt = this.dueAt instanceof Date ? this.dueAt : this.dueAt ? new Date(this.dueAt) : null;
+  const hasValidDueAt = currentDueAt && !Number.isNaN(currentDueAt.getTime());
+
+  // IMPORTANT:
+  // `dueAt` should represent the true scheduled moment (absolute time). Routes may already set it
+  // using the user's timezone offset. Avoid overwriting it here using server-local time (production
+  // servers often run UTC, which would shift dueAt and break "Missed" logic).
+  if (!hasValidDueAt) {
+    const dueAt = parseDueAt(dateStr, timeStr);
+    if (dueAt) this.dueAt = dueAt;
+  }
 });
 
 // Ensure indexes + backfill companyId for multi-tenant queries.
@@ -161,12 +172,14 @@ const backfillMissingCompanyIds = async () => {
         const UserModel = mongoose.models.User;
         if (!UserModel) return;
 
-        for (let attempt = 0; attempt < 30; attempt += 1) {
+        const start = Date.now();
+        const maxMs = Number(process.env.BACKFILL_COMPANY_IDS_MAX_MS || 45000);
+        while (Date.now() - start < maxMs) {
             const rows = await FollowUp.find({
                 $or: [{ companyId: { $exists: false } }, { companyId: null }],
             })
                 .select("_id userId")
-                .limit(300)
+                .limit(1000)
                 .lean();
             if (!rows.length) break;
 
@@ -209,10 +222,35 @@ const backfillMissingCompanyIds = async () => {
     }
 };
 
+const backfillMissingIsCurrent = async () => {
+    try {
+        if (mongoose.connection.readyState !== 1) return;
+        const start = Date.now();
+        const maxMs = Number(process.env.BACKFILL_IS_CURRENT_MAX_MS || 20000);
+        while (Date.now() - start < maxMs) {
+            const rows = await FollowUp.find({
+                $or: [{ isCurrent: { $exists: false } }, { isCurrent: null }],
+            })
+                .select("_id")
+                .limit(500)
+                .lean();
+            if (!rows.length) break;
+            const ids = rows.map((r) => r._id);
+            await FollowUp.updateMany(
+                { _id: { $in: ids } },
+                { $set: { isCurrent: true } },
+            );
+        }
+    } catch (_error) {
+        // ignore startup migration issues
+    }
+};
+
 const ensureFollowUpIndexes = async () => {
     try {
         if (mongoose.connection.readyState !== 1) return;
         await backfillMissingCompanyIds();
+        await backfillMissingIsCurrent();
         await FollowUp.syncIndexes().catch(() => {});
     } catch (_error) {
         // ignore startup index migration issues

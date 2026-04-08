@@ -7,6 +7,34 @@ const User = require("../models/User");
 const { verifyToken } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
 
+// Throttle expensive "auto-mark Missed" maintenance in production.
+const AUTO_MISSED_SYNC_TTL_MS = Number(process.env.AUTO_MISSED_SYNC_TTL_MS || 20000);
+const lastAutoMissSyncAt = new Map();
+const shouldRunAutoMissSync = (key) => {
+    const now = Date.now();
+    const last = lastAutoMissSyncAt.get(key) || 0;
+    if (now - last < AUTO_MISSED_SYNC_TTL_MS) return false;
+    lastAutoMissSyncAt.set(key, now);
+    return true;
+};
+
+// Cache company user ids to avoid repeated User.find() on every dashboard refresh.
+const COMPANY_USER_CACHE_TTL_MS = Number(process.env.COMPANY_USER_CACHE_TTL_MS || 60000);
+const companyUserIdCache = new Map(); // key -> { at:number, ids:ObjectId[] }
+const getCompanyUserIdsCached = async (companyId) => {
+    const key = String(companyId || "");
+    const now = Date.now();
+    const hit = companyUserIdCache.get(key);
+    if (hit && now - hit.at < COMPANY_USER_CACHE_TTL_MS) return hit.ids || [];
+
+    const rows = await User.find({ company_id: companyId }).select("_id").lean();
+    const ids = (rows || [])
+        .map((u) => u?._id)
+        .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
+    companyUserIdCache.set(key, { at: now, ids });
+    return ids;
+};
+
 const toLocalIsoDate = (d = new Date()) => {
     const dt = d instanceof Date ? d : new Date(d);
     const y = dt.getFullYear();
@@ -197,15 +225,15 @@ router.get("/summary", verifyToken, async (req, res) => {
             query.userId = new mongoose.Types.ObjectId(req.user?.parentUserId || userId);
             query.assignedTo = new mongoose.Types.ObjectId(userId);
         } else if (companyId) {
-            const companyUsers = await User.find({ company_id: companyId })
-                .select("_id")
-                .lean();
-            const ownerUserIds = companyUsers
-                .map((u) => u._id)
-                .filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
-
-            if (ownerUserIds.length > 0) {
-                query.userId = { $in: ownerUserIds };
+            const companyObjId = mongoose.Types.ObjectId.isValid(String(companyId))
+                ? new mongoose.Types.ObjectId(companyId)
+                : null;
+            if (companyObjId) {
+                const ownerUserIds = await getCompanyUserIdsCached(companyId);
+                query.$or = [{ companyId: companyObjId }];
+                if (ownerUserIds.length > 0) {
+                    query.$or.push({ userId: { $in: ownerUserIds } });
+                }
             } else {
                 query.userId = new mongoose.Types.ObjectId(userId);
             }
@@ -215,7 +243,8 @@ router.get("/summary", verifyToken, async (req, res) => {
 
         // ⚡ RUN AUTO-MARK BEFORE CACHE: Keep missed status fresh for today, 
         // including legacy rows that don't have `dueAt` yet.
-        if (isRealToday) {
+        const autoSyncKey = `dash:${String(req.user?.company_id || "")}:${String(req.userId || "")}:${realToday}`;
+        if (isRealToday && shouldRunAutoMissSync(autoSyncKey)) {
             try {
                 // Main update for rows with dueAt
                 await FollowUp.updateMany(

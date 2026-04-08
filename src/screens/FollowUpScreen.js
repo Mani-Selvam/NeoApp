@@ -4760,12 +4760,12 @@ export default function FollowUpScreen({ navigation, route }) {
         try {
             const todayIso = toIso(new Date());
             const [missedResponse, todayResponse] = await Promise.all([
-                followupService.getFollowUps("Missed", 1, 200, referenceDate),
+                followupService.getFollowUps("Missed", 1, 50, referenceDate),
                 referenceDate === todayIso
                     ? followupService.getFollowUps(
                           "Today",
                           1,
-                          200,
+                          50,
                           referenceDate,
                       )
                     : Promise.resolve(null),
@@ -4810,7 +4810,7 @@ export default function FollowUpScreen({ navigation, route }) {
             const response = await followupService.getFollowUps(
                 "Dropped",
                 1,
-                200,
+                50,
                 "",
             );
             const rawItems = Array.isArray(response?.data)

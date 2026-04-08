@@ -384,11 +384,12 @@ const AttachmentPill = ({ attachment, onClear }) => {
 // ─── MAIN SCREEN ─────────────────────────────────────────────────────────────
 export default function CommunicationScreen({ navigation }) {
     const insets = useSafeAreaInsets();
-    const { height: windowHeight } = useWindowDimensions();
+    const { height: windowHeight, width: windowWidth } = useWindowDimensions();
     const { user } = useAuth();
     const selfId = String(user?.id || user?._id || "");
     const isAdminUser = String(user?.role || "").toLowerCase() === "admin";
     const isCompactHeight = windowHeight < 760;
+    const isWideLayout = windowWidth >= 768;
 
     const [view, setView] = useState("list");
     const [tab, setTab] = useState("Chats");
@@ -2004,6 +2005,8 @@ export default function CommunicationScreen({ navigation }) {
                     </View>
                 </KeyboardAvoidingView>
 
+                {renderTaskModal()}
+
                 <Modal
                     visible={Boolean(previewImageUri)}
                     transparent
@@ -2166,78 +2169,108 @@ export default function CommunicationScreen({ navigation }) {
             taskAttachment?.uri,
         );
         const isEditingTask = Boolean(editingTaskId);
+        const sheetHeight = Math.max(
+            420,
+            Math.min(
+                windowHeight - insets.top - insets.bottom - 24,
+                Math.round(windowHeight * (isCompactHeight ? 0.92 : 0.82)),
+            ),
+        );
         return (
             <Modal
                 visible={showTaskModal}
-                animationType="slide"
+                transparent
+                statusBarTranslucent
+                animationType="fade"
                 onRequestClose={() => {
                     if (taskSaving) return;
                     setShowTaskModal(false);
                     resetTaskComposer();
                 }}>
                 <View style={S.taskModalOverlay}>
+                    <TouchableOpacity
+                        style={S.modalBackdrop}
+                        activeOpacity={1}
+                        onPress={() => {
+                            if (taskSaving) return;
+                            setShowTaskModal(false);
+                            resetTaskComposer();
+                        }}
+                    />
                     <KeyboardAvoidingView
                         style={S.taskModalKav}
-                        behavior={Platform.OS === "ios" ? "padding" : undefined}
+                        behavior={Platform.OS === "ios" ? "padding" : "height"}
                         keyboardVerticalOffset={
                             Platform.OS === "ios" ? insets.top + 8 : 0
                         }>
                         <View
                             style={[
                                 S.taskModalSheet,
-                                { paddingBottom: insets.bottom + 14 },
+                                isWideLayout && S.taskModalSheetWide,
+                                { height: sheetHeight, paddingBottom: insets.bottom + 14 },
                             ]}>
-                            <View style={S.modalHdr}>
-                                <View>
-                                    <Text style={S.modalEye}>
-                                        {isEditingTask
-                                            ? "EDIT TASK"
-                                            : "NEW TASK"}
-                                    </Text>
-                                    <Text style={S.modalTitle}>
-                                        {isEditingTask
-                                            ? "Edit Task"
-                                            : "Create Task"}
-                                    </Text>
-                                </View>
-                                <TouchableOpacity
-                                    onPress={() => {
-                                        if (taskSaving) return;
-                                        setShowTaskModal(false);
-                                        resetTaskComposer();
-                                    }}
-                                    style={S.modalClose}>
-                                    <Ionicons
-                                        name="close"
-                                        size={18}
-                                        color={T.mid}
-                                    />
-                                </TouchableOpacity>
-                            </View>
-                            <View style={S.modalDivider} />
-                            <ScrollView
-                                contentContainerStyle={[
-                                    S.taskModalBody,
-                                    isCompactHeight && S.modalBodyCompact,
-                                    { paddingBottom: insets.bottom + 26 },
-                                ]}
-                                keyboardShouldPersistTaps="always"
-                                keyboardDismissMode={
-                                    Platform.OS === "ios"
-                                        ? "interactive"
-                                        : "on-drag"
-                                }
-                                showsVerticalScrollIndicator={false}>
-                                <Text style={S.fLbl}>TITLE</Text>
-                                <TextInput
-                                    style={S.fInput}
-                                    placeholder="Task title"
-                                    placeholderTextColor={T.mute}
-                                    value={taskForm.title}
-                                    onChangeText={(v) =>
-                                        setTaskForm((p) => ({ ...p, title: v }))
-                                    }
-                                />
+                            <View
+                                style={[
+                                    S.taskModalCard,
+                                    isWideLayout
+                                        ? S.taskModalCardWide
+                                        : S.taskModalCardPhone,
+                                ]}>
+                                 <View style={S.modalHdr}>
+                                     <View style={S.modalHdrText}>
+                                         <Text style={S.modalEye}>
+                                             {isEditingTask
+                                                 ? "EDIT TASK"
+                                                 : "NEW TASK"}
+                                         </Text>
+                                         <Text style={S.modalTitle}>
+                                             {isEditingTask
+                                                 ? "Edit Task"
+                                                 : "Create Task"}
+                                         </Text>
+                                     </View>
+                                     <TouchableOpacity
+                                         onPress={() => {
+                                             if (taskSaving) return;
+                                             setShowTaskModal(false);
+                                             resetTaskComposer();
+                                         }}
+                                         style={S.modalClose}>
+                                         <Ionicons
+                                             name="close"
+                                             size={18}
+                                             color={T.mid}
+                                         />
+                                     </TouchableOpacity>
+                                 </View>
+                                 <View style={S.modalDivider} />
+                                 <ScrollView
+                                     style={S.taskModalScroll}
+                                     contentContainerStyle={[
+                                         S.taskModalBody,
+                                         isCompactHeight && S.modalBodyCompact,
+                                         { paddingBottom: insets.bottom + 26 },
+                                     ]}
+                                     keyboardShouldPersistTaps="always"
+                                     keyboardDismissMode={
+                                         Platform.OS === "ios"
+                                             ? "interactive"
+                                             : "on-drag"
+                                     }
+                                     showsVerticalScrollIndicator={false}>
+                                     <Text style={S.fLbl}>TITLE</Text>
+                                     <TextInput
+                                         style={S.fInput}
+                                         placeholder="Task title"
+                                         placeholderTextColor={T.mute}
+                                         value={taskForm.title}
+                                         onChangeText={(v) =>
+                                             setTaskForm((p) => ({
+                                                 ...p,
+                                                 title: v,
+                                             }))
+                                         }
+                                     />
                                 <Text style={S.fLbl}>DESCRIPTION</Text>
                                 <TextInput
                                     style={[S.fInput, S.fInputArea]}
@@ -2419,6 +2452,7 @@ export default function CommunicationScreen({ navigation }) {
                                     )}
                                 </TouchableOpacity>
                             </ScrollView>
+                            </View>
                         </View>
                     </KeyboardAvoidingView>
                 </View>
@@ -4390,13 +4424,16 @@ const S = StyleSheet.create({
     },
     taskModalOverlay: {
         flex: 1,
-        backgroundColor: T.bg,
+        backgroundColor: "rgba(11,20,28,0.38)",
+        justifyContent: "center",
+        paddingHorizontal: 14,
+        paddingVertical: 12,
     },
     modalBackdrop: {
         ...StyleSheet.absoluteFillObject,
     },
     modalKav: { flex: 1, justifyContent: "flex-end" },
-    taskModalKav: { flex: 1 },
+    taskModalKav: { flex: 1, justifyContent: "center" },
     modalSheet: {
         backgroundColor: T.bg,
         borderTopLeftRadius: 22,
@@ -4407,11 +4444,30 @@ const S = StyleSheet.create({
     },
     modalSheetCompact: { maxHeight: "94%" },
     taskModalSheet: {
+        width: "100%",
+        alignSelf: "center",
+        backgroundColor: "transparent",
+    },
+    taskModalSheetWide: {
+        maxWidth: 780,
+    },
+    taskModalCard: {
         flex: 1,
+        width: "100%",
         backgroundColor: T.bg,
-        borderTopLeftRadius: 0,
-        borderTopRightRadius: 0,
-        paddingTop: 10,
+        overflow: "hidden",
+    },
+    taskModalCardWide: {
+        alignSelf: "center",
+        maxWidth: 760,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: T.line,
+    },
+    taskModalCardPhone: {
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: T.line,
     },
     modalPull: {
         width: 40,
@@ -4423,9 +4479,15 @@ const S = StyleSheet.create({
     },
     modalHdr: {
         flexDirection: "row",
-        alignItems: "flex-start",
+        alignItems: "center",
         justifyContent: "space-between",
         paddingHorizontal: 20,
+        paddingTop: 10,
+        paddingBottom: 8,
+    },
+    modalHdrText: {
+        flex: 1,
+        paddingRight: 12,
     },
     modalEye: {
         fontSize: 10,
@@ -4433,13 +4495,14 @@ const S = StyleSheet.create({
         color: T.mute,
         letterSpacing: 1.4,
         textTransform: "uppercase",
-        marginBottom: 4,
+        marginBottom: 2,
     },
     modalTitle: {
         fontSize: 22,
         fontWeight: "800",
         color: T.ink,
         letterSpacing: -0.4,
+        lineHeight: 28,
     },
     modalClose: {
         width: 30,
@@ -4460,6 +4523,7 @@ const S = StyleSheet.create({
     modalBody: { paddingHorizontal: 20, paddingBottom: 18 },
     taskModalBody: { paddingHorizontal: 20, paddingBottom: 18 },
     modalBodyCompact: { paddingBottom: 10 },
+    taskModalScroll: { flex: 1 },
 
     fLbl: {
         fontSize: 10,
