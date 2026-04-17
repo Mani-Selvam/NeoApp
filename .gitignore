@@ -79,7 +79,3 @@ temp/
 
 coverage/
 
-# Firebase
-
-google-services.json
-GoogleService-Info.plist
