@@ -564,6 +564,24 @@ router.get("/", verifyToken, async (req, res) => {
             limit = 20,
         } = req.query;
 
+        // ⚡ Short-lived cache (20s) — invalidated on create/update/delete
+        const fuCacheKey = cache.key("followups", {
+            uid: String(req.userId || ""),
+            cid: String(req.user?.company_id || ""),
+            role: String(req.user?.role || ""),
+            tab: String(tab || ""),
+            status: String(status || ""),
+            assignedTo: String(assignedTo || ""),
+            activityType: String(activityType || ""),
+            date: String(date || ""),
+            dateFrom: String(dateFrom || ""),
+            dateTo: String(dateTo || ""),
+            tz: String(tzOffsetMinutes || ""),
+            page: String(page),
+            limit: String(limit),
+        });
+        const fuCacheTtlMs = 20000;
+
         const referenceDate = date || toClientIsoDate(tzOffsetMinutes);
         const realToday = toClientIsoDate(tzOffsetMinutes);
         const isRealToday = referenceDate === realToday;
@@ -696,30 +714,34 @@ router.get("/", verifyToken, async (req, res) => {
                   ? { date: 1, dueAt: 1, activityTime: -1, createdAt: -1 }
                   : { date: -1, dueAt: -1, activityTime: -1, createdAt: -1 };
 
-        const followUps = await FollowUp.find(query)
-            .select(
-                "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo staffName createdAt activityTime",
-            )
-            .populate("assignedTo", "name")
-            .sort(sort)
-            .skip(skip)
-            .limit(limitNum + 1)
-            .lean();
+        const { data: fuResponse } = await cache.wrap(fuCacheKey, async () => {
+            const followUps = await FollowUp.find(query)
+                .select(
+                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo staffName createdAt activityTime",
+                )
+                .populate("assignedTo", "name")
+                .sort(sort)
+                .skip(skip)
+                .limit(limitNum + 1)
+                .lean();
 
-        const hasMore = followUps.length > limitNum;
-        if (hasMore) followUps.pop();
+            const hasMore = followUps.length > limitNum;
+            if (hasMore) followUps.pop();
 
-        res.json({
-            data: followUps,
-            pagination: {
-                total: hasMore
-                    ? pageNum * limitNum + 1
-                    : skip + followUps.length,
-                page: pageNum,
-                limit: limitNum,
-                pages: hasMore ? pageNum + 1 : pageNum,
-            },
-        });
+            return {
+                data: followUps,
+                pagination: {
+                    total: hasMore
+                        ? pageNum * limitNum + 1
+                        : skip + followUps.length,
+                    page: pageNum,
+                    limit: limitNum,
+                    pages: hasMore ? pageNum + 1 : pageNum,
+                },
+            };
+        }, fuCacheTtlMs);
+
+        res.json(fuResponse);
     } catch (err) {
         console.error("Get follow-ups error:", err);
         res.status(500).json({ message: err.message });

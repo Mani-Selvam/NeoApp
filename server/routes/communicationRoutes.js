@@ -9,6 +9,7 @@ const User = require("../models/User");
 const Enquiry = require("../models/Enquiry");
 const { verifyToken } = require("../middleware/auth");
 const { requireCompany, requireRole } = require("../middleware/tenant");
+const { getCompanyUserIds } = require("../utils/companyUsersCache");
 const {
   buildSafeUploadName,
   createFileFilter,
@@ -486,9 +487,10 @@ router.post(
 
       const enquiryId = String(req.body.relatedEnquiryId || "").trim();
       if (enquiryId) {
+        const companyUserIds = await getCompanyUserIds(req.companyId);
         const enquiry = await Enquiry.findOne({
           _id: enquiryId,
-          userId: { $in: await User.find({ company_id: req.companyId }).distinct("_id") },
+          userId: { $in: companyUserIds },
         })
           .select("_id")
           .lean();

@@ -370,8 +370,27 @@ router.get("/", verifyToken, async (req, res) => {
             page = 1,
             limit = 20,
         } = req.query;
-        const response = await (async () => {
-            const scope = await getEnquiryAccessScope(req);
+
+        // ⚡ Short-lived cache (25s) — invalidated on create/update/delete
+        // Skip cache for search queries so results are always fresh
+        const cacheTtlMs = search ? 0 : 25000;
+        const cacheKey = cache.key("enquiries", {
+            uid: String(req.userId || ""),
+            cid: String(req.user?.company_id || ""),
+            role: String(req.user?.role || ""),
+            search: String(search || ""),
+            status: String(status || ""),
+            date: String(date || ""),
+            followUpDate: String(followUpDate || ""),
+            dateFrom: String(dateFrom || ""),
+            dateTo: String(dateTo || ""),
+            assignedTo: String(assignedTo || ""),
+            page: String(page),
+            limit: String(limit),
+        });
+
+        const { data: response } = await cache.wrap(cacheKey, async () => {
+        const scope = await getEnquiryAccessScope(req);
             let query = buildOwnerScopedFilter(scope);
 
             if (!query.userId) {
@@ -530,7 +549,7 @@ router.get("/", verifyToken, async (req, res) => {
                     pages: hasMore ? pageNum + 1 : pageNum,
                 },
             };
-        })();
+        }, cacheTtlMs);
 
         res.json(response);
     } catch (err) {

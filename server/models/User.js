@@ -90,6 +90,9 @@ userSchema.index(
 
 // Frequent tenant lookup
 userSchema.index({ company_id: 1 });
+// Fast active-staff listing (used by every communication/team query)
+userSchema.index({ company_id: 1, status: 1 });
+userSchema.index({ company_id: 1, role: 1, status: 1 });
 
 userSchema.pre("save", async function () {
     this.updatedAt = new Date();

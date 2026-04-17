@@ -32,6 +32,9 @@ const callLogSchema = new mongoose.Schema({
 callLogSchema.index({ userId: 1, callTime: -1 });
 callLogSchema.index({ userId: 1, callType: 1 });
 callLogSchema.index({ staffId: 1, callTime: -1 });
+// Compound: list page (admin sees all staff, filtered by isPersonal)
+callLogSchema.index({ userId: 1, staffId: 1, callTime: -1 });
+callLogSchema.index({ userId: 1, isPersonal: 1, callTime: -1 });
 callLogSchema.index({ phoneNumber: 1 });
 callLogSchema.index({ contactName: "text", phoneNumber: "text" }); // For text search if needed later
 callLogSchema.index({ enquiryId: 1 });

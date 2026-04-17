@@ -319,6 +319,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                         $or: [{ dueAt: null }, { dueAt: { $exists: false } }],
                     })
                         .select("_id time")
+                        .limit(500)
                         .lean();
 
                     if (Array.isArray(legacyRows) && legacyRows.length > 0) {
