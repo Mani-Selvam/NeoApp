@@ -14,64 +14,8 @@ const connectDB = require("./config/db");
 const { verifyToken } = require("./middleware/auth");
 const { requireActivePlan, requireFeature } = require("./middleware/planGuard");
 
-const defaultCorsOrigins = [
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-    "http://localhost:8081",
-    "http://localhost:8082",
-    "http://127.0.0.1:8081",
-    "http://127.0.0.1:8082",
-    "http://192.168.1.207:5000",
-    "http://192.168.1.207:5000",
-    "http://192.168.1.34:8081",
-    "http://192.168.1.33:8081",
-    "http://192.168.1.33:8082",
-    "http://192.168.1.16:8081",
-    "http://192.168.1.16:8082",
-    "http://192.168.1.33:8082",
-    "http://192.168.63.77:8081",
-    "http://192.168.63.77:8082",
-    "http://10.38.44.235:8081",
-    "http://10.38.44.220:8081",
-    "http://10.38.44.235:8082",
-    "http://10.38.44.220:8082",
-    "exp://192.168.1.16:5000",
-    "exp://192.168.1.34:8081",
-    "exp://192.168.1.16:8081",
-    "exp://192.168.1.16:8082",
-    "exp://192.168.1.34:8082",
-    "exp://192.168.1.33:8081",
-    "exp://192.168.1.33:8082",
-    "exp://192.168.1.207:8081",
-    "exp://192.168.1.207:8082",
-    "exp://10.38.44.235:8081",
-    "exp://10.38.44.220:8081",
-    "exp://10.38.44.220:8082",
-    "exp://10.38.44.235:8082",
-    "exp://192.168.63.77:8081",
-    "exp://192.168.63.77:8082",
-    "http://localhost:19006",
-    "https://neophrondev.in",
-    "https://www.neophrondev.in",
-    "https://neoapp.neophrondev.in",
-    "https://neomobile.neophrondev.in",
-];
-
-const configuredCorsOrigins = (process.env.CORS_ORIGINS || "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-const allowedCorsOrigins = [
-    ...new Set([...defaultCorsOrigins, ...configuredCorsOrigins]),
-];
-
 const corsOriginHandler = (origin, callback) => {
-    if (!origin || allowedCorsOrigins.includes(origin)) {
-        return callback(null, true);
-    }
-
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
+    return callback(null, true);
 };
 
 // Init App
