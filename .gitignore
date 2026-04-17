@@ -58,6 +58,10 @@ metro-cache
 dist/
 build/
 
+# Replit config with secrets
+
+.replit
+
 # Temporary files
 
 tmp/
