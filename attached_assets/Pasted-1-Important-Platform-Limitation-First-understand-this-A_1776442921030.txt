@@ -1,0 +1,183 @@
+1️⃣ Important Platform Limitation
+
+First understand this:
+
+Android ✅
+
+Possible with permissions and services.
+
+iOS ❌
+
+Apple does NOT allow apps to read call logs or detect phone call details for privacy.
+Only Android apps can do this.
+
+So this solution is Android only.
+
+2️⃣ Overall Flow (Automatic)
+User phone call happens
+        ↓
+Android detects call state
+        ↓
+App service listens to call state
+        ↓
+Collect call details
+    • number
+    • incoming / outgoing / missed
+    • start time
+    • end time
+    • duration
+        ↓
+Filter by enquiry numbers (your DB)
+        ↓
+Save to app database
+        ↓
+Send to your server API
+        ↓
+Update CRM / dashboard
+
+Everything is automatic — no form needed.
+
+3️⃣ Call Detection Logic
+
+Use PhoneStateListener / BroadcastReceiver
+
+Call states:
+
+IDLE
+RINGING
+OFFHOOK
+State Meaning
+State	Meaning
+RINGING	Incoming call
+OFFHOOK	Call answered / outgoing
+IDLE	Call ended
+4️⃣ Real-Time Call Tracking Flow
+Incoming Call
+RINGING
+↓
+capture number
+↓
+store start time
+↓
+OFFHOOK (answered)
+↓
+IDLE (ended)
+↓
+calculate duration
+Missed Call
+RINGING
+↓
+IDLE
+↓
+Missed call
+Outgoing Call
+OFFHOOK
+↓
+capture number
+↓
+store start time
+↓
+IDLE
+↓
+calculate duration
+5️⃣ Data You Should Store
+
+Example object:
+
+{
+  number: "+919876543210",
+  call_type: "incoming",
+  start_time: "2026-04-17 10:15:22",
+  end_time: "2026-04-17 10:18:10",
+  duration: 168,
+  status: "connected",
+  device_id: "phone123",
+  synced: false
+}
+6️⃣ Android Permissions Required
+READ_CALL_LOG
+READ_PHONE_STATE
+PROCESS_OUTGOING_CALLS
+FOREGROUND_SERVICE
+READ_CONTACTS (optional)
+
+Also request runtime permissions.
+
+7️⃣ Background Service
+
+Create:
+
+Foreground Service
+
+Why?
+
+Because Android kills background apps.
+
+Service will:
+
+start on app launch
+↓
+run always
+↓
+listen call state
+↓
+send call data to server
+8️⃣ Enquiry Number Detection
+
+Your logic:
+
+if incoming number == enquiry number
+      apply call tracking
+else
+      ignore
+
+Example:
+
+enquiry_numbers = [
+   9876543210,
+   9123456780
+]
+9️⃣ Duration Calculation
+duration = call_end_time - call_start_time
+
+Example:
+
+start = 10:10:10
+end   = 10:12:40
+
+duration = 150 seconds
+🔟 Server API
+
+Send call data automatically.
+
+Example:
+
+POST /api/call-log
+
+Body:
+
+{
+  number:"9876543210",
+  type:"incoming",
+  duration:120,
+  start_time:"2026-04-17 10:00:00",
+  end_time:"2026-04-17 10:02:00"
+}
+1️⃣1️⃣ Full Auto Flow
+Call happens
+↓
+App detects call
+↓
+Call data captured
+↓
+Check enquiry number
+↓
+Calculate duration
+↓
+Save local DB
+↓
+Auto sync server
+↓
+Update CRM
+
+No form needed ✔

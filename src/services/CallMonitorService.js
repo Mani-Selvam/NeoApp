@@ -343,7 +343,6 @@ export const startCallMonitoring = async (userData = null) => {
         console.log('Call Monitoring: CallDetector native module not available; using device log sync only');
     } else {
         callDetector = new CallDetectorManager(
-        'neoapp-call-monitor',
         async (event) => {
             const ev = String(event || "").trim().toLowerCase();
             let cleanNum = currentNumber;
@@ -427,6 +426,7 @@ export const startCallMonitoring = async (userData = null) => {
                     break;
             }
         },
+        true,
     );
     }
 

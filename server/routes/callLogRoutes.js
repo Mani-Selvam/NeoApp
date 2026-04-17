@@ -1134,7 +1134,7 @@ router.get("/stats", verifyToken, async (req, res) => {
                         as: "staffInfo",
                     },
                 },
-                { $unwind: "$staffInfo" },
+                { $unwind: { path: "$staffInfo", preserveNullAndEmptyArrays: true } },
                 {
                     $project: {
                         name: "$staffInfo.name",

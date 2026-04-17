@@ -25,7 +25,12 @@ import {
     View,
 } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
-import RNImmediatePhoneCall from "react-native-immediate-phone-call";
+let RNImmediatePhoneCall = null;
+if (Platform.OS === "android") {
+    try {
+        RNImmediatePhoneCall = require("react-native-immediate-phone-call").default;
+    } catch (_e) {}
+}
 import {
     SafeAreaView,
     useSafeAreaInsets,

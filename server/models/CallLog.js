@@ -22,7 +22,7 @@ const callLogSchema = new mongoose.Schema({
     // Advanced Mobile Data
     id: String, // Device call log ID
     isVideoCall: { type: Boolean, default: false },
-    simSlot: Number,
+    simSlot: String,
     isRead: { type: Boolean, default: true },
     countryCode: String,
     isPersonal: { type: Boolean, default: false } // Flag to distinguish enquiry calls
