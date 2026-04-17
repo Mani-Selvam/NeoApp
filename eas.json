@@ -1,0 +1,60 @@
+{
+    "cli": {
+        "version": ">= 16.28.0",
+        "appVersionSource": "remote"
+    },
+    "build": {
+        "development": {
+            "developmentClient": true,
+            "distribution": "internal",
+            "android": {
+                "buildType": "apk"
+            },
+            "env": {
+                "NODE_ENV": "development",
+                "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api",
+                "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
+                "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "login-form-39e3e.firebaseapp.com",
+                "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "login-form-39e3e",
+                "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "login-form-39e3e.firebasestorage.app",
+                "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "168810107337",
+                "EXPO_PUBLIC_FIREBASE_APP_ID": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+            }
+        },
+        "preview": {
+            "distribution": "internal",
+            "android": {
+                "buildType": "apk"
+            },
+            "env": {
+                "NODE_ENV": "development",
+                "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api",
+                "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
+                "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "login-form-39e3e.firebaseapp.com",
+                "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "login-form-39e3e",
+                "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "login-form-39e3e.firebasestorage.app",
+                "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "168810107337",
+                "EXPO_PUBLIC_FIREBASE_APP_ID": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+            }
+        },
+        "production": {
+            "autoIncrement": true,
+            "android": {
+                "buildType": "app-bundle"
+            },
+            "env": {
+                "NODE_ENV": "production",
+                "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api",
+                "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
+                "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "login-form-39e3e.firebaseapp.com",
+                "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "login-form-39e3e",
+                "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET": "login-form-39e3e.firebasestorage.app",
+                "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "168810107337",
+                "EXPO_PUBLIC_FIREBASE_APP_ID": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+            }
+        }
+    },
+    "submit": {
+        "production": {}
+    }
+}

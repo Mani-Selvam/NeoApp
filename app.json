@@ -1,0 +1,80 @@
+{
+    "expo": {
+        "name": "NeoGroww",
+        "slug": "neoapp-manibro18",
+        "owner": "manibro18",
+        "version": "1.0.0",
+        "icon": "./src/assets/app-icon.png",
+        "orientation": "portrait",
+        "scheme": "myapp",
+        "userInterfaceStyle": "automatic",
+        "ios": {
+            "supportsTablet": true,
+            "bundleIdentifier": "com.mycompany.myapp",
+            "infoPlist": {
+                "ITSAppUsesNonExemptEncryption": false
+            }
+        },
+        "web": {
+            "output": "single",
+            "bundler": "metro"
+        },
+        "splash": {
+            "image": "./src/assets/app-icon.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#FFFFFF"
+        },
+        "android": {
+            "package": "com.mycompany.myapp",
+            "versionCode": 2,
+            "googleServicesFile": "./google-services.json",
+            "blockedPermissions": [
+                "android.permission.READ_CALL_LOG",
+                "android.permission.READ_PHONE_STATE",
+                "android.permission.PROCESS_OUTGOING_CALLS",
+                "android.permission.ANSWER_PHONE_CALLS",
+                "android.permission.READ_PHONE_NUMBERS",
+                "android.permission.READ_CONTACTS",
+                "android.permission.RECORD_AUDIO"
+            ],
+            "adaptiveIcon": {
+                "foregroundImage": "./src/assets/adaptive-icon-foreground.png",
+                "backgroundColor": "#FFFFFF"
+            },
+            "permissions": ["CALL_PHONE", "POST_NOTIFICATIONS"]
+        },
+        "plugins": [
+            "expo-notifications",
+            "expo-image-picker",
+            "expo-av",
+            "expo-video",
+            "expo-font",
+            [
+                "expo-build-properties",
+                {
+                    "android": {
+                        "compileSdkVersion": 36,
+                        "targetSdkVersion": 36,
+                        "ndkVersion": "26.1.10909125"
+                    }
+                }
+            ]
+        ],
+        "extra": {
+            "playStoreSafeMode": false,
+            "privacyPolicyUrl": "https://neophrondev.in/privacy/",
+            "accountDeletionUrl": "https://neophrondev.in/privacy/",
+            "firebase": {
+                "apiKey": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
+                "authDomain": "login-form-39e3e.firebaseapp.com",
+                "projectId": "login-form-39e3e",
+                "storageBucket": "login-form-39e3e.firebasestorage.app",
+                "messagingSenderId": "168810107337",
+                "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+            },
+            "eas": {
+                "projectId": "5cb5e452-0acc-4e9e-9224-6d8c8b3b440f"
+            }
+        }
+    }
+}
