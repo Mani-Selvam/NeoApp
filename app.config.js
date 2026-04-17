@@ -641,7 +641,19 @@ module.exports = ({ config }) => {
                     importance: 5,
                 },
 
-                // ─── Fallback Channels ───
+                // ─── Fallback / General Channels ───
+                // These match the channelIds sent by the backend for non-reminder
+                // notifications (e.g. new enquiry assigned, follow-up created).
+                // They MUST exist in the native manifest so Android can find them
+                // even before the app has ever opened (dynamic channels don't exist yet).
+                {
+                    id: "followups",
+                    name: "Follow-ups",
+                    sound: "default",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
                 {
                     id: "followups_en",
                     name: "Follow-ups (English)",
@@ -653,6 +665,22 @@ module.exports = ({ config }) => {
                 {
                     id: "followups_ta",
                     name: "Follow-ups (Tamil)",
+                    sound: "default",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "enquiries",
+                    name: "Enquiries",
+                    sound: "default",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "default",
+                    name: "Default",
                     sound: "default",
                     vibrationPattern: [0, 250, 250, 250],
                     enableVibrate: true,

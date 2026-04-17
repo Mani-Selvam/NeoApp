@@ -47,25 +47,18 @@ class FirebaseNotificationService {
                 await this.registerFCMToken(fcmToken);
 
                 console.log(
-                    "[FirebaseNotificationService] ✓ Background message handler set",
-                );
-                console.log(
                     "[FirebaseNotificationService] ✓ Foreground message handler set",
                 );
                 console.log(
                     "[FirebaseNotificationService] ✓ Notification opened handler set",
                 );
+                // Background handler is registered at App.js module level (before React mounts).
 
                 // Keep backend token fresh if Firebase rotates it.
                 const unsubscribeTokenRefresh = messaging().onTokenRefresh(
                     async (nextToken) => {
                         await this.registerFCMToken(nextToken);
                     },
-                );
-
-                // Handle background messages
-                messaging().setBackgroundMessageHandler(
-                    this.handleBackgroundMessage,
                 );
 
                 // Handle foreground messages

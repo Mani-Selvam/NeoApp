@@ -88,13 +88,12 @@ class FirebaseNotificationService {
                 notification: {
                     title: payload.title,
                     body: payload.body,
-                    sound: activitySound, // Activity-specific sound for Android
+                    // On Android 8.0+ (Oreo) the channel controls the sound —
+                    // the sound field here is for Android < 8. Do NOT set
+                    // defaultSound:true or it overrides the channel's custom sound.
                     channelId: payload.channelId || "followups_en",
-                    // Ensure sound plays in all states
-                    defaultSound: true,
                     notificationPriority: "PRIORITY_MAX",
                     tag: "notification",
-                    clickAction: "FLUTTER_NOTIFICATION_CLICK",
                 },
             },
             apns: {
