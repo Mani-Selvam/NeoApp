@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "NeoGroww",
-    "slug": "neoapp-manibro19",
-    "owner": "manibro19",
+    "slug": "neoapp-manibro20",
+    "owner": "manibro20",
     "version": "1.0.0",
     "icon": "./src/assets/app-icon.png",
     "orientation": "portrait",
@@ -76,7 +76,7 @@
         "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
       },
       "eas": {
-        "projectId": "a0d69cb3-83da-4db2-a361-08d60aa60a1b"
+        "projectId": "a9044684-74c7-407f-a95c-6a523de4274d"
       }
     }
   }
