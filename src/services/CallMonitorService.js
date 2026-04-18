@@ -537,16 +537,21 @@ const handleCallEnd = async (phoneNumber) => {
     // Emit CALL_ENDED event with all detected data.
     // If an enquiry screen is listening (user initiated the call from UI),
     // it will handle the modal. Otherwise, we auto-log it.
+    // Wait for Android to write the call log entry before reading it.
+    // Without this delay, getLatestDeviceCallLogForNumber returns null because
+    // the OS hasn't flushed the record yet, causing every call to be mis-logged.
+    await new Promise((r) => setTimeout(r, 2000));
+
     let deviceInfo = null;
     try {
         const since =
             callStartTime ||
             dialStartTime ||
-            Math.max(0, Date.now() - 10 * 60 * 1000);
+            Math.max(0, Date.now() - 12 * 60 * 1000);
         deviceInfo = await getLatestDeviceCallLogForNumber({
             phoneNumber: finalNumber,
             sinceMs: since,
-            limit: 10,
+            limit: 15,
         });
     } catch (_e) {
         deviceInfo = null;

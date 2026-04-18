@@ -858,6 +858,8 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
     const [historyTitle, setHistoryTitle] = useState("");
     const [historyLogs, setHistoryLogs] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [historyFilter, setHistoryFilter] = useState("All");
+    const [historyPhone, setHistoryPhone] = useState("");
     const [activeCall, setActiveCall] = useState(null);
     const [callMinimized, setCallMinimized] = useState(false);
     const [callTick, setCallTick] = useState(0);
@@ -1028,26 +1030,50 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
                 const phoneNumber = pc.phoneNumber;
                 const sinceMs = pc.startedAtMs || null;
 
+                // On Android the OS takes ~1-2 s to write the call log record.
+                // Reading immediately always returns null → every call is
+                // mis-classified as "Not Attended".  Wait before reading.
+                if (Platform.OS === "android") {
+                    await new Promise((r) => setTimeout(r, 2000));
+                }
+
                 const device = await getLatestDeviceCallLogForNumber({
                     phoneNumber,
                     sinceMs,
-                    limit: 10,
+                    limit: 15,
                 });
 
-                const fallbackDur =
+                // Time elapsed since the call was initiated (seconds).
+                const elapsedSec =
                     sinceMs != null
                         ? Math.max(
                               0,
                               Math.floor(
                                   (Date.now() - Number(sinceMs)) / 1000,
-                              ) - 5,
+                              ),
                           )
                         : Number(payload?.duration || 0);
 
+                // Best-effort call type resolution priority:
+                //  1. device call log (most reliable once written)
+                //  2. payload from CALL_ENDED native event
+                //  3. duration-based heuristic (outgoing stayed > 8 s → likely answered)
+                const payloadType = payload?.callType;
+                const heuristicType =
+                    elapsedSec > 8 ? "Outgoing" : "Not Attended";
                 const callType =
                     device?.callType ||
-                    payload?.callType ||
-                    (fallbackDur > 3 ? "Outgoing" : "Not Attended");
+                    (payloadType && payloadType !== "Not Attended"
+                        ? payloadType
+                        : null) ||
+                    heuristicType;
+
+                // Duration: device log is authoritative; fall back to payload
+                // or elapsed time (subtract ~5 s for ring + overhead).
+                const fallbackDur =
+                    sinceMs != null
+                        ? Math.max(0, elapsedSec - 5)
+                        : Number(payload?.duration || 0);
 
                 const duration = Number.isFinite(Number(device?.duration))
                     ? Number(device.duration)
@@ -1225,6 +1251,8 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
         const enquiryId = item?.enquiryId?._id || item?.enquiryId || "";
         if (!key && !enquiryId) return;
         setHistoryTitle(item?.contactName || item?.phoneNumber || "History");
+        setHistoryPhone(item?.phoneNumber || "");
+        setHistoryFilter("All");
         setHistoryVisible(true);
         setHistoryLoading(true);
         try {
@@ -1925,130 +1953,355 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
                 <View
                     style={{
                         flex: 1,
-                        backgroundColor: "rgba(15,23,42,0.5)",
+                        backgroundColor: "rgba(15,23,42,0.55)",
                         justifyContent: "flex-end",
                     }}>
                     <View
                         style={[
                             R.histSheet,
                             {
-                                maxHeight: sc.height * 0.82,
-                                width: Math.min(sc.width - 0, 600),
+                                maxHeight: sc.height * 0.85,
+                                width: Math.min(sc.width, 600),
                             },
                         ]}>
                         <View style={R.dragHandle} />
 
-                        {/* Header */}
+                        {/* ── Header: contact info + action buttons ── */}
                         <View
-                            style={[
-                                R.histHead,
-                                { paddingHorizontal: sc.hPad },
-                            ]}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={R.histTitle}>{historyTitle}</Text>
-                                <Text style={R.histSub}>Call history</Text>
-                            </View>
-                            <View style={{ flexDirection: "row", gap: 10 }}>
-                                <TouchableOpacity
-                                    style={R.histCallBtn}
-                                    onPress={() => {
-                                        const n = historyLogs[0];
-                                        if (n) {
-                                            setHistoryVisible(false);
-                                            initiateCall(n);
-                                        }
+                            style={{
+                                paddingHorizontal: sc.hPad,
+                                paddingBottom: 14,
+                            }}>
+                            <View
+                                style={{
+                                    flexDirection: "row",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                }}>
+                                <View
+                                    style={{
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        gap: 12,
+                                        flex: 1,
                                     }}>
-                                    <Ionicons
-                                        name="call"
-                                        size={16}
-                                        color={C.success}
+                                    <Avatar
+                                        name={historyTitle}
+                                        size={46}
                                     />
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={R.histCloseBtn}
-                                    onPress={() => setHistoryVisible(false)}>
-                                    <Ionicons
-                                        name="close"
-                                        size={16}
-                                        color={C.textSub}
-                                    />
-                                </TouchableOpacity>
+                                    <View style={{ flex: 1 }}>
+                                        <Text
+                                            style={R.histTitle}
+                                            numberOfLines={1}>
+                                            {historyTitle}
+                                        </Text>
+                                        {historyPhone ? (
+                                            <Text
+                                                style={{
+                                                    fontSize: 12,
+                                                    color: C.textMuted,
+                                                    marginTop: 1,
+                                                }}>
+                                                {historyPhone}
+                                            </Text>
+                                        ) : null}
+                                    </View>
+                                </View>
+                                <View
+                                    style={{
+                                        flexDirection: "row",
+                                        gap: 8,
+                                    }}>
+                                    <TouchableOpacity
+                                        style={R.histCallBtn}
+                                        onPress={() => {
+                                            const n = historyLogs[0];
+                                            if (n) {
+                                                setHistoryVisible(false);
+                                                initiateCall(n);
+                                            }
+                                        }}>
+                                        <Ionicons
+                                            name="call"
+                                            size={16}
+                                            color={C.success}
+                                        />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={R.histCloseBtn}
+                                        onPress={() =>
+                                            setHistoryVisible(false)
+                                        }>
+                                        <Ionicons
+                                            name="close"
+                                            size={16}
+                                            color={C.textSub}
+                                        />
+                                    </TouchableOpacity>
+                                </View>
                             </View>
                         </View>
+
+                        {/* ── Filter tabs with per-type counts ── */}
+                        {(() => {
+                            const HIST_FILTERS = [
+                                "All",
+                                "Missed",
+                                "Incoming",
+                                "Outgoing",
+                                "Not Attended",
+                            ];
+                            const counts = HIST_FILTERS.reduce((acc, f) => {
+                                acc[f] =
+                                    f === "All"
+                                        ? historyLogs.length
+                                        : historyLogs.filter(
+                                              (l) => l.callType === f,
+                                          ).length;
+                                return acc;
+                            }, {});
+                            return (
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    contentContainerStyle={{
+                                        paddingHorizontal: sc.hPad,
+                                        gap: 7,
+                                        paddingBottom: 12,
+                                    }}>
+                                    {HIST_FILTERS.map((f) => {
+                                        const active = historyFilter === f;
+                                        const cfg =
+                                            f !== "All" ? typeCfg(f) : null;
+                                        return (
+                                            <TouchableOpacity
+                                                key={f}
+                                                onPress={() =>
+                                                    setHistoryFilter(f)
+                                                }
+                                                style={[
+                                                    R.chip,
+                                                    active &&
+                                                        cfg && {
+                                                            backgroundColor:
+                                                                cfg.bg,
+                                                            borderColor:
+                                                                cfg.color,
+                                                        },
+                                                    active &&
+                                                        !cfg && {
+                                                            backgroundColor:
+                                                                C.primarySoft,
+                                                            borderColor:
+                                                                C.primary,
+                                                        },
+                                                ]}>
+                                                {cfg && (
+                                                    <Ionicons
+                                                        name={cfg.icon}
+                                                        size={10}
+                                                        color={
+                                                            active
+                                                                ? cfg.color
+                                                                : C.textMuted
+                                                        }
+                                                        style={{
+                                                            marginRight: 3,
+                                                        }}
+                                                    />
+                                                )}
+                                                <Text
+                                                    style={[
+                                                        R.chipText,
+                                                        active && {
+                                                            color: cfg
+                                                                ? cfg.color
+                                                                : C.primary,
+                                                            fontWeight: "700",
+                                                        },
+                                                    ]}>
+                                                    {f}
+                                                </Text>
+                                                <View
+                                                    style={{
+                                                        marginLeft: 4,
+                                                        backgroundColor: active
+                                                            ? cfg
+                                                                ? cfg.color
+                                                                : C.primary
+                                                            : C.border,
+                                                        borderRadius: 9,
+                                                        minWidth: 18,
+                                                        height: 18,
+                                                        alignItems: "center",
+                                                        justifyContent:
+                                                            "center",
+                                                        paddingHorizontal: 4,
+                                                    }}>
+                                                    <Text
+                                                        style={{
+                                                            fontSize: 10,
+                                                            fontWeight: "700",
+                                                            color: active
+                                                                ? "#fff"
+                                                                : C.textMuted,
+                                                        }}>
+                                                        {counts[f]}
+                                                    </Text>
+                                                </View>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ScrollView>
+                            );
+                        })()}
 
                         <View
                             style={{
                                 height: 1,
                                 backgroundColor: C.border,
                                 marginHorizontal: sc.hPad,
+                                marginBottom: 4,
                             }}
                         />
 
                         {historyLoading ? (
                             <View
                                 style={{
-                                    paddingVertical: 32,
+                                    paddingVertical: 40,
                                     alignItems: "center",
                                 }}>
                                 <ActivityIndicator
                                     size="small"
                                     color={C.primary}
                                 />
+                                <Text
+                                    style={{
+                                        marginTop: 10,
+                                        fontSize: 13,
+                                        color: C.textMuted,
+                                    }}>
+                                    Loading history…
+                                </Text>
                             </View>
                         ) : (
                             <FlatList
-                                data={historyLogs}
+                                data={historyLogs.filter(
+                                    (l) =>
+                                        historyFilter === "All" ||
+                                        l.callType === historyFilter,
+                                )}
                                 keyExtractor={(item, i) =>
                                     item?._id || `${item?.callTime}-${i}`
                                 }
                                 contentContainerStyle={{
-                                    padding: sc.hPad,
-                                    paddingBottom: 32,
+                                    paddingHorizontal: sc.hPad,
+                                    paddingTop: 6,
+                                    paddingBottom: 40,
                                 }}
                                 style={{
-                                    maxHeight: Math.min(sc.height * 0.5, 380),
+                                    maxHeight: Math.min(
+                                        sc.height * 0.52,
+                                        420,
+                                    ),
                                 }}
                                 renderItem={({ item }) => {
                                     const cfg = typeCfg(item?.callType);
+                                    const isAttended =
+                                        item?.callType === "Incoming" ||
+                                        item?.callType === "Outgoing";
+                                    const isMissedOrNA =
+                                        item?.callType === "Missed" ||
+                                        item?.callType === "Not Attended";
+                                    const hasDuration =
+                                        isAttended && item?.duration > 0;
                                     return (
                                         <View style={R.histRow}>
+                                            {/* Type icon */}
                                             <View
                                                 style={[
                                                     R.histIcon,
-                                                    { backgroundColor: cfg.bg },
+                                                    {
+                                                        backgroundColor:
+                                                            cfg.bg,
+                                                    },
                                                 ]}>
                                                 <Ionicons
                                                     name={cfg.icon}
-                                                    size={13}
+                                                    size={14}
                                                     color={cfg.color}
                                                 />
                                             </View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text
-                                                    style={[
-                                                        R.histType,
-                                                        {
-                                                            color:
-                                                                item?.callType ===
-                                                                "Missed"
+
+                                            {/* Middle: type label + date/time + duration */}
+                                            <View style={{ flex: 1, gap: 2 }}>
+                                                <View
+                                                    style={{
+                                                        flexDirection: "row",
+                                                        alignItems: "center",
+                                                        gap: 6,
+                                                    }}>
+                                                    <Text
+                                                        style={[
+                                                            R.histType,
+                                                            {
+                                                                color: isMissedOrNA
                                                                     ? C.danger
                                                                     : C.text,
-                                                        },
-                                                    ]}>
-                                                    {cfg.label}
-                                                </Text>
+                                                            },
+                                                        ]}>
+                                                        {cfg.label}
+                                                    </Text>
+                                                    {hasDuration && (
+                                                        <View
+                                                            style={{
+                                                                backgroundColor:
+                                                                    C.successSoft,
+                                                                borderRadius: 8,
+                                                                paddingHorizontal: 6,
+                                                                paddingVertical: 1,
+                                                            }}>
+                                                            <Text
+                                                                style={{
+                                                                    fontSize: 10,
+                                                                    fontWeight:
+                                                                        "600",
+                                                                    color: C.success,
+                                                                }}>
+                                                                {fmtDur(
+                                                                    item.duration,
+                                                                )}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+                                                    {isMissedOrNA && (
+                                                        <View
+                                                            style={{
+                                                                backgroundColor:
+                                                                    C.dangerSoft,
+                                                                borderRadius: 8,
+                                                                paddingHorizontal: 6,
+                                                                paddingVertical: 1,
+                                                            }}>
+                                                            <Text
+                                                                style={{
+                                                                    fontSize: 10,
+                                                                    fontWeight:
+                                                                        "600",
+                                                                    color: C.danger,
+                                                                }}>
+                                                                No duration
+                                                            </Text>
+                                                        </View>
+                                                    )}
+                                                </View>
                                                 <Text style={R.histMeta}>
-                                                    {fmtDate(item?.callTime)} ·{" "}
-                                                    {fmtTime(item?.callTime)}
-                                                    {item?.duration > 0 &&
-                                                    (item?.callType ===
-                                                        "Incoming" ||
-                                                        item?.callType ===
-                                                            "Outgoing")
-                                                        ? ` · ${fmtDur(item.duration)}`
-                                                        : ""}
+                                                    {fmtDate(item?.callTime)}{" "}
+                                                    · {fmtTime(item?.callTime)}
                                                 </Text>
                                             </View>
+
+                                            {/* Call button */}
                                             <TouchableOpacity
                                                 style={R.histRowCallBtn}
                                                 onPress={() => {
@@ -2065,15 +2318,30 @@ export default function CallLogScreen({ navigation, route, embedded = false }) {
                                     );
                                 }}
                                 ListEmptyComponent={
-                                    <Text
+                                    <View
                                         style={{
-                                            textAlign: "center",
-                                            padding: 24,
-                                            color: C.textMuted,
-                                            fontSize: 13,
+                                            paddingVertical: 36,
+                                            alignItems: "center",
+                                            gap: 6,
                                         }}>
-                                        No history available.
-                                    </Text>
+                                        <Ionicons
+                                            name="call-outline"
+                                            size={28}
+                                            color={C.textLight}
+                                        />
+                                        <Text
+                                            style={{
+                                                textAlign: "center",
+                                                color: C.textMuted,
+                                                fontSize: 13,
+                                            }}>
+                                            No{" "}
+                                            {historyFilter !== "All"
+                                                ? historyFilter.toLowerCase()
+                                                : ""}{" "}
+                                            calls found.
+                                        </Text>
+                                    </View>
                                 }
                             />
                         )}
