@@ -14,19 +14,34 @@ const firebaseConfig =
     appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
   };
 
-if (!firebaseConfig?.apiKey) {
+const hasValidConfig = Boolean(firebaseConfig?.apiKey);
+
+if (!hasValidConfig) {
   console.warn("[Firebase] Missing Firebase configuration.");
 }
 
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-
+let app;
 let auth;
+
 try {
-  auth = initializeAuth(app, {
-    persistence: getReactNativePersistence(AsyncStorage),
-  });
+  app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+  try {
+    auth = initializeAuth(app, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+  } catch (_error) {
+    try {
+      auth = getAuth(app);
+    } catch (_e) {
+      console.warn("[Firebase] Auth initialization failed — Firebase features disabled.");
+      auth = null;
+    }
+  }
 } catch (_error) {
-  auth = getAuth(app);
+  console.warn("[Firebase] App initialization failed — Firebase features disabled.");
+  app = null;
+  auth = null;
 }
 
 export { app, auth, firebaseConfig };
