@@ -4,7 +4,6 @@ const Enquiry = require("../models/Enquiry");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 const FollowUp = require("../models/FollowUp");
-const CallLog = require("../models/CallLog");
 const ChatMessage = require("../models/ChatMessage");
 const MessageTemplate = require("../models/MessageTemplate");
 const multer = require("multer");
@@ -389,167 +388,175 @@ router.get("/", verifyToken, async (req, res) => {
             limit: String(limit),
         });
 
-        const { data: response } = await cache.wrap(cacheKey, async () => {
-        const scope = await getEnquiryAccessScope(req);
-            let query = buildOwnerScopedFilter(scope);
+        const { data: response } = await cache.wrap(
+            cacheKey,
+            async () => {
+                const scope = await getEnquiryAccessScope(req);
+                let query = buildOwnerScopedFilter(scope);
 
-            if (!query.userId) {
-                if (req.user.role === "Staff")
-                    return {
-                        data: [],
-                        pagination: {
-                            total: 0,
-                            page: 1,
-                            limit: limit,
-                            pages: 0,
-                        },
-                    };
-            }
-
-            if (date) {
-                query.date = date;
-            } else if (dateFrom || dateTo) {
-                query.date = {};
-                if (dateFrom) query.date.$gte = dateFrom;
-                if (dateTo) query.date.$lte = dateTo;
-            }
-
-            if (assignedTo && assignedTo !== "all") {
-                query.assignedTo = assignedTo;
-            }
-
-            if (followUpDate) {
-                const followUpScope = {
-                    ...(query.companyId ? { companyId: query.companyId } : {}),
-                    userId: query.userId,
-                    isCurrent: { $ne: false },
-                    date: followUpDate,
-                };
-                if (query.assignedTo)
-                    followUpScope.assignedTo = query.assignedTo;
-
-                const followUpEnquiryIds = (
-                    await FollowUp.distinct("enqId", followUpScope)
-                ).filter((id) => mongoose.Types.ObjectId.isValid(String(id)));
-
-                if (followUpEnquiryIds.length === 0) {
-                    return {
-                        data: [],
-                        pagination: {
-                            total: 0,
-                            page: 1,
-                            limit: Number(limit),
-                            pages: 0,
-                        },
-                    };
+                if (!query.userId) {
+                    if (req.user.role === "Staff")
+                        return {
+                            data: [],
+                            pagination: {
+                                total: 0,
+                                page: 1,
+                                limit: limit,
+                                pages: 0,
+                            },
+                        };
                 }
 
-                query._id = { $in: followUpEnquiryIds };
-            }
-
-            if (search) {
-                const raw = String(search || "").trim();
-                const s = raw.slice(0, 60);
-                const digits = s.replace(/\D/g, "");
-
-                // Fast paths that can use normal indexes (prefix regex).
-                if (
-                    digits &&
-                    digits.length >= 5 &&
-                    digits.length === s.length
-                ) {
-                    const re = `^${escapeRegex(digits)}`;
-                    query.$or = [{ mobile: { $regex: re } }];
-                } else if (/^enq[\s\-_]?\d+/i.test(s)) {
-                    query.enqNo = {
-                        $regex: `^${escapeRegex(s)}`,
-                        $options: "i",
-                    };
-                } else {
-                    const re = escapeRegex(s);
-                    query.$or = [
-                        { name: { $regex: re, $options: "i" } },
-                        { mobile: { $regex: re, $options: "i" } },
-                        { email: { $regex: re, $options: "i" } },
-                        { enqNo: { $regex: re, $options: "i" } },
-                    ];
+                if (date) {
+                    query.date = date;
+                } else if (dateFrom || dateTo) {
+                    query.date = {};
+                    if (dateFrom) query.date.$gte = dateFrom;
+                    if (dateTo) query.date.$lte = dateTo;
                 }
-            }
 
-            const selectedStatusFilter =
-                status && status !== "All"
-                    ? normalizeEnquiryStatus(status)
-                    : "";
-
-            if (selectedStatusFilter && !followUpDate) {
-                const acceptedStatuses = ENQUIRY_STATUS_QUERY_MAP[
-                    selectedStatusFilter
-                ] || [selectedStatusFilter];
-                query.status = { $in: acceptedStatuses };
-            }
-
-            const pageNum = parseInt(page);
-            const limitNum = parseInt(limit);
-            const skip = (pageNum - 1) * limitNum;
-
-            const enquiries = await Enquiry.find(query)
-                .select(
-                    "name mobile email image product enqNo status enqType date enquiryDateTime createdAt cost address source lastContactedAt assignedTo lastFollowUpDate lastFollowUpStatus nextFollowUpDate lastActivityAt",
-                )
-                .populate("assignedTo", "name email mobile role")
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(limitNum + 1)
-                .lean();
-
-            const scopedEnquiries = enquiries.slice(0, limitNum);
-
-            // Map denormalized fields
-            scopedEnquiries.forEach((item) => {
-                item.latestFollowUpDate =
-                    item.nextFollowUpDate || item.lastFollowUpDate || null;
-                item.latestFollowUpAt =
-                    item.lastActivityAt || item.createdAt || null;
-                item.selectedFollowUpDate =
-                    followUpDate ||
-                    item.lastFollowUpDate ||
-                    item.nextFollowUpDate ||
-                    null;
+                if (assignedTo && assignedTo !== "all") {
+                    query.assignedTo = assignedTo;
+                }
 
                 if (followUpDate) {
-                    item.currentEnquiryStatus = item.status;
-                }
-            });
+                    const followUpScope = {
+                        ...(query.companyId
+                            ? { companyId: query.companyId }
+                            : {}),
+                        userId: query.userId,
+                        isCurrent: { $ne: false },
+                        date: followUpDate,
+                    };
+                    if (query.assignedTo)
+                        followUpScope.assignedTo = query.assignedTo;
 
-            if (selectedStatusFilter && followUpDate) {
-                const acceptedStatuses = ENQUIRY_STATUS_QUERY_MAP[
-                    selectedStatusFilter
-                ] || [selectedStatusFilter];
-                for (let i = scopedEnquiries.length - 1; i >= 0; i -= 1) {
-                    const s = normalizeEnquiryStatus(
-                        scopedEnquiries[i]?.status,
+                    const followUpEnquiryIds = (
+                        await FollowUp.distinct("enqId", followUpScope)
+                    ).filter((id) =>
+                        mongoose.Types.ObjectId.isValid(String(id)),
                     );
-                    if (!acceptedStatuses.includes(s)) {
-                        scopedEnquiries.splice(i, 1);
+
+                    if (followUpEnquiryIds.length === 0) {
+                        return {
+                            data: [],
+                            pagination: {
+                                total: 0,
+                                page: 1,
+                                limit: Number(limit),
+                                pages: 0,
+                            },
+                        };
+                    }
+
+                    query._id = { $in: followUpEnquiryIds };
+                }
+
+                if (search) {
+                    const raw = String(search || "").trim();
+                    const s = raw.slice(0, 60);
+                    const digits = s.replace(/\D/g, "");
+
+                    // Fast paths that can use normal indexes (prefix regex).
+                    if (
+                        digits &&
+                        digits.length >= 5 &&
+                        digits.length === s.length
+                    ) {
+                        const re = `^${escapeRegex(digits)}`;
+                        query.$or = [{ mobile: { $regex: re } }];
+                    } else if (/^enq[\s\-_]?\d+/i.test(s)) {
+                        query.enqNo = {
+                            $regex: `^${escapeRegex(s)}`,
+                            $options: "i",
+                        };
+                    } else {
+                        const re = escapeRegex(s);
+                        query.$or = [
+                            { name: { $regex: re, $options: "i" } },
+                            { mobile: { $regex: re, $options: "i" } },
+                            { email: { $regex: re, $options: "i" } },
+                            { enqNo: { $regex: re, $options: "i" } },
+                        ];
                     }
                 }
-            }
 
-            const hasMore = enquiries.length > limitNum;
-            if (hasMore) scopedEnquiries.pop();
+                const selectedStatusFilter =
+                    status && status !== "All"
+                        ? normalizeEnquiryStatus(status)
+                        : "";
 
-            return {
-                data: scopedEnquiries,
-                pagination: {
-                    total: hasMore
-                        ? pageNum * limitNum + 1
-                        : skip + scopedEnquiries.length,
-                    page: pageNum,
-                    limit: limitNum,
-                    pages: hasMore ? pageNum + 1 : pageNum,
-                },
-            };
-        }, cacheTtlMs);
+                if (selectedStatusFilter && !followUpDate) {
+                    const acceptedStatuses = ENQUIRY_STATUS_QUERY_MAP[
+                        selectedStatusFilter
+                    ] || [selectedStatusFilter];
+                    query.status = { $in: acceptedStatuses };
+                }
+
+                const pageNum = parseInt(page);
+                const limitNum = parseInt(limit);
+                const skip = (pageNum - 1) * limitNum;
+
+                const enquiries = await Enquiry.find(query)
+                    .select(
+                        "name mobile email image product enqNo status enqType date enquiryDateTime createdAt cost address source lastContactedAt assignedTo lastFollowUpDate lastFollowUpStatus nextFollowUpDate lastActivityAt",
+                    )
+                    .populate("assignedTo", "name email mobile role")
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limitNum + 1)
+                    .lean();
+
+                const scopedEnquiries = enquiries.slice(0, limitNum);
+
+                // Map denormalized fields
+                scopedEnquiries.forEach((item) => {
+                    item.latestFollowUpDate =
+                        item.nextFollowUpDate || item.lastFollowUpDate || null;
+                    item.latestFollowUpAt =
+                        item.lastActivityAt || item.createdAt || null;
+                    item.selectedFollowUpDate =
+                        followUpDate ||
+                        item.lastFollowUpDate ||
+                        item.nextFollowUpDate ||
+                        null;
+
+                    if (followUpDate) {
+                        item.currentEnquiryStatus = item.status;
+                    }
+                });
+
+                if (selectedStatusFilter && followUpDate) {
+                    const acceptedStatuses = ENQUIRY_STATUS_QUERY_MAP[
+                        selectedStatusFilter
+                    ] || [selectedStatusFilter];
+                    for (let i = scopedEnquiries.length - 1; i >= 0; i -= 1) {
+                        const s = normalizeEnquiryStatus(
+                            scopedEnquiries[i]?.status,
+                        );
+                        if (!acceptedStatuses.includes(s)) {
+                            scopedEnquiries.splice(i, 1);
+                        }
+                    }
+                }
+
+                const hasMore = enquiries.length > limitNum;
+                if (hasMore) scopedEnquiries.pop();
+
+                return {
+                    data: scopedEnquiries,
+                    pagination: {
+                        total: hasMore
+                            ? pageNum * limitNum + 1
+                            : skip + scopedEnquiries.length,
+                        page: pageNum,
+                        limit: limitNum,
+                        pages: hasMore ? pageNum + 1 : pageNum,
+                    },
+                };
+            },
+            cacheTtlMs,
+        );
 
         res.json(response);
     } catch (err) {
@@ -1347,12 +1354,10 @@ router.delete("/:id", verifyToken, async (req, res) => {
             ...buildOwnerScopedFilter(scope),
             $or: [{ enqId: enquiry._id }, { enqNo: enquiry.enqNo }],
         });
-        await CallLog.deleteMany({ enquiryId: enquiry._id });
 
         cache.invalidate("enquiries");
         cache.invalidate("followups");
         cache.invalidate("dashboard");
-        cache.invalidate("calllogs");
         res.json({ message: "Enquiry deleted successfully", data: enquiry });
     } catch (err) {
         res.status(500).json({ message: err.message });

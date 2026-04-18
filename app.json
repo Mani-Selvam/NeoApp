@@ -1,8 +1,8 @@
 {
     "expo": {
         "name": "NeoGroww",
-        "slug": "neoapp-manibro20",
-        "owner": "manibro20",
+        "slug": "neoapp-manibro21",
+        "owner": "manibro21",
         "version": "1.0.0",
         "icon": "./src/assets/app-icon.png",
         "orientation": "portrait",
@@ -27,21 +27,20 @@
         "android": {
             "package": "com.mycompany.myapp",
             "versionCode": 2,
-            "googleServicesFile": "./android/app/google-services.json",
-            "blockedPermissions": [
-                "android.permission.READ_CALL_LOG",
-                "android.permission.READ_PHONE_STATE",
-                "android.permission.PROCESS_OUTGOING_CALLS",
-                "android.permission.ANSWER_PHONE_CALLS",
-                "android.permission.READ_PHONE_NUMBERS",
-                "android.permission.READ_CONTACTS",
-                "android.permission.RECORD_AUDIO"
-            ],
+            "googleServicesFile": "./google-services.json",
+            "blockedPermissions": [],
             "adaptiveIcon": {
                 "foregroundImage": "./src/assets/adaptive-icon-foreground.png",
                 "backgroundColor": "#FFFFFF"
             },
-            "permissions": ["CALL_PHONE", "POST_NOTIFICATIONS"]
+            "permissions": [
+                "CALL_PHONE",
+                "POST_NOTIFICATIONS",
+                "android.permission.READ_CALL_LOG",
+                "android.permission.READ_PHONE_STATE",
+                "android.permission.READ_CONTACTS",
+                "android.permission.RECEIVE_BOOT_COMPLETED"
+            ]
         },
         "plugins": [
             "expo-notifications",
@@ -50,12 +49,19 @@
             "expo-video",
             "expo-font",
             [
+                "expo-contacts",
+                {
+                    "contactsPermission": "The app needs access to your contacts to link call logs."
+                }
+            ],
+            [
                 "expo-build-properties",
                 {
                     "android": {
                         "compileSdkVersion": 36,
                         "targetSdkVersion": 36,
-                        "ndkVersion": "26.1.10909125"
+                        "ndkVersion": "26.1.10909125",
+                        "enableProguardModuleExtension": true
                     }
                 }
             ]
@@ -71,6 +77,9 @@
                 "storageBucket": "login-form-39e3e.firebasestorage.app",
                 "messagingSenderId": "168810107337",
                 "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+            },
+            "eas": {
+                "projectId": "15451405-013e-404e-a99f-023cc3d0f8ba"
             }
         }
     }

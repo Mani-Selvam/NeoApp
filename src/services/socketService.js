@@ -127,35 +127,6 @@ export const initSocket = async () => {
 
     ensureSocketListeners();
 
-    socket.on("CALL_LOG_CREATED", (log) => {
-        console.log("New call log via socket:", log);
-        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(
-            () => {},
-        );
-
-        if (Platform.OS === "android" && log?.callType) {
-            const message = log.contactName
-                ? `New ${log.callType} from ${log.contactName}`
-                : `New ${log.callType} from ${log.phoneNumber || "Unknown"}`;
-            ToastAndroid.show(message, ToastAndroid.LONG);
-        }
-
-        emitAppEvent(APP_EVENTS.CALL_LOG_CREATED, log);
-    });
-
-    socket.on("CALL_LOG_REFRESH", (payload) => {
-        console.log("Call log refresh via socket:", payload);
-        Promise.resolve(invalidateCacheTags(["calllogs", "reports"])).catch(
-            () => {},
-        );
-        emitAppEvent(APP_EVENTS.CALL_LOG_CREATED, payload);
-    });
-
-    socket.on("CALL_SESSION_UPDATED", (session) => {
-        console.log("Call session update via socket:", session);
-        DeviceEventEmitter.emit("CALL_SESSION_UPDATED", session);
-    });
-
     socket.on("COMPANY_STATUS_CHANGED", (payload) => {
         DeviceEventEmitter.emit("COMPANY_STATUS_CHANGED", payload);
     });

@@ -1,0 +1,5 @@
+{
+    "expo": {
+        "plugins": ["./plugins/neoapp-telecom-plugin.js"]
+    }
+}

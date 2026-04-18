@@ -29,7 +29,6 @@ import ForgotPasswordScreen from "../screens/Auth/ForgotPasswordScreen";
 import LoginScreen from "../screens/Auth/LoginScreen";
 import OtpVerificationScreen from "../screens/Auth/OtpVerificationScreen";
 import SignupScreen from "../screens/Auth/SignupScreen";
-import CallLogScreen from "../screens/CallLogScreen";
 import CommunicationScreen from "../screens/CommunicationScreen";
 import TaskDashboardScreen from "../screens/TaskDashboardScreen";
 import EnquiryScreen from "../screens/EnquiryScreen";
@@ -55,10 +54,6 @@ import WhatsAppSettingsScreen from "../screens/WhatsAppSettingsScreen";
 import TargetsScreen from "../screens/TargetsScreen";
 import EmailScreen from "../screens/EmailScreen";
 import EmailSettingsScreen from "../screens/EmailSettingsScreen";
-import {
-    startCallMonitoring,
-    stopCallMonitoring,
-} from "../services/CallMonitorService";
 import { getCommunicationThreads } from "../services/communicationService";
 import * as followupService from "../services/followupService";
 import notificationService, {
@@ -530,16 +525,6 @@ function MainTabNavigator() {
                 options={hiddenTabOptions}
             />
             <Tab.Screen
-                name="SupportHelp"
-                component={SupportHelpScreen as any}
-                options={hiddenTabOptions}
-            />
-            <Tab.Screen
-                name="CallLog"
-                component={CallLogAccessScreen}
-                options={hiddenTabOptions}
-            />
-            <Tab.Screen
                 name="PricingScreen"
                 component={PricingAccessForTabs}
                 options={hiddenTabOptions}
@@ -736,11 +721,6 @@ const EmailAccessScreen = createPlanRestrictedScreen(
     "email",
     "Email",
 );
-const CallLogAccessScreen = createPlanRestrictedScreen(
-    CallLogScreen as any,
-    "call_logs",
-    "Calls",
-);
 const ReportAccessScreen = createPlanRestrictedScreen(
     ReportScreen as any,
     "reports",
@@ -837,16 +817,7 @@ export default function AppNavigator() {
     useEffect(() => {
         if (isLoggedIn && user) {
             let cancelled = false;
-            import("../services/socketService").then(
-                ({ ensureSocketReady }) => {
-                    if (cancelled) return;
-                    ensureSocketReady({ timeoutMs: 60000 }).catch(() => {});
-                },
-            );
-            // Start Call Monitoring with user's mobile context
-            startCallMonitoring(user).catch((err) =>
-                console.error("Call monitor init error:", err),
-            );
+            // Call monitoring removed with call log feature
             return () => {
                 cancelled = true;
             };
@@ -854,7 +825,7 @@ export default function AppNavigator() {
             import("../services/socketService").then(({ disconnectSocket }) => {
                 disconnectSocket();
             });
-            stopCallMonitoring();
+            // Call monitoring removed with call log feature
         }
     }, [isLoggedIn, user]);
 
@@ -1074,14 +1045,6 @@ export default function AppNavigator() {
             6 * 60 * 60 * 1000,
         ); // 6 hours
 
-        const callLogSub = DeviceEventEmitter.addListener(
-            "CALL_LOG_CREATED",
-            () => {
-                Promise.resolve(
-                    notificationService.acknowledgeHourlyFollowUpReminders?.(),
-                ).catch(() => {});
-            },
-        );
         const followUpChangedSub = DeviceEventEmitter.addListener(
             "FOLLOWUP_CHANGED",
             (payload) => {
@@ -1133,7 +1096,6 @@ export default function AppNavigator() {
             appStateSub?.remove?.();
             clearInterval(periodicSync);
             clearInterval(pushTokenRefreshInterval);
-            callLogSub?.remove?.();
             followUpChangedSub?.remove?.();
         };
     }, [isLoggedIn, user]);

@@ -45,15 +45,6 @@ module.exports = ({ config }) => {
         "SCHEDULE_EXACT_ALARM",
         "USE_EXACT_ALARM",
     ];
-    const callLogAndroidPermissions = [
-        "READ_CALL_LOG",
-        "READ_PHONE_STATE",
-        "READ_CONTACTS",
-        "READ_PHONE_NUMBERS",
-        // Optional/legacy (OEM dependent)
-        "PROCESS_OUTGOING_CALLS",
-        "ANSWER_PHONE_CALLS",
-    ];
     const blockedAndroidPermissions = playStoreSafeMode
         ? [
               "android.permission.READ_CALL_LOG",
@@ -164,9 +155,7 @@ module.exports = ({ config }) => {
         },
         android: {
             ...config.android,
-            permissions: playStoreSafeMode
-                ? safeAndroidPermissions
-                : [...safeAndroidPermissions, ...callLogAndroidPermissions],
+            permissions: safeAndroidPermissions,
             blockedPermissions: [
                 ...(config.android?.blockedPermissions || []),
                 ...blockedAndroidPermissions,

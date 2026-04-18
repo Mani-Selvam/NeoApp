@@ -4,7 +4,6 @@ export const APP_EVENTS = Object.freeze({
     ENQUIRY_CREATED: "ENQUIRY_CREATED",
     ENQUIRY_UPDATED: "ENQUIRY_UPDATED",
     FOLLOWUP_CHANGED: "FOLLOWUP_CHANGED",
-    CALL_LOG_CREATED: "CALL_LOG_CREATED",
     CALL_ENDED: "CALL_ENDED",
     INCOMING_CRM_MATCH: "INCOMING_CRM_MATCH",
     COUPON_SYNC: "COUPON_SYNC",
@@ -26,5 +25,3 @@ export const emitEnquiryUpdated = (payload) =>
     emitAppEvent(APP_EVENTS.ENQUIRY_UPDATED, payload);
 export const emitFollowupChanged = (payload) =>
     emitAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, payload);
-export const emitCallLogCreated = (payload) =>
-    emitAppEvent(APP_EVENTS.CALL_LOG_CREATED, payload);

@@ -59,12 +59,10 @@ import {
     onAppEvent,
 } from "../services/appEvents";
 import { cancelDebounceKey, debounceByKey } from "../services/debounce";
-import * as callLogService from "../services/callLogService";
 import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
-import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
 import { initSocket } from "../services/socketService";
 import {
     buildFeatureUpgradeMessage,
@@ -72,6 +70,7 @@ import {
 } from "../utils/planFeatures";
 import { getImageUrl } from "../utils/imageHelper";
 import ChatScreen from "./ChatScreen";
+import CallLogTabs from "../components/CallLogTabs";
 
 const AUTO_SAVE_CALL_LOGS =
     String(process.env.EXPO_PUBLIC_CALL_AUTO_SAVE ?? "false")
@@ -183,13 +182,12 @@ const tabUsesExactDateFilter = (tab) =>
 // Detail tabs
 const DETAIL_TABS = [
     { key: "followup", label: "Add Follow-up", icon: "add-circle-outline" },
-    { key: "call", label: "Call Log", icon: "call-outline" },
     { key: "whatsapp", label: "WhatsApp", icon: "logo-whatsapp" },
     { key: "email", label: "Email", icon: "mail-outline" },
+    { key: "contact", label: "Contact", icon: "person-outline" },
 ];
 
 const DETAIL_TAB_FEATURES = {
-    call: "call_logs",
     whatsapp: "whatsapp",
     email: "email",
 };
@@ -300,50 +298,9 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
 
     const loadLogs = useCallback(
         async ({ force = false, showSpinner = true } = {}) => {
-            if (!phoneKey && !enquiry?._id) {
-                setLogs([]);
-                setLoading(false);
-                return;
-            }
-
-            if (showSpinner) setLoading(true);
-            try {
-                const result = await callLogService.getCallLogs(
-                    enquiry?._id
-                        ? {
-                              enquiryId: enquiry._id,
-                              filter: "All",
-                              limit: 100,
-                          }
-                        : {
-                              search: phoneKey,
-                              filter: "All",
-                              limit: 100,
-                          },
-                    { force },
-                );
-                const items = Array.isArray(result?.data) ? result.data : [];
-                const filtered = items.filter((item) => {
-                    const sameEnquiry =
-                        enquiry?._id && item?.enquiryId
-                            ? String(item?.enquiryId?._id || item.enquiryId) ===
-                              String(enquiry._id)
-                            : false;
-                    const samePhone = phoneKey
-                        ? normalizePhone(item?.phoneNumber) === phoneKey
-                        : false;
-                    return enquiry?._id ? sameEnquiry : samePhone;
-                });
-                filtered.sort(
-                    (a, b) =>
-                        new Date(b?.callTime || 0) - new Date(a?.callTime || 0),
-                );
-                setLogs(filtered);
-            } catch (_error) {
-                setLogs([]);
-            } finally {
-                setLoading(false);
-            }
+            // Call log feature has been removed
+            setLogs([]);
+            setLoading(false);
         },
         [phoneKey, enquiry?._id],
     );
@@ -352,12 +309,7 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
         loadLogs({ force: false }).catch(() => null);
     }, [loadLogs, refreshKey]);
 
-    useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_LOG_CREATED", () => {
-            loadLogs({ force: true, showSpinner: false }).catch(() => null);
-        });
-        return () => sub.remove();
-    }, [loadLogs]);
+    // Call log event listener removed with call log feature
 
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
@@ -1217,11 +1169,11 @@ const getFollowUpDocumentId = (item = {}) => {
 
     const hasFollowUpShape = Boolean(
         item?.activityType ||
-            item?.type ||
-            item?.remarks ||
-            item?.note ||
-            item?.time ||
-            item?.isCurrent != null,
+        item?.type ||
+        item?.remarks ||
+        item?.note ||
+        item?.time ||
+        item?.isCurrent != null,
     );
     const fallbackId = String(item?._id || "").trim();
     if (hasFollowUpShape && isMongoObjectId(fallbackId)) return fallbackId;
@@ -2232,22 +2184,22 @@ const DetailView = ({
             },
         }),
     ).current;
-    const detailPanHandlers = tabIdx === 2 ? {} : swipePan.panHandlers;
+    const detailPanHandlers = tabIdx === 1 ? {} : swipePan.panHandlers;
     const whatsappEdgePan = useRef(
         PanResponder.create({
             onStartShouldSetPanResponder: () =>
-                tabRef.current === 2 && !tabGestureLockedRef.current,
+                tabRef.current === 1 && !tabGestureLockedRef.current,
             onStartShouldSetPanResponderCapture: () =>
-                tabRef.current === 2 && !tabGestureLockedRef.current,
+                tabRef.current === 1 && !tabGestureLockedRef.current,
             onMoveShouldSetPanResponder: (_, g) => {
-                if (tabRef.current !== 2 || tabGestureLockedRef.current)
+                if (tabRef.current !== 1 || tabGestureLockedRef.current)
                     return false;
                 return (
                     Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.1
                 );
             },
             onMoveShouldSetPanResponderCapture: (_, g) => {
-                if (tabRef.current !== 2 || tabGestureLockedRef.current)
+                if (tabRef.current !== 1 || tabGestureLockedRef.current)
                     return false;
                 return (
                     Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.1
@@ -2255,9 +2207,9 @@ const DetailView = ({
             },
             onPanResponderTerminationRequest: () => false,
             onPanResponderRelease: (_, g) => {
-                if (tabGestureLockedRef.current || tabRef.current !== 2) return;
+                if (tabGestureLockedRef.current || tabRef.current !== 1) return;
                 if (g.dx < -56) {
-                    goToTab(3);
+                    goToTab(2);
                     return;
                 }
             },
@@ -2534,8 +2486,8 @@ const DetailView = ({
                         </ScrollView>
                     )}
 
-                    {/* ── TAB 2: WhatsApp ── */}
-                    {tabIdx === 2 && (
+                    {/* ── TAB 1: WhatsApp ── */}
+                    {tabIdx === 1 && (
                         <View style={{ flex: 1, minHeight: 0 }}>
                             <ChatScreen
                                 key={`followup-whatsapp-${enquiry?._id || enquiry?.enqNo || enquiry?.mobile || "chat"}-${panelRefreshNonce}`}
@@ -2546,19 +2498,8 @@ const DetailView = ({
                         </View>
                     )}
 
-                    {/* ── TAB 2: Call Logs ── */}
-                    {tabIdx === 1 && (
-                        <View style={{ flex: 1 }}>
-                            <FollowUpCallPanel
-                                enquiry={enquiry}
-                                onCallPress={onStartCall}
-                                refreshKey={panelRefreshNonce}
-                            />
-                        </View>
-                    )}
-
-                    {/* ── TAB 4: Email ── */}
-                    {tabIdx === 3 && (
+                    {/* ── TAB 2: Email ── */}
+                    {tabIdx === 2 && (
                         <View style={{ flex: 1 }}>
                             <FollowUpEmailPanel
                                 enquiry={enquiry}
@@ -2567,7 +2508,17 @@ const DetailView = ({
                         </View>
                     )}
 
-                    {/* ── TAB 1: Add Follow-up ── */}
+                    {/* ── TAB 3: Contact & Call Logs ── */}
+                    {tabIdx === 3 && (
+                        <View style={{ flex: 1, minHeight: 0 }}>
+                            <CallLogTabs
+                                phoneNumber={enquiry?.mobile}
+                                enquiry={enquiry}
+                            />
+                        </View>
+                    )}
+
+                    {/* ── TAB 0: Add Follow-up ── */}
                     {tabIdx === 0 && (
                         <KeyboardAvoidingView
                             style={{ flex: 1 }}
@@ -3305,9 +3256,10 @@ const DetailView = ({
                                                         getFollowUpDocumentId(
                                                             h,
                                                         );
-                                                    const isEditable = Boolean(
-                                                        timelineFollowupId,
-                                                    );
+                                                    const isEditable =
+                                                        Boolean(
+                                                            timelineFollowupId,
+                                                        );
                                                     const handleDeleteFollowUp =
                                                         async () => {
                                                             // Try to delete the follow-up if it has an ID
@@ -3662,7 +3614,7 @@ const DetailView = ({
                         </KeyboardAvoidingView>
                     )}
                 </View>
-                {tabIdx === 2 && (
+                {tabIdx === 1 && (
                     <>
                         <View
                             style={{
@@ -4867,59 +4819,11 @@ export default function FollowUpScreen({ navigation, route }) {
             if (callStarted && callEnquiry) {
                 global.__callClaimedByScreen = true;
 
-                if (AUTO_SAVE_CALL_LOGS) {
-                    const mobile = callEnquiry?.mobile || "";
-                    const digits = String(mobile).replace(/\D/g, "");
-                    const callType = data?.callType || "Outgoing";
-                    const duration = Number(data?.duration || 0);
-                    const callTime = data?.callTime || new Date();
-                    const note = data?.note || "";
-                    const deviceCallId = data?.deviceCallId || null;
-                    const enquiryId =
-                        callEnquiry?._id ||
-                        callEnquiry?.enquiryId?._id ||
-                        callEnquiry?.enquiryId ||
-                        callEnquiry?.enqId;
-
-                    Promise.resolve(
-                        callLogService.createCallLog({
-                            phoneNumber: digits,
-                            callType,
-                            duration,
-                            note,
-                            callTime,
-                            enquiryId,
-                            contactName: callEnquiry?.name,
-                            deviceCallId,
-                        }),
-                    )
-                        .then((saved) => {
-                            if (!saved?._id) return;
-                            lastFetch.current = 0;
-                            fetchFollowUps(activeTab, true, {
-                                force: true,
-                                showIndicator: false,
-                                allowCache: false,
-                            });
-                        })
-                        .catch(() => {});
-
-                    setCallModalVisible(false);
-                    setCallEnquiry(null);
-                    setAutoCallData(null);
-                    setAutoDuration(0);
-                    setCallStarted(false);
-                    setCallStartTime(null);
-                    return;
-                }
-
-                setAutoCallData({
-                    callType: data?.callType,
-                    duration: Number(data?.duration || 0),
-                    note: data?.note,
-                });
-                setAutoDuration(Number(data?.duration || 0));
-                setCallModalVisible(true);
+                // Call log feature has been removed
+                setCallModalVisible(false);
+                setCallEnquiry(null);
+                setAutoCallData(null);
+                setAutoDuration(0);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
@@ -4928,62 +4832,14 @@ export default function FollowUpScreen({ navigation, route }) {
     }, [callStarted, callEnquiry]);
 
     useEffect(() => {
-        const sub = AppState.addEventListener("change", async (next) => {
+        // Call log feature has been removed
+        const sub = AppState.addEventListener("change", (next) => {
             if (
                 next === "active" &&
                 callStarted &&
                 callStartTime &&
                 callEnquiry
             ) {
-                const device = await getLatestDeviceCallLogForNumber({
-                    phoneNumber: callEnquiry.mobile,
-                    sinceMs: callStartTime,
-                    limit: 10,
-                });
-
-                const durFallback = Math.max(
-                    0,
-                    Math.floor((Date.now() - callStartTime) / 1000) - 5,
-                );
-
-                const finalCallType =
-                    device?.callType ||
-                    (durFallback > 3 ? "Outgoing" : "Not Attended");
-                const finalDuration = Number.isFinite(Number(device?.duration))
-                    ? Number(device.duration)
-                    : durFallback;
-
-                // Auto-save call log
-                const mobile = callEnquiry?.mobile || "";
-                const digits = String(mobile).replace(/\D/g, "");
-                const enquiryId =
-                    callEnquiry?._id ||
-                    callEnquiry?.enquiryId?._id ||
-                    callEnquiry?.enquiryId ||
-                    callEnquiry?.enqId;
-                const deviceCallId = device?.deviceCallId || null;
-
-                try {
-                    const saved = await callLogService.createCallLog({
-                        phoneNumber: digits,
-                        callType: finalCallType,
-                        duration: finalDuration,
-                        note: "",
-                        callTime: device?.callTime || new Date(),
-                        enquiryId,
-                        contactName: callEnquiry?.name,
-                        deviceCallId,
-                    });
-                    if (saved?._id) {
-                        lastFetch.current = 0;
-                        fetchFollowUps(activeTab, true, {
-                            force: true,
-                            showIndicator: false,
-                            allowCache: false,
-                        });
-                    }
-                } catch (_e) {}
-
                 setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
@@ -5026,13 +4882,6 @@ export default function FollowUpScreen({ navigation, route }) {
             debounceByKey("followup-refresh", flush, 300);
         };
 
-        const unsubCall = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, () =>
-            refresh({
-                clear: false,
-                refreshCounts: false,
-                refreshModals: false,
-            }),
-        );
         const unsubFollowup = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, () =>
             refresh({ clear: false, refreshCounts: true, refreshModals: true }),
         );
@@ -5045,7 +4894,6 @@ export default function FollowUpScreen({ navigation, route }) {
 
         return () => {
             cancelDebounceKey("followup-refresh");
-            unsubCall();
             unsubFollowup();
             unsubEnquiry();
             unsubEnquiryCreated();
@@ -5985,8 +5833,7 @@ export default function FollowUpScreen({ navigation, route }) {
             const sourceFollowUpId = detailSourceFollowUpIdRef.current;
             const sourceHistoryRow = Array.isArray(detailHistory)
                 ? detailHistory.find(
-                      (row) =>
-                          getFollowUpDocumentId(row) === sourceFollowUpId,
+                      (row) => getFollowUpDocumentId(row) === sourceFollowUpId,
                   )
                 : null;
             const isRescheduleFromMissed =

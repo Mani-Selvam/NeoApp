@@ -7,7 +7,6 @@ import {
     useState,
 } from "react";
 import { AppState, DeviceEventEmitter } from "react-native";
-import { stopCallMonitoring } from "../services/CallMonitorService";
 import notificationService, {
     showBillingPlanNotification,
     getDevicePushToken,
@@ -355,7 +354,9 @@ export const AuthProvider = ({ children }) => {
             "FORCE_LOGOUT",
             async (payload) => {
                 if (!isLoggedIn) return;
-                const code = String(payload?.code || "").trim().toUpperCase();
+                const code = String(payload?.code || "")
+                    .trim()
+                    .toUpperCase();
                 const reasonText = String(payload?.reason || "")
                     .trim()
                     .toLowerCase();
@@ -647,6 +648,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     const updateUser = async (updatedObj) => {
+        if (!user || !updatedObj) return;
         const newUser = { ...user, ...updatedObj };
         await AsyncStorage.setItem("user", JSON.stringify(newUser));
         setUser(newUser);
@@ -678,11 +680,7 @@ export const AuthProvider = ({ children }) => {
         setBillingAlert(null);
         setBillingPrompt({ visible: false, title: "", message: "" });
         setIsLoggedIn(false);
-        try {
-            stopCallMonitoring();
-        } catch (e) {
-            // ignore if native modules are not present
-        }
+        // Call monitoring removed with call log feature
         try {
             await notificationService.cancelAllNotifications?.();
             await notificationService.resetNotificationLocalState?.();

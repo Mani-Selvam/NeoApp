@@ -48,11 +48,9 @@ import {
     isFresh,
     setCacheEntry,
 } from "../services/appCache";
-import * as callLogService from "../services/callLogService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
-import { getLatestDeviceCallLogForNumber } from "../services/CallMonitorService";
 import { getAuthToken } from "../services/secureTokenStorage";
 import {
     APP_EVENTS,
@@ -511,11 +509,10 @@ const EnquiryCard = React.memo(function EnquiryCard({
 });
 
 // â”€â”€â”€ Detail page (slides in from right) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const DETAIL_TABS = ["Details", "Calls"];
+const DETAIL_TABS = ["Details"];
 
 const EnquiryDetailPage = ({
     enquiry,
-    callLogs,
     logsLoading,
     onClose,
     onEdit,
@@ -917,116 +914,6 @@ const EnquiryDetailPage = ({
                                     </TouchableOpacity>
                                 </View>
                             )}
-
-                            {tab === 1 &&
-                                (logsLoading ? (
-                                    <ActivityIndicator
-                                        color={C.primary}
-                                        style={{ marginTop: 40 }}
-                                    />
-                                ) : callLogs.length === 0 ? (
-                                    <View style={SD.emptyWrap}>
-                                        <View style={SD.emptyIconBox}>
-                                            <Ionicons
-                                                name="call-outline"
-                                                size={26}
-                                                color={C.textLight}
-                                            />
-                                        </View>
-                                        <Text style={SD.emptyText}>
-                                            No calls recorded yet
-                                        </Text>
-                                    </View>
-                                ) : (
-                                    <View style={{ gap: 8 }}>
-                                        {callLogs.map((log, i) => {
-                                            const isIn =
-                                                log.callType === "Incoming";
-                                            const isOut =
-                                                log.callType === "Outgoing";
-                                            const col = isIn
-                                                ? C.success
-                                                : isOut
-                                                  ? C.primary
-                                                  : C.danger;
-                                            return (
-                                                <View
-                                                    key={log._id || i}
-                                                    style={SD.logItem}>
-                                                    <View
-                                                        style={[
-                                                            SD.logIconBox,
-                                                            {
-                                                                backgroundColor:
-                                                                    col + "18",
-                                                            },
-                                                        ]}>
-                                                        <Ionicons
-                                                            name={
-                                                                isIn
-                                                                    ? "arrow-down-outline"
-                                                                    : isOut
-                                                                      ? "arrow-up-outline"
-                                                                      : "close-outline"
-                                                            }
-                                                            size={14}
-                                                            color={col}
-                                                        />
-                                                    </View>
-                                                    <View style={{ flex: 1 }}>
-                                                        <Text
-                                                            style={SD.logType}>
-                                                            {log.callType}
-                                                        </Text>
-                                                        <Text
-                                                            style={SD.logDate}>
-                                                            {new Date(
-                                                                log.callTime,
-                                                            ).toLocaleDateString(
-                                                                [],
-                                                                {
-                                                                    month: "short",
-                                                                    day: "numeric",
-                                                                },
-                                                            )}{" "}
-                                                            at{" "}
-                                                            {new Date(
-                                                                log.callTime,
-                                                            ).toLocaleTimeString(
-                                                                [],
-                                                                {
-                                                                    hour: "2-digit",
-                                                                    minute: "2-digit",
-                                                                },
-                                                            )}
-                                                        </Text>
-                                                    </View>
-                                                    <View
-                                                        style={{
-                                                            alignItems:
-                                                                "flex-end",
-                                                        }}>
-                                                        <Text
-                                                            style={[
-                                                                SD.logDur,
-                                                                { color: col },
-                                                            ]}>
-                                                            {fmtDur(
-                                                                log.duration,
-                                                            )}
-                                                        </Text>
-                                                        <Text
-                                                            style={
-                                                                SD.logDurLabel
-                                                            }>
-                                                            duration
-                                                        </Text>
-                                                    </View>
-                                                </View>
-                                            );
-                                        })}
-                                    </View>
-                                ))}
                         </ScrollView>
                     </Animated.View>
                 );
@@ -1055,7 +942,6 @@ export default function EnquiryListScreen({ navigation, route }) {
 
     // Detail page
     const [detailEnquiry, setDetailEnquiry] = useState(null);
-    const [detailCallLogs, setDetailCallLogs] = useState([]);
     const [logsLoading, setLogsLoading] = useState(false);
     const [swipeResetTrigger, setSwipeResetTrigger] = useState(0);
 
@@ -1210,9 +1096,9 @@ export default function EnquiryListScreen({ navigation, route }) {
                     await setCacheEntry(
                         cacheKey,
                         {
-                        items: nextItems,
-                        hasMore: nextHasMore,
-                        page: nextPage,
+                            items: nextItems,
+                            hasMore: nextHasMore,
+                            page: nextPage,
                         },
                         { tags: ["enquiries"] },
                     ).catch(() => {});
@@ -1250,9 +1136,9 @@ export default function EnquiryListScreen({ navigation, route }) {
                     await setCacheEntry(
                         cacheKey,
                         {
-                        items: nextItems,
-                        hasMore: nextHasMore,
-                        page: nextPage,
+                            items: nextItems,
+                            hasMore: nextHasMore,
+                            page: nextPage,
                         },
                         { tags: ["enquiries"] },
                     ).catch(() => {});
@@ -1323,56 +1209,7 @@ export default function EnquiryListScreen({ navigation, route }) {
             if (callStarted && callEnquiry) {
                 global.__callClaimedByScreen = true;
 
-                // Auto-save call log without user input
-                const mobile = callEnquiry?.mobile || "";
-                const digits = String(mobile).replace(/\D/g, "");
-                const rawCallType = data?.callType || "Outgoing";
-                const duration = Number(data?.duration || 0);
-                const callTime = data?.callTime || new Date();
-                const deviceCallId = data?.deviceCallId || null;
-                const enquiryId =
-                    callEnquiry?._id ||
-                    callEnquiry?.enquiryId?._id ||
-                    callEnquiry?.enquiryId ||
-                    callEnquiry?.enqId;
-
-                // 📊 Determine call type based on duration and direction
-                // Outgoing calls with 0 duration = "Not Attended" (not answered)
-                // Outgoing calls with duration > 0 = "Outgoing" (answered)
-                // Incoming calls with 0 duration = "Missed" (not answered)
-                // Incoming calls with duration > 0 = "Incoming" (answered)
-                let finalCallType = rawCallType;
-                const isOutgoing = rawCallType === "Outgoing";
-                const isIncoming = rawCallType === "Incoming";
-
-                if (isOutgoing && duration === 0) {
-                    finalCallType = "Not Attended";
-                } else if (isIncoming && duration === 0) {
-                    finalCallType = "Missed";
-                }
-
-                Promise.resolve(
-                    callLogService.createCallLog({
-                        phoneNumber: digits,
-                        callType: finalCallType,
-                        duration,
-                        note: "",
-                        callTime,
-                        enquiryId,
-                        contactName: callEnquiry?.name,
-                        deviceCallId,
-                    }),
-                )
-                    .then((saved) => {
-                        if (!saved?._id) return;
-                        fetchEnquiries(true, {
-                            showIndicator: false,
-                            force: true,
-                            allowCache: true,
-                        });
-                    })
-                    .catch(() => {});
-
+                // Call log feature has been removed
                 setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
@@ -1382,61 +1219,14 @@ export default function EnquiryListScreen({ navigation, route }) {
     }, [callStarted, callEnquiry]);
 
     useEffect(() => {
-        const sub = AppState.addEventListener("change", async (next) => {
+        // Call log feature has been removed
+        const sub = AppState.addEventListener("change", (next) => {
             if (
                 next === "active" &&
                 callStarted &&
                 callStartTime &&
                 callEnquiry
             ) {
-                const device = await getLatestDeviceCallLogForNumber({
-                    phoneNumber: callEnquiry.mobile,
-                    sinceMs: callStartTime,
-                    limit: 10,
-                });
-
-                const durFallback = Math.max(
-                    0,
-                    Math.floor((Date.now() - callStartTime) / 1000) - 5,
-                );
-
-                const finalCallType =
-                    device?.callType ||
-                    (durFallback > 3 ? "Outgoing" : "Not Attended");
-                const finalDuration = Number.isFinite(Number(device?.duration))
-                    ? Number(device.duration)
-                    : durFallback;
-
-                // Auto-save call log
-                const mobile = callEnquiry?.mobile || "";
-                const digits = String(mobile).replace(/\D/g, "");
-                const enquiryId =
-                    callEnquiry?._id ||
-                    callEnquiry?.enquiryId?._id ||
-                    callEnquiry?.enquiryId ||
-                    callEnquiry?.enqId;
-                const deviceCallId = device?.deviceCallId || null;
-
-                try {
-                    const saved = await callLogService.createCallLog({
-                        phoneNumber: digits,
-                        callType: finalCallType,
-                        duration: finalDuration,
-                        note: "",
-                        callTime: device?.callTime || new Date(),
-                        enquiryId,
-                        contactName: callEnquiry?.name,
-                        deviceCallId,
-                    });
-                    if (saved?._id) {
-                        fetchEnquiries(true, {
-                            showIndicator: false,
-                            force: true,
-                            allowCache: true,
-                        });
-                    }
-                } catch (_e) {}
-
                 setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
@@ -1458,14 +1248,12 @@ export default function EnquiryListScreen({ navigation, route }) {
                 300,
             );
 
-        const unsub1 = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, refresh);
         const unsub2 = onAppEvent(APP_EVENTS.ENQUIRY_CREATED, refresh);
         const unsub3 = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, refresh);
         const unsub4 = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, refresh);
 
         return () => {
             cancelDebounceKey("enquiry-refresh");
-            unsub1();
             unsub2();
             unsub3();
             unsub4();
@@ -1485,7 +1273,6 @@ export default function EnquiryListScreen({ navigation, route }) {
     useEffect(() => {
         const unsubscribe = navigation.addListener("blur", () => {
             setDetailEnquiry(null);
-            setDetailCallLogs([]);
             setLogsLoading(false);
         });
         return unsubscribe;
@@ -1494,24 +1281,13 @@ export default function EnquiryListScreen({ navigation, route }) {
     // â”€â”€ Action handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const openDetail = useCallback(async (enquiry) => {
         setSwipeResetTrigger((prev) => prev + 1);
-        setDetailCallLogs([]);
         setDetailEnquiry(enquiry);
-        setLogsLoading(true);
+        setLogsLoading(false);
         try {
             const full = await enquiryService.getEnquiryById(enquiry._id);
             setDetailEnquiry(full || enquiry);
         } catch {
             setDetailEnquiry(enquiry);
-        }
-        try {
-            const res = await callLogService.getCallLogs({
-                enquiryId: enquiry._id,
-            });
-            setDetailCallLogs(res.data || res);
-        } catch {
-            setDetailCallLogs([]);
-        } finally {
-            setLogsLoading(false);
         }
     }, []);
 
@@ -2668,7 +2444,6 @@ export default function EnquiryListScreen({ navigation, route }) {
                 <View style={StyleSheet.absoluteFill}>
                     <EnquiryDetailPage
                         enquiry={detailEnquiry}
-                        callLogs={detailCallLogs}
                         logsLoading={logsLoading}
                         onClose={() => setDetailEnquiry(null)}
                         onEdit={handleEdit}

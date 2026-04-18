@@ -46,7 +46,6 @@ import {
     SkeletonPulse,
     SkeletonSpacer,
 } from "../components/skeleton/Skeleton";
-import { getCallLogs } from "../services/callLogService";
 import { getAllEnquiries } from "../services/enquiryService";
 import { getFollowUps } from "../services/followupService";
 import notificationService from "../services/notificationService";
@@ -166,7 +165,8 @@ const safeDate = (v) => {
     const d = new Date(v);
     return isNaN(d.getTime()) ? null : d;
 };
-const isObjectIdLike = (value) => /^[a-fA-F0-9]{24}$/.test(String(value || "").trim());
+const isObjectIdLike = (value) =>
+    /^[a-fA-F0-9]{24}$/.test(String(value || "").trim());
 const fmt = (v) =>
     `\u20B9${Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 const toDayRange = (value = new Date()) => {
@@ -804,7 +804,6 @@ export default function ReportScreen({ navigation }) {
     const [reportData, setReportData] = useState({
         enquiries: [],
         followups: [],
-        callLogs: [],
     });
     const [staffDirectory, setStaffDirectory] = useState([]);
 
@@ -857,11 +856,7 @@ export default function ReportScreen({ navigation }) {
                 const staffReq = isStaffUser
                     ? Promise.resolve([])
                     : getAllStaff().catch(() => []);
-                const canViewCallLogs = hasPlanFeature(
-                    billingInfo?.plan,
-                    "call_logs",
-                );
-                const [enqR, fupR, callR, staffR] = await Promise.all([
+                const [enqR, fupR, staffR] = await Promise.all([
                     getAllEnquiries(1, 1000, "", "", "", "", {
                         dateFrom: fromDate,
                         dateTo: toDate,
@@ -870,28 +865,23 @@ export default function ReportScreen({ navigation }) {
                         dateFrom: fromDate,
                         dateTo: toDate,
                     }),
-                    canViewCallLogs
-                        ? getCallLogs({
-                              limit: 800,
-                              dateFrom: fromDate,
-                              dateTo: toDate,
-                              include: "staff",
-                          })
-                        : Promise.resolve([]),
                     staffReq,
                 ]);
                 const payload = {
                     enquiries: normalizeList(enqR),
                     followups: normalizeList(fupR),
-                    callLogs: normalizeList(callR),
                     staffDirectory: isStaffUser
-                        ? [{ _id: selfId, name: user?.name || "Staff", role: "Staff" }]
+                        ? [
+                              {
+                                  _id: selfId,
+                                  name: user?.name || "Staff",
+                                  role: "Staff",
+                              },
+                          ]
                         : normalizeList(staffR),
                 };
                 setReportData(payload);
-                setStaffDirectory(
-                    payload.staffDirectory,
-                );
+                setStaffDirectory(payload.staffDirectory);
                 await setCacheEntry(reportCacheKey, payload, {
                     tags: ["reports"],
                 }).catch(() => {});
@@ -930,13 +920,11 @@ export default function ReportScreen({ navigation }) {
         const unsub1 = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, refresh);
         const unsub2 = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, refresh);
         const unsub3 = onAppEvent(APP_EVENTS.ENQUIRY_CREATED, refresh);
-        const unsub4 = onAppEvent(APP_EVENTS.CALL_LOG_CREATED, refresh);
         return () => {
             cancelDebounceKey("report-refresh");
             unsub1();
             unsub2();
             unsub3();
-            unsub4();
         };
     }, [loadReportData]);
 
@@ -981,30 +969,31 @@ export default function ReportScreen({ navigation }) {
             map[key] = label;
         };
 
-        (Array.isArray(staffDirectory) ? staffDirectory : []).forEach((item) => {
-            register(item?._id || item?.id, item?.name);
-        });
+        (Array.isArray(staffDirectory) ? staffDirectory : []).forEach(
+            (item) => {
+                register(item?._id || item?.id, item?.name);
+            },
+        );
 
-        const allRows = [
-            ...reportData.enquiries,
-            ...reportData.followups,
-            ...reportData.callLogs,
-        ];
+        const allRows = [...reportData.enquiries, ...reportData.followups];
         allRows.forEach((item) => {
-            register(item?.staffId?._id || item?.staffId, item?.staffId?.name || item?.staffName);
+            register(
+                item?.staffId?._id || item?.staffId,
+                item?.staffId?.name || item?.staffName,
+            );
             register(
                 item?.assignedTo?._id || item?.assignedTo || item?.assignedToId,
-                item?.assignedTo?.name || item?.assignedToName || item?.staffName,
+                item?.assignedTo?.name ||
+                    item?.assignedToName ||
+                    item?.staffName,
             );
-            register(item?.createdBy?._id || item?.createdBy, item?.createdBy?.name);
+            register(
+                item?.createdBy?._id || item?.createdBy,
+                item?.createdBy?.name,
+            );
         });
         return map;
-    }, [
-        reportData.callLogs,
-        reportData.enquiries,
-        reportData.followups,
-        staffDirectory,
-    ]);
+    }, [reportData.enquiries, reportData.followups, staffDirectory]);
     const staffIdsByName = useMemo(() => {
         const map = {};
         const add = (name, id) => {
@@ -1015,36 +1004,36 @@ export default function ReportScreen({ navigation }) {
             if (!map[n].includes(k)) map[n].push(k);
         };
 
-        (Array.isArray(staffDirectory) ? staffDirectory : []).forEach((item) => {
-            add(item?.name, item?._id || item?.id);
-        });
+        (Array.isArray(staffDirectory) ? staffDirectory : []).forEach(
+            (item) => {
+                add(item?.name, item?._id || item?.id);
+            },
+        );
 
-        const allRows = [
-            ...reportData.enquiries,
-            ...reportData.followups,
-            ...reportData.callLogs,
-        ];
+        const allRows = [...reportData.enquiries, ...reportData.followups];
         allRows.forEach((item) => {
-            add(item?.assignedTo?.name || item?.assignedToName, item?.assignedTo?._id || item?.assignedTo || item?.assignedToId);
-            add(item?.staffId?.name || item?.staffName, item?.staffId?._id || item?.staffId);
+            add(
+                item?.assignedTo?.name || item?.assignedToName,
+                item?.assignedTo?._id || item?.assignedTo || item?.assignedToId,
+            );
+            add(
+                item?.staffId?.name || item?.staffName,
+                item?.staffId?._id || item?.staffId,
+            );
             add(item?.createdBy?.name, item?.createdBy?._id || item?.createdBy);
         });
         return map;
-    }, [
-        reportData.callLogs,
-        reportData.enquiries,
-        reportData.followups,
-        staffDirectory,
-    ]);
+    }, [reportData.enquiries, reportData.followups, staffDirectory]);
 
     const staffOptions = useMemo(() => {
-        const fromDirectory = (Array.isArray(staffDirectory) ? staffDirectory : [])
+        const fromDirectory = (
+            Array.isArray(staffDirectory) ? staffDirectory : []
+        )
             .map((item) => normalizeStaffLabel(item?.name, ""))
             .filter(Boolean);
         const fromReportRows = [
             ...reportData.enquiries,
             ...reportData.followups,
-            ...reportData.callLogs,
         ]
             .map((item) => getStaffName(item, adminName, staffNameById))
             .filter(Boolean);
@@ -1057,7 +1046,6 @@ export default function ReportScreen({ navigation }) {
         return [ALL_STAFF, ...uniqueStaff];
     }, [
         adminName,
-        reportData.callLogs,
         reportData.enquiries,
         reportData.followups,
         staffDirectory,
@@ -1206,41 +1194,11 @@ export default function ReportScreen({ navigation }) {
     );
 
     const filteredCalls = useMemo(
-        () =>
-            reportData.callLogs.filter((item) => {
-                if (isStaffUser) {
-                    const selfName = normalizeStaffLabel(user?.name || "", "");
-                    const ownById = getStaffId(item) === selfId;
-                    const ownByName =
-                        getStaffName(item, adminName, staffNameById) ===
-                        selfName;
-                    if (!ownById && !ownByName) return false;
-                }
-                if (!inRange(getCallDate(item), filterRange)) return false;
-                if (
-                    !matchesStaffFilter(
-                        item,
-                        staffFilter,
-                        adminName,
-                        staffNameById,
-                        staffIdsByName,
-                    )
-                )
-                    return false;
-                const itemStatus = getItemStatus(item);
-                if (
-                    statusFilter !== ALL_STATUS &&
-                    itemStatus &&
-                    itemStatus !== statusFilter
-                )
-                    return false;
-                return true;
-            }),
+        () => [],
         [
             adminName,
             filterRange,
             isStaffUser,
-            reportData.callLogs,
             selfId,
             staffFilter,
             staffIdsByName,
@@ -1328,7 +1286,9 @@ export default function ReportScreen({ navigation }) {
 
         // Enquiries created: prefer creator name, else fallback to resolved staff name.
         filteredEnq.forEach((i) => {
-            const creator = normalizeStaffLabel(i?.enqBy || "", "") || getStaffName(i, adminName, staffNameById);
+            const creator =
+                normalizeStaffLabel(i?.enqBy || "", "") ||
+                getStaffName(i, adminName, staffNameById);
             ensure(creator).enquiriesCreated += 1;
 
             // Sales leads: credited to resolved assignee when converted.

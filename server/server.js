@@ -217,11 +217,6 @@ app.use(
     require("./routes/staffRoutes"),
 );
 app.use(
-    "/api/calllogs",
-    withPlan("call_logs", ["/debug", "/webhook"]),
-    require("./routes/callLogRoutes"),
-);
-app.use(
     "/api/whatsapp",
     withPlan("whatsapp", ["/webhook", "/media"]),
     require("./routes/whatsappRoutes"),
@@ -239,6 +234,7 @@ app.use(
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/company", require("./routes/companyRoutes"));
 app.use("/api/superadmin", require("./routes/superadmin.routes"));
+app.use("/api/calllogs", require("./routes/callLogRoutes"));
 
 // Basic Route
 app.get("/", (req, res) => {
