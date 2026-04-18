@@ -1,0 +1,79 @@
+[1G[0K⠙[1G[0K[90mStarting project at /home/runner/workspace[39m
+[2mStarting Metro Bundler[22m
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+█ ▄▄▄▄▄ █▄▄▄ ▀   █▀▄▀ █ █▀▀▄█▀█ ▄▄▄▄▄ █
+█ █   █ ██▄▀ █▄ ▀█▀ ██  ▄▄ █▄▀█ █   █ █
+█ █▄▄▄█ ██▀▄ ▄ ▀▄█▄▀▄ █▄▀█  █ █ █▄▄▄█ █
+█▄▄▄▄▄▄▄█ ▀▄█ █ █▄█▄█▄█ █▄▀▄▀ █▄▄▄▄▄▄▄█
+█▄ ▀▄ ▀▄▀▀ ▀█▄▄ ▄▄▄▄  ▀▀▀██▄ █▀▄█▀▀▀█▄█
+█▀▀▄██ ▄ █▄▄█▄█ ▀█ ▄██▄▀▄██▄▄▄▄  ▀▀▀▀▄█
+██▄▄ ▄▄▄▀▀  █▀▄▄█▄▀ ▄▀█▀▀▀█▀   ▄▄▀ ▀███
+█▄▄▄█ █▄█ ▀▀█▀▀ ▄ ▄▀ █▄▀▀█▄▄▄▄█▀▄ ▀▀ ▄█
+█▄▀█▄█▀▄ ▀██ ▄██  ▀▄█ █▄█ ▄█ █▄▄ █▄  ██
+█▀▀ █ ▀▄▄▄██▀▄ ▄▄▄█▀▄ ▄█▄▄ █▄▀▄█ ▀▀▄▄ █
+█▄ █ ▄▄▄▀ ▀▄▄▀ █ ▀ ▄  ██▀█▀ ▀ █▄  █▀▀▄█
+█ █▄███▄  ▀  ▀ █▄▀  █▀▄▀▄▄▄█ ▄██▄  ▀▀ █
+█▀ ▀▀  ▄▀█▄█▄▄ ▀ █▀ ▄ █▄▀▄▀█▀ ▄▄▄▀██ ██
+█ ▄█ █▀▄█▄▄▀ ▄▄█▄█▄▀ █▄███▄ ▄  █ ▄▄   █
+█▄█▄▄██▄▄▀█▀▀▀▀   ▀▄█ ██▄▄ ▄  ▄▄▄  ▄▀▄█
+█ ▄▄▄▄▄ ██▀ ▄▀█▀▄██ ▄ █ ▄▀ █▀ █▄█ ▀▄▀▄█
+█ █   █ █ █▀█▄▄ ▄▄▄   ▄▀ ▄█ ▄   ▄▄ █▀ █
+█ █▄▄▄█ █▀ ██▄█    ██▀▄█ ▄▄  ▄▄▀ ▄▀▀▀ █
+█▄▄▄▄▄▄▄█▄▄███▄▄▄██▄▄▄█▄█▄███▄█▄▄▄▄██▄█
+
+› Metro waiting on [4mexp+neoapp-manibro18://expo-development-client/?url=http%3A%2F%2F172.31.68.2%3A5000[24m
+› Scan the QR code above to open the project in a development build. [2mLearn more: [4mhttps://expo.fyi/start[24m[22m
+
+› Web is waiting on [4mhttp://localhost:5000[24m
+
+› Using [36mdevelopment build[39m
+› Press [1ms[22m [2m│[22m switch to Expo Go
+
+› Press [1ma[22m [2m│[22m open Android
+› Press [1mw[22m [2m│[22m open web
+
+› Press [1mj[22m [2m│[22m open debugger
+› Press [1mr[22m [2m│[22m reload app
+› Press [1mm[22m [2m│[22m toggle menu
+› [1mshift+m[22m [2m│[22m more tools
+› Press [1mo[22m [2m│[22m open project code in your editor
+
+› Press [1m?[22m [2m│[22m show all commands
+
+Logs for your project will appear below.[2m Press Ctrl+C to exit.[22m
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  5.6% [22m[2m( 34/144)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓[49m[39m[47m[37m░░░░░░░░░░░░░░░[39m[49m[1m 11.1% [22m[2m( 84/252)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓[49m[39m[47m[37m░░░░░░░░░░░░░░░[39m[49m[1m 11.1% [22m[2m(122/389)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓[49m[39m[47m[37m░░░░░░░░░░░░░░[39m[49m[1m 15.4% [22m[2m(179/456)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓[49m[39m[47m[37m░░░░░░░░░░░░[39m[49m[1m 26.4% [22m[2m(366/712)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░░░[39m[49m[1m 42.6% [22m[2m(559/856)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░░[39m[49m[1m 45.6% [22m[2m(631/934)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░░[39m[49m[1m 45.6% [22m[2m( 745/1129)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 59.7% [22m[2m( 983/1272)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 59.7% [22m[2m(1148/1491)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 73.8% [22m[2m(1366/1590)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 78.7% [22m[2m(1513/1706)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 80.5% [22m[2m(1734/1933)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 84.4% [22m[2m(1960/2134)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 97.5% [22m[2m(2242/2270)[22m
+[149D[1A[0J[32m[1mWeb[22m Bundled [39m[2m1731ms[22m[0m[2m node_modules/expo/AppEntry.js (2270 modules)[22m[0m
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 97.5% [22m[2m(2242/2270)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[149D[1A[0J[32m[1mWeb[22m Bundled [39m[2m93ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[149D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓[49m[39m[47m[37m░░░░░░░░░░░░░░░[39m[49m[1m  8.9% [22m[2m( 61/204)[22m
+[149D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░[39m[49m[1m 50.7% [22m[2m(272/382)[22m
+[149D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 75.6% [22m[2m(460/529)[22m
+[149D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░[39m[49m[1m 92.5% [22m[2m(681/708)[22m
+[149D[1A[0J[32m[1mWeb[22m Bundled [39m[2m473ms[22m[0m[2m src/services/socketService.js (708 modules)[22m[0m
+[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░[39m[49m[1m 92.5% [22m[2m(681/708)[22m
+[149D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[149D[1A[0J[32m[1mWeb[22m Bundled [39m[2m85ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[32m[1mWeb[22m Bundled [39m[2m27ms[22m[0m[2m src/services/socketService.js (1 module)[22m[0m
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[149D[1A[0J[32m[1mWeb[22m Bundled [39m[2m85ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[32m[1mWeb[22m Bundled [39m[2m37ms[22m[0m[2m src/services/socketService.js (1 module)[22m[0m

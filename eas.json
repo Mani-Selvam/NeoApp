@@ -11,7 +11,7 @@
                 "buildType": "apk"
             },
             "env": {
-                "NODE_ENV": "development",
+                "NODE_ENV": "production",
                 "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api",
                 "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
                 "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "login-form-39e3e.firebaseapp.com",
@@ -27,7 +27,7 @@
                 "buildType": "apk"
             },
             "env": {
-                "NODE_ENV": "development",
+                "NODE_ENV": "production",
                 "EXPO_PUBLIC_API_URL": "https://neomobile.neophrondev.in/api",
                 "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
                 "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "login-form-39e3e.firebaseapp.com",

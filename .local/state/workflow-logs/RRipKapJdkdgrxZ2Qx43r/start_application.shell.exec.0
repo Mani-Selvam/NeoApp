@@ -1,0 +1,216 @@
+[1G[0K⠙[1G[0K[90mStarting project at /home/runner/workspace[39m
+[2mStarting Metro Bundler[22m
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+█ ▄▄▄▄▄ █▄▄▄ ▀   █▀▄▀ █ █▀▀▄█▀█ ▄▄▄▄▄ █
+█ █   █ ██▄▀ █▄ ▀█▀ ██  ▄▄ █▄▀█ █   █ █
+█ █▄▄▄█ ██▀▄ ▄ ▀▄█▄▀▄ █▄▀█  █ █ █▄▄▄█ █
+█▄▄▄▄▄▄▄█ ▀▄█ █ █▄█▄█▄█ █▄▀▄▀ █▄▄▄▄▄▄▄█
+█▄ ▀▄ ▀▄▀▀ ▀█▄▄ ▄▄▄▄  ▀▀▀██▄ █▀▄█▀▀▀█▄█
+█▀▀▄██ ▄ █▄▄█▄█ ▀█ ▄██▄▀▄██▄▄▄▄  ▀▀▀▀▄█
+██▄▄ ▄▄▄▀▀  █▀▄▄█▄▀ ▄▀█▀▀▀█▀   ▄▄▀ ▀███
+█▄▄▄█ █▄█ ▀▀█▀▀ ▄ ▄▀ █▄▀▀█▄▄▄▄█▀▄ ▀▀ ▄█
+█▄▀█▄█▀▄ ▀██ ▄██  ▀▄█ █▄█ ▄█ █▄▄ █▄  ██
+█▀▀ █ ▀▄▄▄██▀▄ ▄▄▄█▀▄ ▄█▄▄ █▄▀▄█ ▀▀▄▄ █
+█▄ █ ▄▄▄▀ ▀▄▄▀ █ ▀ ▄  ██▀█▀ ▀ █▄  █▀▀▄█
+█ █▄███▄  ▀  ▀ █▄▀  █▀▄▀▄▄▄█ ▄██▄  ▀▀ █
+█▀ ▀▀  ▄▀█▄█▄▄ ▀ █▀ ▄ █▄▀▄▀█▀ ▄▄▄▀██ ██
+█ ▄█ █▀▄█▄▄▀ ▄▄█▄█▄▀ █▄███▄ ▄  █ ▄▄   █
+█▄█▄▄██▄▄▀█▀▀▀▀   ▀▄█ ██▄▄ ▄  ▄▄▄  ▄▀▄█
+█ ▄▄▄▄▄ ██▀ ▄▀█▀▄██ ▄ █ ▄▀ █▀ █▄█ ▀▄▀▄█
+█ █   █ █ █▀█▄▄ ▄▄▄   ▄▀ ▄█ ▄   ▄▄ █▀ █
+█ █▄▄▄█ █▀ ██▄█    ██▀▄█ ▄▄  ▄▄▀ ▄▀▀▀ █
+█▄▄▄▄▄▄▄█▄▄███▄▄▄██▄▄▄█▄█▄███▄█▄▄▄▄██▄█
+
+› Metro waiting on
+[4mexp+neoapp-manibro18://expo-development-client/?url=http%3A%2F%2F172.31.68.2%3A5000[24m
+› Scan the QR code above to open the project in a development build. [2mLearn more:[22m
+[2m[4mhttps://expo.fyi/start[24m[22m
+
+› Web is waiting on [4mhttp://localhost:5000[24m
+
+› Using [36mdevelopment build[39m
+› Press [1ms[22m [2m│[22m switch to Expo Go
+
+› Press [1ma[22m [2m│[22m open Android
+› Press [1mw[22m [2m│[22m open web
+
+› Press [1mj[22m [2m│[22m open debugger
+› Press [1mr[22m [2m│[22m reload app
+› Press [1mm[22m [2m│[22m toggle menu
+› [1mshift+m[22m [2m│[22m more tools
+› Press [1mo[22m [2m│[22m open project code in your editor
+
+› Press [1m?[22m [2m│[22m show all commands
+
+Logs for your project will appear below.[2m Press Ctrl+C to exit.[22m
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  1.0% [22m[2m(1/1)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓[49m[39m[47m[37m░░░░░░░░░░░░░░[39m[49m[1m 16.0% [22m[2m( 4/10)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░░░░[39m[49m[1m 37.3% [22m[2m(11/18)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░░░[39m[49m[1m 40.5% [22m[2m(14/22)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░░░[39m[49m[1m 46.5% [22m[2m(15/22)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(26/33)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(29/39)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(30/39)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(40/64)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 43/100)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 46/108)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 51/125)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 60/127)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 74/136)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 88/208)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 97/220)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(104/230)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(108/255)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(117/277)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(127/288)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(139/324)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(144/401)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(145/401)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(147/409)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(148/409)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(149/420)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(151/421)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(151/424)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(152/424)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(154/432)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(155/432)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(156/432)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(157/435)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(159/439)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(163/445)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(167/447)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(168/447)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(169/447)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(170/447)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(172/447)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(173/447)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(180/448)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(181/448)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(193/450)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(206/459)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(216/466)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(225/492)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(231/520)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(246/554)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(262/572)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(279/592)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(301/629)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(321/641)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(338/680)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(351/726)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(383/726)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(398/726)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(409/730)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(424/766)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(431/772)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(441/794)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(459/801)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(468/815)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(484/821)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(507/843)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(521/847)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(550/862)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(578/873)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(586/881)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(601/892)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(608/893)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(619/906)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(632/940)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(646/962)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(665/969)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m(676/993)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 700/1006)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 723/1020)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 736/1047)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 739/1048)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 741/1054)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 742/1054)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 745/1070)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 758/1083)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 771/1099)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 778/1124)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 784/1142)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 788/1159)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 801/1168)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 811/1176)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 825/1197)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 848/1217)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 874/1237)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 895/1241)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 914/1243)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 932/1247)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 941/1247)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 964/1270)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.1% [22m[2m( 990/1280)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.2% [22m[2m(1017/1290)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░░[39m[49m[1m 62.3% [22m[2m(1036/1313)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 62.5% [22m[2m(1040/1315)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 62.8% [22m[2m(1052/1328)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1057/1329)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1075/1355)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1089/1423)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1109/1442)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1131/1461)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1150/1477)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1171/1491)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 63.3% [22m[2m(1188/1495)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 64.7% [22m[2m(1211/1506)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 66.1% [22m[2m(1235/1519)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░░[39m[49m[1m 67.0% [22m[2m(1249/1526)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 70.2% [22m[2m(1289/1538)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 70.5% [22m[2m(1306/1555)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 71.3% [22m[2m(1318/1561)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 72.7% [22m[2m(1335/1566)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 72.9% [22m[2m(1337/1566)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 73.2% [22m[2m(1340/1566)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 73.7% [22m[2m(1344/1566)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 74.4% [22m[2m(1351/1566)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 74.4% [22m[2m(1362/1580)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 76.1% [22m[2m(1402/1607)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 77.4% [22m[2m(1440/1637)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 77.4% [22m[2m(1478/1687)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 78.1% [22m[2m(1504/1702)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 78.9% [22m[2m(1530/1723)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 78.9% [22m[2m(1540/1738)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 79.9% [22m[2m(1560/1745)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 79.9% [22m[2m(1589/1786)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 79.9% [22m[2m(1634/1859)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 79.9% [22m[2m(1676/1909)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 80.2% [22m[2m(1722/1923)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 81.4% [22m[2m(1749/1938)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 81.8% [22m[2m(1787/1976)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 81.8% [22m[2m(1818/2016)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 85.4% [22m[2m(1882/2036)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 86.4% [22m[2m(1931/2078)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 86.4% [22m[2m(1967/2136)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░[39m[49m[1m 86.4% [22m[2m(2011/2169)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░[39m[49m[1m 88.8% [22m[2m(2063/2189)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░[39m[49m[1m 91.2% [22m[2m(2112/2212)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░[39m[49m[1m 93.1% [22m[2m(2158/2236)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 94.7% [22m[2m(2188/2248)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 96.8% [22m[2m(2220/2256)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 98.3% [22m[2m(2256/2276)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 99.9% [22m[2m(2286/2286)[22m
+[80D[1A[0J[32m[1mWeb[22m Bundled [39m[2m17165ms[22m[0m[2m node_modules/expo/AppEntry.js (2286 modules)[22m[0m
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 99.9% [22m[2m(2286/2286)[22m
+[80D[1A[0J[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[80D[1A[0J[32m[1mWeb[22m Bundled [39m[2m107ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[80D[1A[0J[32m[1mWeb[22m Bundled [39m[2m90ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[80D[1A[0J[32m[1mWeb[22m Bundled [39m[2m109ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[1mWeb[22m [0m[2mnode_modules/expo/[22m[0m[1mAppEntry.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[80D[1A[0J[32m[1mWeb[22m Bundled [39m[2m87ms[22m[0m[2m node_modules/expo/AppEntry.js (1 module)[22m[0m
+[7m[37m[1m LOG [22m[39m[27m [web] Logs will appear in the browser console
+[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [47m[37m░░░░░░░░░░░░░░░░[39m[49m[1m  0.0% [22m[2m(0/1)[22m
+[80D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓[49m[39m[47m[37m░░░░░░░░░░░░░░░[39m[49m[1m 10.6% [22m[2m( 88/270)[22m
+[80D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░░[39m[49m[1m 71.3% [22m[2m(380/450)[22m
+[80D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░░░░[39m[49m[1m 75.3% [22m[2m(460/530)[22m
+[80D[1A[0J[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 94.5% [22m[2m(692/712)[22m
+[80D[1A[0J[32m[1mWeb[22m Bundled [39m[2m452ms[22m[0m[2m src/services/socketService.js (712 modules)[22m[0m
+[1mWeb[22m [0m[2msrc/services/[22m[0m[1msocketService.js[22m [32m[42m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓[49m[39m[47m[37m░[39m[49m[1m 94.5% [22m[2m(692/712)[22m
+[80D[1A[0J
