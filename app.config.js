@@ -45,6 +45,14 @@ module.exports = ({ config }) => {
         "SCHEDULE_EXACT_ALARM",
         "USE_EXACT_ALARM",
     ];
+    const enterpriseAndroidPermissions = [
+        ...safeAndroidPermissions,
+        // Required for `react-native-call-log` + runtime READ_CALL_LOG checks.
+        "READ_CALL_LOG",
+    ];
+    const androidPermissions = playStoreSafeMode
+        ? safeAndroidPermissions
+        : enterpriseAndroidPermissions;
     const blockedAndroidPermissions = playStoreSafeMode
         ? [
               "android.permission.READ_CALL_LOG",
@@ -155,7 +163,7 @@ module.exports = ({ config }) => {
         },
         android: {
             ...config.android,
-            permissions: safeAndroidPermissions,
+            permissions: androidPermissions,
             blockedPermissions: [
                 ...(config.android?.blockedPermissions || []),
                 ...blockedAndroidPermissions,
@@ -625,6 +633,122 @@ module.exports = ({ config }) => {
                     id: "meeting_missed_ta",
                     name: "Meeting - Missed (Tamil)",
                     sound: "mtmissed",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+
+                // ─── Follow-up Notifications (English) ───
+                {
+                    id: "followups_5min_en",
+                    name: "Follow-up - 5 min",
+                    sound: "n5pmin",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_4min_en",
+                    name: "Follow-up - 4 min",
+                    sound: "n4pmin",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_3min_en",
+                    name: "Follow-up - 3 min",
+                    sound: "n3pmin",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_2min_en",
+                    name: "Follow-up - 2 min",
+                    sound: "n2pmin",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_1min_en",
+                    name: "Follow-up - 1 min",
+                    sound: "n1pmin",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_due_en",
+                    name: "Follow-up - Due",
+                    sound: "pdue",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_missed_en",
+                    name: "Follow-up - Missed",
+                    sound: "pmissed",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+
+                // ─── Follow-up Notifications (Tamil) ───
+                {
+                    id: "followups_5min_ta",
+                    name: "Follow-up - 5 min (Tamil)",
+                    sound: "t5min",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_4min_ta",
+                    name: "Follow-up - 4 min (Tamil)",
+                    sound: "t4min",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_3min_ta",
+                    name: "Follow-up - 3 min (Tamil)",
+                    sound: "t3min",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_2min_ta",
+                    name: "Follow-up - 2 min (Tamil)",
+                    sound: "t2min",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_1min_ta",
+                    name: "Follow-up - 1 min (Tamil)",
+                    sound: "t1min",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_due_ta",
+                    name: "Follow-up - Due (Tamil)",
+                    sound: "tdue",
+                    vibrationPattern: [0, 250, 250, 250],
+                    enableVibrate: true,
+                    importance: 5,
+                },
+                {
+                    id: "followups_missed_ta",
+                    name: "Follow-up - Missed (Tamil)",
+                    sound: "tmissed",
                     vibrationPattern: [0, 250, 250, 250],
                     enableVibrate: true,
                     importance: 5,

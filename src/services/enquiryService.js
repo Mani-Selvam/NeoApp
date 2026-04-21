@@ -9,6 +9,31 @@ import {
 } from "./appCache";
 
 const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000);
+const RECENT_DEDUP_WINDOW_MS = 900;
+const _inflightGetAllEnquiries = new Map();
+const _recentGetAllEnquiries = new Map();
+
+const stableStringify = (value) => {
+    const seen = new WeakSet();
+    const normalize = (v) => {
+        if (!v || typeof v !== "object") return v;
+        if (seen.has(v)) return undefined;
+        seen.add(v);
+        if (Array.isArray(v)) return v.map(normalize);
+        const out = {};
+        for (const key of Object.keys(v).sort()) out[key] = normalize(v[key]);
+        return out;
+    };
+    try {
+        return JSON.stringify(normalize(value));
+    } catch {
+        try {
+            return String(value);
+        } catch {
+            return "";
+        }
+    }
+};
 
 // CREATE ENQUIRY
 export const createEnquiry = async (enquiryData) => {
@@ -50,8 +75,40 @@ export const getAllEnquiries = async (
             Object.assign(params, extraParams);
         }
 
-        const response = await client.get("/enquiries", { params });
-        return response.data; // Now returns { data: [], pagination: {} } or [] if legacy
+        const authKey =
+            String(client?.defaults?.headers?.Authorization || "").trim() ||
+            "no-auth";
+        const key = buildCacheKey(
+            "enquiries:list:v1",
+            `${authKey}|${stableStringify(params)}`,
+        );
+        const now = Date.now();
+        const recent = _recentGetAllEnquiries.get(key);
+        if (recent && now - Number(recent.t || 0) < RECENT_DEDUP_WINDOW_MS) {
+            return recent.value;
+        }
+
+        const inflight = _inflightGetAllEnquiries.get(key);
+        if (inflight) return await inflight;
+
+        const promise = (async () => {
+            const response = await client.get("/enquiries", { params });
+            _recentGetAllEnquiries.set(key, { t: Date.now(), value: response.data });
+            if (_recentGetAllEnquiries.size > 200) {
+                const cutoff = Date.now() - 5 * 60 * 1000;
+                for (const [k, v] of _recentGetAllEnquiries.entries()) {
+                    if (Number(v?.t || 0) < cutoff) _recentGetAllEnquiries.delete(k);
+                }
+            }
+            return response.data; // Now returns { data: [], pagination: {} } or [] if legacy
+        })();
+
+        _inflightGetAllEnquiries.set(key, promise);
+        try {
+            return await promise;
+        } finally {
+            _inflightGetAllEnquiries.delete(key);
+        }
     } catch (error) {
         console.error(
             "Get enquiries error:",

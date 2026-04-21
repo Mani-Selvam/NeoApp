@@ -1,5 +1,7 @@
 ﻿import getApiClient from "./apiClient";
-
+import { getAuthToken } from "./secureTokenStorage";
+// ✅ Add this at the top of userService.js (with your other imports)
+import { API_URL } from "./apiConfig";
 export const getProfile = async () => {
     const client = await getApiClient();
     const response = await client.get("/users/profile");
@@ -10,39 +12,46 @@ export const updateProfile = async (data) => {
     const hasLogoUpload = Boolean(
         data?.logo && typeof data.logo === "object" && data.logo.uri,
     );
+
     if (hasLogoUpload) {
         const formData = new FormData();
         formData.append("name", String(data?.name || ""));
-
-        // Handle file upload - ensure proper format for both web and mobile
-        const logoFile = {
+        formData.append("logo", {
             uri: data.logo.uri,
             type: data.logo.type || "image/jpeg",
             name: data.logo.name || "profile-logo.jpg",
-        };
-
-        formData.append("logo", logoFile);
+        });
 
         try {
-            const client = await getApiClient(true); // true = isFileUpload
-            const response = await client.put("/users/profile", formData, {
+            const token = await getAuthToken();
+
+            // ✅ Use fetch directly — React Native handles FormData better with fetch
+            const response = await fetch(`${API_URL}/users/profile`, {
+                method: "PUT",
                 headers: {
-                    "Content-Type": "multipart/form-data",
+                    // ✅ Do NOT set Content-Type — let fetch set it with boundary
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
                 },
+                body: formData,
             });
-            return response.data;
-        } catch (error) {
-            console.error("[Logo Upload Error]", error?.message);
-            // Re-throw with better error message for mobile
-            if (error?.message?.includes("Network")) {
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
                 throw new Error(
-                    "Network error: Cannot reach server. Ensure mobile and server are on the same WiFi network.",
+                    errData?.message || `Upload failed: ${response.status}`,
                 );
             }
+
+            const result = await response.json();
+            console.log("✅ Upload Success:", result);
+            return result;
+        } catch (error) {
+            console.log("❌ Upload Failed:", error?.message);
             throw error;
         }
     }
 
+    // Normal JSON update (no file)
     const client = await getApiClient();
     const response = await client.put("/users/profile", data);
     return response.data;

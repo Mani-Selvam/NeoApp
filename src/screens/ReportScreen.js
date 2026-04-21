@@ -1193,21 +1193,6 @@ export default function ReportScreen({ navigation }) {
         ],
     );
 
-    const filteredCalls = useMemo(
-        () => [],
-        [
-            adminName,
-            filterRange,
-            isStaffUser,
-            selfId,
-            staffFilter,
-            staffIdsByName,
-            staffNameById,
-            statusFilter,
-            user?.name,
-        ],
-    );
-
     const leadM = useMemo(() => {
         const counts = filteredEnq.reduce((a, i) => {
             const k = i?.status || "New";
@@ -1322,58 +1307,6 @@ export default function ReportScreen({ navigation }) {
         staffNameById,
         user?.name,
     ]);
-
-    const staffCallPerf = useMemo(() => {
-        const toRow = (name) => ({
-            name,
-            totalCalls: 0,
-            incoming: 0,
-            outgoing: 0,
-            missed: 0,
-            notAttended: 0,
-            totalDuration: 0,
-        });
-
-        if (isStaffUser) {
-            const selfName = user?.name || "Staff";
-            const row = toRow(selfName);
-            filteredCalls.forEach((i) => {
-                const t = String(i?.callType || "").trim();
-                row.totalCalls += 1;
-                if (t === "Incoming") row.incoming += 1;
-                else if (t === "Outgoing") row.outgoing += 1;
-                else if (t === "Missed") row.missed += 1;
-                else if (t === "Not Attended") row.notAttended += 1;
-                row.totalDuration += Number(i?.duration || 0) || 0;
-            });
-            return [row];
-        }
-
-        const map = {};
-        const ensure = (name) => {
-            const n = normalizeStaffLabel(name, adminName);
-            if (!map[n]) map[n] = toRow(n);
-            return map[n];
-        };
-
-        filteredCalls.forEach((i) => {
-            const name = getStaffName(i, adminName, staffNameById);
-            const row = ensure(name);
-            const t = String(i?.callType || "").trim();
-            row.totalCalls += 1;
-            if (t === "Incoming") row.incoming += 1;
-            else if (t === "Outgoing") row.outgoing += 1;
-            else if (t === "Missed") row.missed += 1;
-            else if (t === "Not Attended") row.notAttended += 1;
-            row.totalDuration += Number(i?.duration || 0) || 0;
-        });
-
-        return Object.values(map).sort((a, b) => {
-            if (b.totalCalls !== a.totalCalls)
-                return b.totalCalls - a.totalCalls;
-            return b.totalDuration - a.totalDuration;
-        });
-    }, [adminName, filteredCalls, isStaffUser, staffNameById, user?.name]);
 
     const openStaffYearReport = useCallback(
         (rowOrName, maybeStaffId = "") => {
@@ -1566,12 +1499,6 @@ export default function ReportScreen({ navigation }) {
                         EnquiriesCreated: 0,
                         FollowupsDone: 0,
                         SalesLeads: 0,
-                        Calls: 0,
-                        Incoming: 0,
-                        Outgoing: 0,
-                        Missed: 0,
-                        NotAttended: 0,
-                        DurationSec: 0,
                     };
                 }
                 return map[key];
@@ -1583,21 +1510,13 @@ export default function ReportScreen({ navigation }) {
                 row.FollowupsDone = Number(r?.followupsDone || 0);
                 row.SalesLeads = Number(r?.salesLeads || 0);
             });
-            (Array.isArray(staffCallPerf) ? staffCallPerf : []).forEach((r) => {
-                const row = ensure(r?.name);
-                row.Calls = Number(r?.totalCalls || 0);
-                row.Incoming = Number(r?.incoming || 0);
-                row.Outgoing = Number(r?.outgoing || 0);
-                row.Missed = Number(r?.missed || 0);
-                row.NotAttended = Number(r?.notAttended || 0);
-                row.DurationSec = Number(r?.totalDuration || 0);
-            });
 
             const rows = Object.values(map).sort((a, b) => {
-                if (b.Calls !== a.Calls) return b.Calls - a.Calls;
                 if (b.SalesLeads !== a.SalesLeads)
                     return b.SalesLeads - a.SalesLeads;
-                return b.DurationSec - a.DurationSec;
+                if (b.EnquiriesCreated !== a.EnquiriesCreated)
+                    return b.EnquiriesCreated - a.EnquiriesCreated;
+                return b.FollowupsDone - a.FollowupsDone;
             });
 
             const header = [
@@ -1605,13 +1524,6 @@ export default function ReportScreen({ navigation }) {
                 "Enquiries Created",
                 "Followups Done",
                 "Sales Leads",
-                "Total Calls",
-                "Incoming",
-                "Outgoing",
-                "Missed",
-                "Not Attended",
-                "Total Duration (sec)",
-                "Total Duration (formatted)",
                 "From Date",
                 "To Date",
                 "Staff Filter",
@@ -1628,13 +1540,6 @@ export default function ReportScreen({ navigation }) {
                         r.EnquiriesCreated,
                         r.FollowupsDone,
                         r.SalesLeads,
-                        r.Calls,
-                        r.Incoming,
-                        r.Outgoing,
-                        r.Missed,
-                        r.NotAttended,
-                        r.DurationSec,
-                        formatDurationSec(r.DurationSec),
                         fromDate,
                         toDate,
                         staffFilter,
@@ -2396,98 +2301,6 @@ export default function ReportScreen({ navigation }) {
                                                 </View>
                                             </View>
                                         </TouchableOpacity>
-                                    ))
-                                )}
-                            </Card>
-                        </FadeIn>
-
-                        <FadeIn delay={160}>
-                            <Card>
-                                <CardHeader
-                                    title="Staff Call Activity"
-                                    icon="call-outline"
-                                    accent={C.violet}
-                                />
-                                <View style={st.tableHead}>
-                                    {[
-                                        "Staff Name",
-                                        "Calls",
-                                        "Duration",
-                                        "Missed",
-                                    ].map((h, i) => (
-                                        <Text
-                                            key={h}
-                                            style={[
-                                                st.thCell,
-                                                i === 0 && st.thNameCell,
-                                            ]}>
-                                            {h}
-                                        </Text>
-                                    ))}
-                                </View>
-                                {staffCallPerf.length === 0 ? (
-                                    <Text style={st.emptyNote}>
-                                        No call activity
-                                    </Text>
-                                ) : (
-                                    staffCallPerf.map((item, idx) => (
-                                        <View
-                                            key={item.name}
-                                            style={[
-                                                st.tableRow,
-                                                idx % 2 === 1 && {
-                                                    backgroundColor: `${C.violet}08`,
-                                                },
-                                            ]}>
-                                            <View
-                                                style={[
-                                                    st.thNameCell,
-                                                    {
-                                                        flexDirection: "row",
-                                                        alignItems: "center",
-                                                        gap: 8,
-                                                    },
-                                                ]}>
-                                                <View
-                                                    style={[
-                                                        st.teamAvatar,
-                                                        {
-                                                            backgroundColor: `${CHART_COLORS[idx % CHART_COLORS.length]}22`,
-                                                        },
-                                                    ]}>
-                                                    <Text
-                                                        style={[
-                                                            st.teamAvatarText,
-                                                            {
-                                                                color: CHART_COLORS[
-                                                                    idx %
-                                                                        CHART_COLORS.length
-                                                                ],
-                                                            },
-                                                        ]}>
-                                                        {(
-                                                            item.name[0] || "?"
-                                                        ).toUpperCase()}
-                                                    </Text>
-                                                </View>
-                                                <Text
-                                                    style={st.tdName}
-                                                    numberOfLines={1}>
-                                                    {item.name}
-                                                </Text>
-                                            </View>
-                                            <Text style={st.tdCell}>
-                                                {item.totalCalls}
-                                            </Text>
-                                            <Text style={st.tdCell}>
-                                                {formatDurationSec(
-                                                    item.totalDuration,
-                                                )}
-                                            </Text>
-                                            <Text style={st.tdCell}>
-                                                {item.missed + item.notAttended}
-                                            </Text>
-                                        </View>
                                     ))
                                 )}
                             </Card>

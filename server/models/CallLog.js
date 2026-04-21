@@ -1,3 +1,8 @@
+/**
+ * CallLog.js — Mongoose model
+ * Stores synced device call logs per company/user.
+ * uniqueKey prevents duplicate inserts during repeated syncs.
+ */
 const mongoose = require("mongoose");
 
 const CallLogSchema = new mongoose.Schema(
@@ -14,11 +19,14 @@ const CallLogSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+        /**
+         * Store phone as-is from device (may include country code / spaces).
+         * Queries normalize to last-10 digits via regex.
+         */
         phoneNumber: {
             type: String,
             required: true,
             trim: true,
-            // Normalize: store as-is, but caller will normalize for queries
         },
         callType: {
             type: String,
@@ -26,10 +34,13 @@ const CallLogSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+        /**
+         * Duration in seconds. 0 for missed / rejected calls.
+         */
         callDuration: {
-            type: Number, // seconds
+            type: Number,
             default: 0,
-            required: true,
+            min: 0,
         },
         callTime: {
             type: Date,
@@ -43,37 +54,40 @@ const CallLogSchema = new mongoose.Schema(
         },
         source: {
             type: String,
-            enum: ["device"],
+            enum: ["device", "manual"],
             default: "device",
         },
-        // Unique key for duplicate prevention: phoneNumber_timestamp_duration
+        /**
+         * Unique key format: <10-digit-phone>_<callTime-ms>_<durationSec>
+         * Prevents duplicate sync inserts globally.
+         */
         uniqueKey: {
             type: String,
             required: true,
-            unique: true, // Prevent duplicates globally
-            sparse: true, // Allow null values for cleanup
+            unique: true,
         },
         syncedAt: {
             type: Date,
             default: Date.now,
-            index: true,
-        },
-        createdAt: {
-            type: Date,
-            default: Date.now,
-            index: true,
         },
     },
-    { timestamps: true },
+    {
+        timestamps: true, // adds createdAt, updatedAt
+    },
 );
 
-// Compound index for phone + callTime + company (for quick filtering)
+// ── Compound indexes ──────────────────────────────────────────────────────────
+
+// Primary query pattern: by company + phone + time (desc)
 CallLogSchema.index({ companyId: 1, phoneNumber: 1, callTime: -1 });
 
-// Compound index for syncing (company + syncedAt)
+// Sync query: newest synced per company
 CallLogSchema.index({ companyId: 1, syncedAt: -1 });
 
-// Text index for phone number search (optional, for future use)
-CallLogSchema.index({ phoneNumber: "text", contactName: "text" });
+// Filter by type within a company
+CallLogSchema.index({ companyId: 1, callType: 1, callTime: -1 });
+
+// User-specific queries
+CallLogSchema.index({ companyId: 1, userId: 1, callTime: -1 });
 
 module.exports = mongoose.model("CallLog", CallLogSchema);

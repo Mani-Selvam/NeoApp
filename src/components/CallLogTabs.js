@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
     View,
     Text,
@@ -6,7 +6,6 @@ import {
     FlatList,
     ActivityIndicator,
     TouchableOpacity,
-    ScaledSize,
     useWindowDimensions,
     Pressable,
     Linking,
@@ -15,12 +14,12 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import * as IntentLauncher from "expo-intent-launcher";
 import { isEnterpriseMode } from "../utils/callLogPermissions";
+import { ensurePhoneCallPermission } from "../utils/phoneCallPermissions";
 import callLogService from "../services/callLogService";
 import { onAppEvent } from "../services/appEvents";
 
-// Design tokens (match FollowUpScreen)
+// ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
     bg: "#F1F5F9",
     card: "#FFFFFF",
@@ -28,6 +27,7 @@ const C = {
     success: "#059669",
     warning: "#F59E0B",
     danger: "#DC2626",
+    info: "#0891B2",
     gray300: "#D1D5DB",
     gray500: "#6B7280",
     gray700: "#374151",
@@ -38,14 +38,14 @@ const CALL_TYPES = [
     {
         key: "incoming",
         label: "Incoming",
-        icon: "call-outline",
-        color: C.success,
+        icon: "arrow-down-circle-outline",
+        color: C.info,
     },
     {
         key: "outgoing",
         label: "Outgoing",
-        icon: "call-outline",
-        color: C.primary,
+        icon: "arrow-up-circle-outline",
+        color: C.success,
     },
     {
         key: "missed",
@@ -56,75 +56,66 @@ const CALL_TYPES = [
     {
         key: "rejected",
         label: "Rejected",
-        icon: "close-circle-outline",
+        icon: "ban-outline",
         color: C.warning,
     },
 ];
 
 /**
  * CallLogTabs Component
- * Displays call logs for an enquiry's phone number in tabbed format
- * Only renders if enterprise mode is enabled
- * Features sub-tabs for call log types: Incoming, Outgoing, Missed, Rejected
+ * Displays real call logs from backend for an enquiry's phone number.
+ * Tabs: Incoming | Outgoing | Missed | Rejected
+ * Call button directly initiates a phone call (no dialer pop-up where possible).
  */
-const CallLogTabs = ({ phoneNumber, onRefresh, enquiry }) => {
+const CallLogTabs = ({ phoneNumber, enquiry }) => {
     const { width } = useWindowDimensions();
+    // enterprise flag stored in ref so hooks order never changes
+    const enterpriseRef = useRef(isEnterpriseMode());
+
     const [selectedTab, setSelectedTab] = useState("incoming");
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
-    // Check if enterprise mode - if not, don't render anything
-    if (!isEnterpriseMode()) {
-        return null;
-    }
-
-    // Validate phone number
-    if (!phoneNumber || !phoneNumber.trim()) {
-        return null;
-    }
-
-    /**
-     * Fetch call logs for the selected tab
-     */
+    // ── Fetch call logs ───────────────────────────────────────────────────────
     const fetchLogs = useCallback(async () => {
+        const phone = String(phoneNumber || "").trim();
+        if (!phone) {
+            setError("No phone number available");
+            return;
+        }
+
+        // If enterprise mode is disabled, don't fetch
+        if (!enterpriseRef.current) {
+            console.log(
+                "[CallLogTabs] Enterprise mode disabled - call logs unavailable",
+            );
+            setError("Call logs are not available in this build");
+            return;
+        }
+
         try {
             setLoading(true);
             setError(null);
 
-            console.log("[CallLogTabs] 📞 Fetching call logs:", {
-                phoneNumber,
-                selectedTab,
-                timestamp: new Date().toISOString(),
-            });
+            console.log("[CallLogTabs] Fetching logs:", { phone, selectedTab });
 
             const result = await callLogService.getCallLogsByPhone(
-                phoneNumber,
+                phone,
                 selectedTab,
                 1,
                 100,
             );
 
-            console.log("[CallLogTabs] 📞 Response:", result);
-
             if (result.success) {
-                console.log(
-                    `[CallLogTabs] ✅ Loaded ${result.data?.length || 0} logs`,
-                );
                 setLogs(result.data || []);
             } else {
-                console.error("[CallLogTabs] ❌ Backend error:", result.error);
-                const errorMsg = result.error || "Failed to fetch call logs";
-                setError(errorMsg);
+                console.warn("[CallLogTabs] Backend error:", result.error);
+                setError(result.error || "Failed to fetch call logs");
                 setLogs([]);
             }
         } catch (err) {
-            console.error("[CallLogTabs] ❌ Exception:", {
-                message: err.message,
-                code: err?.response?.status,
-                data: err?.response?.data,
-                fullError: err,
-            });
+            console.error("[CallLogTabs] Exception:", err.message);
             setError(err.message || "Failed to fetch call logs");
             setLogs([]);
         } finally {
@@ -132,264 +123,270 @@ const CallLogTabs = ({ phoneNumber, onRefresh, enquiry }) => {
         }
     }, [phoneNumber, selectedTab]);
 
-    /**
-     * Load logs when tab changes
-     */
+    // Re-fetch when tab or phone number changes
     useEffect(() => {
         fetchLogs();
-    }, [selectedTab, phoneNumber, fetchLogs]);
+    }, [fetchLogs]);
 
-    /**
-     * Refresh logs when navigating back to screen
-     */
+    // Re-fetch when screen comes into focus
     useFocusEffect(
         useCallback(() => {
             fetchLogs();
         }, [fetchLogs]),
     );
 
-    /**
-     * Listen for call log sync events and refresh
-     */
+    // Re-fetch when a sync event fires
     useEffect(() => {
         const unsubscribe = onAppEvent("CALL_LOG_SYNCED", () => {
-            console.log("[CallLogTabs] Sync event received, refreshing");
+            console.log("[CallLogTabs] Sync event — refreshing");
             fetchLogs();
         });
-
         return () => {
-            if (unsubscribe) unsubscribe();
+            if (typeof unsubscribe === "function") unsubscribe();
         };
     }, [fetchLogs]);
 
-    /**
-     * Make a phone call directly (Android: no dialer via Intent, iOS: tel: scheme)
-     * In Expo Go: Uses tel: scheme (opens dialer)
-     * In dev build: Uses Intent for direct call
-     */
+    // ── Make a direct phone call ──────────────────────────────────────────────
     const handleMakeCall = useCallback(async () => {
-        if (!phoneNumber) {
-            Alert.alert("Error", "No phone number available");
+        const digits = String(phoneNumber || "").replace(/\D/g, "");
+        if (!digits) {
+            Alert.alert("No Number", "No valid phone number to call.");
             return;
         }
 
-        const phoneNumberClean = phoneNumber.replace(/\D/g, "");
-        console.log("[CallLogTabs] 📞 Making call to:", phoneNumberClean);
-
         try {
             if (Platform.OS === "android") {
-                // Try Intent first (works in dev build)
-                let callAttempted = false;
-                try {
-                    console.log(
-                        "[CallLogTabs] Attempting direct call via Intent...",
+                const { granted } = await ensurePhoneCallPermission();
+                if (!granted) {
+                    Alert.alert(
+                        "Permission required",
+                        "Allow Phone permission to place direct calls from the app.",
+                        [
+                            { text: "Cancel", style: "cancel" },
+                            {
+                                text: "Open dialer",
+                                onPress: () =>
+                                    Linking.openURL(`tel:${digits}`).catch(
+                                        () => {},
+                                    ),
+                            },
+                        ],
                     );
+                    return;
+                }
+                // Try android.intent.action.CALL (direct call — needs CALL_PHONE permission)
+                try {
+                    const IntentLauncher = require("expo-intent-launcher");
                     await IntentLauncher.startActivityAsync(
                         "android.intent.action.CALL",
-                        {
-                            data: `tel:${phoneNumberClean}`,
-                        },
+                        { data: `tel:${digits}` },
                     );
-                    console.log(
-                        "[CallLogTabs] ✅ Direct call initiated via Intent",
-                    );
-                    callAttempted = true;
+                    return;
                 } catch (intentErr) {
-                    const errMsg = String(intentErr.message || "");
-                    console.warn("[CallLogTabs] Intent call failed:", errMsg);
-
-                    // Check if it's a permission error
-                    if (
-                        errMsg.includes("Permission") ||
-                        errMsg.includes("CALL_PHONE") ||
-                        errMsg.includes("exponent")
-                    ) {
-                        console.log(
-                            "[CallLogTabs] Permission denied or Expo Go limitation detected",
-                        );
-                        console.log(
-                            "[CallLogTabs] Falling back to tel: scheme (dialer)...",
-                        );
-
-                        // Show info that we're using dialer
-                        Alert.alert(
-                            "Using Dialer",
-                            "For direct calling without dialer, build a dev version:\n\nexpo run:android\n\nFor now, using dialer...",
-                            [
-                                {
-                                    text: "Proceed with Dialer",
-                                    onPress: async () => {
-                                        try {
-                                            await Linking.openURL(
-                                                `tel:${phoneNumberClean}`,
-                                            );
-                                            console.log(
-                                                "[CallLogTabs] ✅ Dialer opened",
-                                            );
-                                        } catch (err) {
-                                            Alert.alert(
-                                                "Error",
-                                                "Could not open dialer",
-                                            );
-                                        }
-                                    },
-                                },
-                            ],
-                        );
-                    } else {
-                        // Unknown error, still try tel: scheme
-                        console.log(
-                            "[CallLogTabs] Other error, trying tel: scheme",
-                        );
-                        try {
-                            await Linking.openURL(`tel:${phoneNumberClean}`);
-                            console.log("[CallLogTabs] ✅ Dialer opened");
-                        } catch (linkErr) {
-                            Alert.alert(
-                                "Error",
-                                "Could not make call: " + linkErr.message,
-                            );
-                        }
-                    }
-                }
-            } else {
-                // iOS: Use tel: scheme
-                console.log("[CallLogTabs] Using tel: scheme (iOS)");
-                try {
-                    await Linking.openURL(`tel:${phoneNumberClean}`);
-                    console.log("[CallLogTabs] ✅ Call initiated (iOS)");
-                } catch (err) {
-                    Alert.alert("Error", "Could not make call: " + err.message);
+                    console.warn(
+                        "[CallLogTabs] Direct call intent failed:",
+                        intentErr.message,
+                    );
+                    // fall through to tel: scheme
                 }
             }
+            // iOS or fallback on Android → opens dialer pre-filled
+            await Linking.openURL(`tel:${digits}`);
         } catch (err) {
-            console.error("[CallLogTabs] ❌ Call error:", err);
             Alert.alert(
-                "Error",
-                "Could not make call: " + (err.message || String(err)),
+                "Call Error",
+                "Could not initiate call: " + err.message,
             );
         }
     }, [phoneNumber]);
 
-    /**
-     * Render individual call log item
-     */
+    // ── Renderers ─────────────────────────────────────────────────────────────
     const renderLogItem = ({ item }) => {
-        const { date, time } = callLogService.formatCallTime(item.callTime);
-        const duration = callLogService.formatDuration(item.callDuration);
-        const callTypeObj = CALL_TYPES.find((ct) => ct.key === item.callType);
+        const { date, time } = callLogService.formatCallTime(
+            item.callTime || item.createdAt,
+        );
+        // backend field is callDuration (seconds)
+        const duration = callLogService.formatDuration(
+            item.callDuration ?? item.duration ?? 0,
+        );
+        const callTypeObj =
+            CALL_TYPES.find((ct) => ct.key === item.callType) || CALL_TYPES[0];
 
         return (
-            <View style={styles.logItem}>
+            <View
+                style={[
+                    styles.logItem,
+                    { borderLeftColor: callTypeObj.color },
+                ]}>
                 <View
                     style={[
                         styles.logIcon,
-                        { backgroundColor: callTypeObj?.color },
+                        { backgroundColor: callTypeObj.color + "22" },
                     ]}>
                     <Ionicons
-                        name={callTypeObj?.icon || "call-outline"}
-                        size={18}
-                        color="#FFFFFF"
+                        name={callTypeObj.icon}
+                        size={20}
+                        color={callTypeObj.color}
                     />
                 </View>
 
                 <View style={styles.logDetails}>
                     <Text style={styles.logDate}>{date}</Text>
                     <Text style={styles.logTime}>{time}</Text>
+                    {!!item.contactName && (
+                        <Text style={styles.logContact} numberOfLines={1}>
+                            {item.contactName}
+                        </Text>
+                    )}
                 </View>
 
-                <View style={styles.logDuration}>
-                    <Text style={styles.duration}>{duration}</Text>
+                <View style={styles.logRight}>
+                    <Text
+                        style={[styles.duration, { color: callTypeObj.color }]}>
+                        {duration}
+                    </Text>
+                    <Text style={styles.callTypeBadge}>
+                        {callTypeObj.label}
+                    </Text>
                 </View>
             </View>
         );
     };
 
-    /**
-     * Render empty state
-     */
     const renderEmpty = () => (
         <View style={styles.empty}>
             <Ionicons name="call-outline" size={48} color={C.gray300} />
-            <Text style={styles.emptyText}>No {selectedTab} calls</Text>
+            <Text style={styles.emptyText}>No {selectedTab} calls found</Text>
+            <Text style={styles.emptyHint}>
+                Make sure call logs are synced from your device
+            </Text>
         </View>
     );
 
-    const tabWidth = width / 4 - 2;
+    const tabWidth = width / 4 - 4;
+
+    // Safety check: ensure required data is available
+    if (!phoneNumber && !enquiry?.mobile) {
+        return (
+            <View style={styles.container}>
+                <View style={styles.headerSection}>
+                    <View style={styles.headerContent}>
+                        <View style={styles.avatarCircle}>
+                            <Ionicons
+                                name="person"
+                                size={20}
+                                color={C.primary}
+                            />
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text style={styles.headerTitle} numberOfLines={1}>
+                                {enquiry?.name || "Contact"}
+                            </Text>
+                            <Text style={styles.headerSubtitle}>
+                                No phone number
+                            </Text>
+                        </View>
+                    </View>
+                </View>
+                <View style={styles.errorContainer}>
+                    <Ionicons
+                        name="alert-circle-outline"
+                        size={24}
+                        color={C.danger}
+                    />
+                    <Text style={styles.errorText}>
+                        No phone number available for this contact
+                    </Text>
+                </View>
+            </View>
+        );
+    }
 
     return (
         <View style={styles.container}>
-            {/* Header Section */}
+            {/* ── Header ── */}
             <View style={styles.headerSection}>
                 <View style={styles.headerContent}>
-                    <Ionicons
-                        name="person-circle-outline"
-                        size={32}
-                        color={C.primary}
-                    />
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                        <Text style={styles.headerTitle}>Contact</Text>
+                    <View style={styles.avatarCircle}>
+                        <Ionicons name="person" size={20} color={C.primary} />
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                        <Text style={styles.headerTitle} numberOfLines={1}>
+                            {enquiry?.name || "Contact"}
+                        </Text>
                         <Text style={styles.headerSubtitle}>{phoneNumber}</Text>
                     </View>
                     <TouchableOpacity
                         onPress={handleMakeCall}
                         style={styles.callButton}
                         activeOpacity={0.8}>
-                        <Ionicons name="call" size={18} color="#FFFFFF" />
-                        <Text style={styles.callButtonText}>Call</Text>
+                        <Ionicons name="call" size={16} color="#FFFFFF" />
+                        <Text style={styles.callButtonText}>Call Now</Text>
                     </TouchableOpacity>
                 </View>
             </View>
 
-            {/* Sub-Tab Headers for Call Log Types */}
+            {/* ── Sub-Tabs ── */}
             <View style={styles.tabsContainer}>
-                {CALL_TYPES.map((tab) => (
-                    <Pressable
-                        key={tab.key}
-                        onPress={() => setSelectedTab(tab.key)}
-                        style={[
-                            styles.tab,
-                            selectedTab === tab.key && styles.tabActive,
-                            { width: tabWidth },
-                        ]}>
-                        <Ionicons
-                            name={tab.icon}
-                            size={16}
-                            color={
-                                selectedTab === tab.key ? C.primary : C.gray500
-                            }
-                            style={styles.tabIcon}
-                        />
-                        <Text
+                {CALL_TYPES.map((tab) => {
+                    const active = selectedTab === tab.key;
+                    return (
+                        <Pressable
+                            key={tab.key}
+                            onPress={() => setSelectedTab(tab.key)}
                             style={[
-                                styles.tabLabel,
-                                selectedTab === tab.key &&
-                                    styles.tabLabelActive,
-                            ]}
-                            numberOfLines={1}>
-                            {tab.label}
-                        </Text>
-                        {logs.length > 0 && selectedTab === tab.key && (
-                            <View style={styles.badge}>
-                                <Text style={styles.badgeText}>
-                                    {logs.length}
-                                </Text>
-                            </View>
-                        )}
-                    </Pressable>
-                ))}
+                                styles.tab,
+                                active && {
+                                    borderBottomColor: tab.color,
+                                    borderBottomWidth: 3,
+                                },
+                                { width: tabWidth },
+                            ]}>
+                            <Ionicons
+                                name={tab.icon}
+                                size={16}
+                                color={active ? tab.color : C.gray500}
+                                style={styles.tabIcon}
+                            />
+                            <Text
+                                style={[
+                                    styles.tabLabel,
+                                    active && {
+                                        color: tab.color,
+                                        fontWeight: "700",
+                                    },
+                                ]}
+                                numberOfLines={1}>
+                                {tab.label}
+                            </Text>
+                            {active && logs.length > 0 && (
+                                <View
+                                    style={[
+                                        styles.badge,
+                                        { backgroundColor: tab.color },
+                                    ]}>
+                                    <Text style={styles.badgeText}>
+                                        {logs.length}
+                                    </Text>
+                                </View>
+                            )}
+                        </Pressable>
+                    );
+                })}
             </View>
 
-            {/* Loading State */}
+            {/* ── Loading ── */}
             {loading && (
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="small" color={C.primary} />
-                    <Text style={styles.loadingText}>Loading calls...</Text>
+                    <Text style={styles.loadingText}>
+                        Loading call history…
+                    </Text>
                 </View>
             )}
 
-            {/* Error State */}
-            {error && !loading && (
+            {/* ── Error ── */}
+            {!loading && error && (
                 <View style={styles.errorContainer}>
                     <Ionicons
                         name="alert-circle-outline"
@@ -405,12 +402,14 @@ const CallLogTabs = ({ phoneNumber, onRefresh, enquiry }) => {
                 </View>
             )}
 
-            {/* Logs List */}
+            {/* ── List ── */}
             {!loading && !error && (
                 <FlatList
                     data={logs}
                     renderItem={renderLogItem}
-                    keyExtractor={(item) => item._id}
+                    keyExtractor={(item, index) =>
+                        String(item._id || item.uniqueKey || index)
+                    }
                     ListEmptyComponent={renderEmpty}
                     scrollEnabled={false}
                     contentContainerStyle={styles.listContent}
@@ -424,20 +423,60 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: C.card,
-        display: "flex",
-        minHeight: 0,
+    },
+    headerSection: {
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        backgroundColor: C.card,
+        borderBottomWidth: 1,
+        borderBottomColor: C.gray300,
+    },
+    headerContent: {
+        flexDirection: "row",
+        alignItems: "center",
+    },
+    avatarCircle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: C.primary + "18",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    headerTitle: {
+        fontSize: 15,
+        fontWeight: "700",
+        color: C.gray900,
+    },
+    headerSubtitle: {
+        fontSize: 12,
+        color: C.gray500,
+        marginTop: 2,
+    },
+    callButton: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        backgroundColor: C.success,
+        borderRadius: 10,
+    },
+    callButtonText: {
+        color: "#FFFFFF",
+        fontSize: 13,
+        fontWeight: "700",
     },
 
+    // Tabs
     tabsContainer: {
         flexDirection: "row",
-        justifyContent: "space-around",
-        paddingHorizontal: 8,
-        paddingVertical: 8,
+        paddingHorizontal: 4,
+        paddingVertical: 4,
         borderBottomWidth: 1,
         borderBottomColor: C.gray300,
         backgroundColor: C.card,
     },
-
     tab: {
         alignItems: "center",
         paddingVertical: 8,
@@ -446,191 +485,143 @@ const styles = StyleSheet.create({
         borderBottomColor: "transparent",
         justifyContent: "center",
     },
-
-    tabActive: {
-        borderBottomColor: C.primary,
-    },
-
     tabIcon: {
         marginBottom: 2,
     },
-
     tabLabel: {
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: "600",
         color: C.gray500,
         textAlign: "center",
     },
-
-    tabLabelActive: {
-        color: C.primary,
-        fontWeight: "700",
-    },
-
     badge: {
         position: "absolute",
-        top: 0,
-        right: 0,
+        top: 2,
+        right: 2,
         backgroundColor: C.danger,
         borderRadius: 8,
         minWidth: 16,
         height: 16,
         justifyContent: "center",
         alignItems: "center",
+        paddingHorizontal: 3,
     },
-
     badgeText: {
         color: "#FFFFFF",
-        fontSize: 10,
-        fontWeight: "700",
+        fontSize: 9,
+        fontWeight: "800",
     },
 
+    // States
     loadingContainer: {
         alignItems: "center",
-        paddingVertical: 24,
+        paddingVertical: 28,
         flexDirection: "row",
         justifyContent: "center",
-        gap: 8,
+        gap: 10,
     },
-
     loadingText: {
         color: C.gray500,
         fontSize: 13,
-        marginLeft: 8,
     },
-
     errorContainer: {
         alignItems: "center",
-        paddingVertical: 20,
+        paddingVertical: 24,
         paddingHorizontal: 16,
+        gap: 8,
     },
-
     errorText: {
         color: C.danger,
         fontSize: 13,
-        marginTop: 8,
         textAlign: "center",
     },
-
     retryButton: {
-        marginTop: 12,
-        paddingHorizontal: 16,
+        marginTop: 4,
+        paddingHorizontal: 20,
         paddingVertical: 8,
         backgroundColor: C.primary,
-        borderRadius: 6,
+        borderRadius: 8,
     },
-
     retryText: {
         color: "#FFFFFF",
-        fontSize: 12,
-        fontWeight: "600",
+        fontSize: 13,
+        fontWeight: "700",
     },
 
+    // List
     listContent: {
-        paddingHorizontal: 16,
-        paddingVertical: 4,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        gap: 8,
     },
-
     logItem: {
         flexDirection: "row",
         alignItems: "center",
         paddingVertical: 10,
         paddingHorizontal: 12,
-        marginBottom: 8,
         backgroundColor: C.bg,
-        borderRadius: 8,
+        borderRadius: 10,
         borderLeftWidth: 3,
         borderLeftColor: C.primary,
+        gap: 10,
     },
-
     logIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+        width: 38,
+        height: 38,
+        borderRadius: 19,
         justifyContent: "center",
         alignItems: "center",
-        marginRight: 12,
     },
-
     logDetails: {
         flex: 1,
     },
-
     logDate: {
-        fontSize: 12,
-        fontWeight: "600",
+        fontSize: 13,
+        fontWeight: "700",
         color: C.gray900,
     },
-
     logTime: {
         fontSize: 11,
         color: C.gray500,
         marginTop: 2,
     },
-
-    logDuration: {
-        justifyContent: "center",
-        alignItems: "flex-end",
-    },
-
-    duration: {
-        fontSize: 12,
-        fontWeight: "600",
+    logContact: {
+        fontSize: 11,
         color: C.primary,
+        marginTop: 2,
+        fontWeight: "600",
+    },
+    logRight: {
+        alignItems: "flex-end",
+        gap: 4,
+    },
+    duration: {
+        fontSize: 13,
+        fontWeight: "700",
+    },
+    callTypeBadge: {
+        fontSize: 10,
+        color: C.gray500,
+        fontWeight: "600",
     },
 
+    // Empty
     empty: {
         alignItems: "center",
-        paddingVertical: 32,
-        paddingHorizontal: 16,
+        paddingVertical: 40,
+        paddingHorizontal: 24,
+        gap: 8,
     },
-
     emptyText: {
-        fontSize: 13,
+        fontSize: 14,
         color: C.gray500,
-        marginTop: 8,
+        fontWeight: "600",
         textAlign: "center",
     },
-
-    headerSection: {
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        backgroundColor: C.card,
-        borderBottomWidth: 1,
-        borderBottomColor: C.gray300,
-    },
-
-    headerContent: {
-        flexDirection: "row",
-        alignItems: "center",
-    },
-
-    headerTitle: {
-        fontSize: 14,
-        fontWeight: "700",
-        color: C.gray900,
-    },
-
-    headerSubtitle: {
+    emptyHint: {
         fontSize: 12,
-        color: C.gray500,
-        marginTop: 3,
-    },
-
-    callButton: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        backgroundColor: C.success,
-        borderRadius: 8,
-    },
-
-    callButtonText: {
-        color: "#FFFFFF",
-        fontSize: 12,
-        fontWeight: "600",
+        color: C.gray300,
+        textAlign: "center",
     },
 });
 

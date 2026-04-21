@@ -217,10 +217,34 @@ const forceLogoutPreviousSessions = async (req, userId, nextSessionId) => {
         const sid = String(nextSessionId || "").trim();
         if (!io || !uid || !sid) return;
 
+        // First, try to get sockets from the user room
         const sockets = await io.in(`user:${uid}`).fetchSockets();
+        const disconnectedIds = new Set();
+
         sockets.forEach((sock) => {
             const socketSessionId = String(sock.data?.sessionId || "").trim();
             if (socketSessionId !== sid) {
+                sock.emit("FORCE_LOGOUT", {
+                    code: "SESSION_REVOKED",
+                    reason: "Logged in on another device",
+                });
+                sock.disconnect(true);
+                disconnectedIds.add(sock.id);
+            }
+        });
+
+        // Also broadcast to all sockets (to catch any not in room due to race conditions)
+        // This ensures old sessions get logged out even if they haven't successfully joined yet
+        io.sockets.sockets.forEach((sock) => {
+            const socketUserId = String(sock.data?.userId || "").trim();
+            const socketSessionId = String(sock.data?.sessionId || "").trim();
+
+            // If it's the same user but different session and not already handled, disconnect it
+            if (
+                socketUserId === uid &&
+                socketSessionId !== sid &&
+                !disconnectedIds.has(sock.id)
+            ) {
                 sock.emit("FORCE_LOGOUT", {
                     code: "SESSION_REVOKED",
                     reason: "Logged in on another device",
@@ -230,6 +254,7 @@ const forceLogoutPreviousSessions = async (req, userId, nextSessionId) => {
         });
     } catch (_error) {
         // ignore socket fanout failures
+        console.error("Error in forceLogoutPreviousSessions:", _error?.message);
     }
 };
 
@@ -1893,6 +1918,51 @@ router.post("/register-push-token", verifyToken, async (req, res) => {
         });
     }
 });
+
+// ─── Diagnostic endpoint: Test reminder scheduler ────────────────────────────
+// POST /api/auth/test-reminder-scheduler
+// For testing/debugging: manually trigger reminder scheduler once
+router.post(
+    "/test-reminder-scheduler",
+    verifyToken,
+    requireSuperadmin,
+    async (req, res) => {
+        try {
+            const reminderScheduler = require("../services/reminderScheduler");
+            const testMode =
+                String(process.env.NODE_ENV || "").toLowerCase() !==
+                "production";
+
+            if (!testMode) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Reminder scheduler test endpoint only available in development",
+                });
+            }
+
+            console.log(
+                "[Auth] Manual reminder scheduler test initiated by superadmin",
+            );
+            await reminderScheduler.testReminderScheduler();
+
+            res.json({
+                success: true,
+                message:
+                    "Reminder scheduler test completed. Check server logs for results.",
+            });
+        } catch (error) {
+            console.error(
+                "[Auth] Reminder scheduler test error:",
+                error?.message,
+            );
+            res.status(500).json({
+                success: false,
+                message: "Reminder scheduler test failed: " + error?.message,
+            });
+        }
+    },
+);
 
 module.exports = router;
 

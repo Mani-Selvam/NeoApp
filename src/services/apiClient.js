@@ -14,10 +14,20 @@ let apiClient = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const isTimeout = (error) => {
+    const code = String(error?.code || "").toUpperCase();
+    return (
+        code === "ECONNABORTED" ||
+        (error?.isAxiosError &&
+            error?.message?.toLowerCase().includes("timeout"))
+    );
+};
+
 const isLikelyNetworkError = (error) => {
     const code = String(error?.code || "").toUpperCase();
     if (code === "ERR_CANCELED") return false;
-    if (code === "ERR_NETWORK" || code === "ECONNABORTED") return true;
+    if (code === "ECONNABORTED") return false; // timeout, not network error
+    if (code === "ERR_NETWORK") return true;
     // Axios in React Native often uses generic "Network Error" with no response.
     return (
         !error?.response &&
@@ -40,35 +50,82 @@ const getApiClient = async () => {
     cachedToken = token;
     apiClient = axios.create({
         baseURL: API_URL,
-        timeout: 15000, // 15s timeout
+        timeout: 15000, // 15s default timeout
         headers: {
+            "Content-Type": "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
     });
 
+    // ✅ REQUEST INTERCEPTOR — Handle FormData (file uploads) for mobile
     apiClient.interceptors.request.use((config) => {
-        // For FormData (file uploads), let axios set multipart/form-data automatically
         if (config.data instanceof FormData) {
-            // Remove any pre-set Content-Type so axios can set it with the proper boundary
-            // IMPORTANT: Don't set Content-Type, let axios/platform handle it
+            // ✅ FIX: Delete Content-Type from ALL axios header layers
+            // so axios/fetch can auto-set multipart/form-data WITH boundary
+            // (boundary is required for mobile — missing it breaks upload)
             delete config.headers["Content-Type"];
+            if (config.headers.common) {
+                delete config.headers.common["Content-Type"];
+            }
+            if (config.headers.put) {
+                delete config.headers.put["Content-Type"];
+            }
+            if (config.headers.post) {
+                delete config.headers.post["Content-Type"];
+            }
 
-            // Debug: Log FormData details
+       
+
+            // ✅ Image uploads need longer timeout (60s)
+            config.timeout = 60000;
+
             if (__DEV__) {
-                console.log("📤 FormData Request:", {
+                console.log("📤 FormData Upload Request:", {
                     url: config.url,
                     method: config.method,
                     hasFormData: config.data instanceof FormData,
+                    timeout: config.timeout,
+                });
+            }
+        } else {
+            // Normal JSON request
+            if (__DEV__ && config.url && config.url.includes("/enquiries")) {
+                console.log("📝 JSON Request:", {
+                    url: config.url,
+                    method: config.method,
+                    paramsKeys:
+                        config?.params && typeof config.params === "object"
+                            ? Object.keys(config.params)
+                            : [],
+                    paramsPreview:
+                        config?.params && typeof config.params === "object"
+                            ? {
+                                  page: config.params.page,
+                                  limit: config.params.limit,
+                                  search:
+                                      typeof config.params.search === "string"
+                                          ? `${config.params.search.slice(0, 20)}${config.params.search.length > 20 ? "…" : ""}`
+                                          : config.params.search,
+                                  date: config.params.date,
+                                  followUpDate: config.params.followUpDate,
+                              }
+                            : null,
+                    bodyKeys:
+                        typeof config.data === "string"
+                            ? "string"
+                            : Object.keys(config.data || {}),
                 });
             }
         }
+
         return config;
     });
 
+    // ✅ RESPONSE INTERCEPTOR — Retry + Error handling
     apiClient.interceptors.response.use(
         (response) => response,
         async (error) => {
-            // Retry GET once on intermittent mobile network drops (Wi-Fi switch / server wake / etc.)
+            // Retry GET once on intermittent mobile network drops
             try {
                 const cfg = error?.config;
                 const method = String(cfg?.method || "").toLowerCase();
@@ -100,7 +157,10 @@ const getApiClient = async () => {
                 error.message = message;
             }
 
-            if (isLikelyNetworkError(error)) {
+            if (isTimeout(error)) {
+                error.message =
+                    "Request timed out. Please check your connection and try again.";
+            } else if (isLikelyNetworkError(error)) {
                 error.message = `Network Error: cannot reach server (${API_URL}). Check Wi-Fi / server IP / VPN.`;
             }
 

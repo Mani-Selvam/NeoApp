@@ -13,6 +13,7 @@ import AppAlertHost from "./src/components/AppAlertHost";
 import SuspensionModal from "./src/components/SuspensionModal";
 import backgroundSyncManager from "./src/services/backgroundSyncManager";
 import callLogPermissions from "./src/utils/callLogPermissions";
+import notificationService from "./src/services/notificationService";
 
 // ─── Firebase Background Message Handler ────────────────────────────────────
 // MUST be registered at module root level, BEFORE React mounts.
@@ -20,24 +21,79 @@ import callLogPermissions from "./src/utils/callLogPermissions";
 // or in the background. If setBackgroundMessageHandler is not called here,
 // FCM background/killed notifications silently fail on Android.
 //
-// The FCM payload already includes a `notification` object, so Android handles
-// the system tray display automatically. We do NOT call expo-notifications here
-// because it is unavailable in headless JS mode.
+// CRITICAL: This handler runs in a SEPARATE JS CONTEXT from the app.
+// - Firebase automatically displays the notification via the system tray
+// - The notification channel ID + sound come from the FCM message payload
+// - We log here for debugging, but cannot show app-level UI
 if (Platform.OS !== "web") {
     try {
         const messaging = require("@react-native-firebase/messaging").default;
-        messaging().setBackgroundMessageHandler(async (_remoteMessage) => {
-            // OS handles notification display via the FCM notification payload.
-            // Custom sounds come from the Android notification channel (channelId).
+        messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+            // ✅ Log background message receipt for debugging
+            const data = remoteMessage?.data || {};
+            const notif = remoteMessage?.notification || {};
+
+            console.log(
+                "[FCM] Background notification received (app killed/background):",
+            );
+            console.log(`  Title: ${notif.title || data.title || "N/A"}`);
+            console.log(`  Body: ${notif.body || data.body || "N/A"}`);
+            console.log(`  ChannelId: ${data.channelId || "default"}`);
+            console.log(`  Type: ${data.type || "unknown"}`);
+            console.log(`  MessageId: ${remoteMessage?.messageId || "N/A"}`);
+
+            // ✅ Return true to indicate message was handled
+            // (Doesn't prevent system tray display — notification already queued by OS)
+            return true;
         });
     } catch (_e) {
         // Native module unavailable in Expo Go or web — safe to ignore.
+        console.warn("[FCM] setBackgroundMessageHandler unavailable");
     }
 }
 
 console.log("🛠️ App booting with API:", API_URL);
 
 export default function App() {
+    useEffect(() => {
+        // Initialize notification system early (creates Android channels, sets up handlers)
+        // This happens before login so channels are ready for notifications
+        const initNotifications = async () => {
+            try {
+                console.log(
+                    "[App] Initializing notification system on startup...",
+                );
+                const result =
+                    await notificationService.initializeNotifications();
+                if (result) {
+                    console.log("[App] ✅ Notification system initialized");
+
+                    // Validate audio assets are loaded
+                    const audioCheck =
+                        notificationService.validateAudioAssets();
+                    if (!audioCheck.success) {
+                        console.warn(
+                            "[App] ⚠️  Some audio assets missing:",
+                            audioCheck.missingAssets,
+                        );
+                    } else {
+                        console.log(
+                            `[App] ✅ Audio assets validated: ${audioCheck.loadedAssets}/${audioCheck.totalAssets}`,
+                        );
+                    }
+                } else {
+                    console.warn(
+                        "[App] ⚠️  Notification initialization incomplete",
+                    );
+                }
+            } catch (err) {
+                console.error("[App] Notification init error:", err?.message);
+            }
+        };
+
+        // Initialize on mount
+        initNotifications();
+    }, []);
     useEffect(() => {
         // Initialize call log background sync (enterprise mode only)
         const initializeCallLogSync = async () => {

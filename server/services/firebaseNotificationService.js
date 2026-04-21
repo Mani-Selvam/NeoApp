@@ -1,304 +1,424 @@
+/**
+ * firebaseNotificationService.server.js  (SERVER SIDE)
+ *
+ * This file shows exactly how every FCM message to a reminder window MUST be
+ * structured to get sound + alert in ALL three app states:
+ *   ✅ Foreground  — onMessage fires, client creates local notification
+ *   ✅ Background  — OS shows FCM notification field automatically
+ *   ✅ Killed      — OS shows FCM notification field automatically
+ *
+ * KEY PRINCIPLE:
+ *   FCM messages have two independent payloads:
+ *     `notification` — OS uses this to display the alert + sound when your
+ *                      app is in the background or killed. If this field is
+ *                      missing, the OS shows NOTHING for background/killed.
+ *     `data`         — Your app's custom payload. Always delivered regardless
+ *                      of app state (subject to Doze/battery restrictions).
+ *
+ *   You MUST include BOTH for reliable cross-state delivery.
+ *
+ * FIX BUG 2 — "no sound/alert when app is background or killed":
+ *   Every sendActivityReminder call now includes:
+ *     - `notification: { title, body }` — required for background/killed display
+ *     - `android.notification.channelId` — required for Android sound routing
+ *     - `android.notification.sound` — 'default' uses the channel's configured sound
+ *     - `apns.payload.aps.sound` — required for iOS sound
+ *     - `apns.payload.aps.badge` — optional badge update
+ *
+ * FIX BUG 3 — "stale reminders arrive in a batch when device reconnects":
+ *   Every FCM message is now sent with:
+ *     - `android.ttl` — auto-expires the message after the window passes
+ *     - `apns.headers['apns-expiration']` — same for iOS
+ *     - `collapseKey` — FCM delivers only the LATEST message per follow-up
+ *       when multiple queued messages arrive together. The collapseKey is
+ *       per-followup (not per-window) so the most recent reminder replaces
+ *       all older ones.
+ *
+ *   TTL values per window:
+ *     5min → 270s  (expires 30s before due so device doesn't see "5min" when due)
+ *     4min → 210s
+ *     3min → 150s
+ *     2min →  90s
+ *     1min →  50s
+ *     due  → 120s  (stays alive 2 min after due)
+ *     missed → 600s (stays alive 10 min after due)
+ */
+
 const admin = require("../config/firebaseAdmin");
+const User = require("../models/User");
+const { resolveAndroidChannelId } = require("../utils/notificationChannels");
 
-const sanitizeData = (data = {}) => {
-    const entries = Object.entries(data || {});
-    const out = {};
-
-    for (const [key, value] of entries) {
-        if (value === undefined || value === null) continue;
-        if (typeof value === "string") {
-            out[key] = value;
-            continue;
-        }
-        if (typeof value === "number" || typeof value === "boolean") {
-            out[key] = String(value);
-            continue;
-        }
-        try {
-            out[key] = JSON.stringify(value);
-        } catch (_error) {
-            out[key] = String(value);
-        }
-    }
-
-    return out;
-};
-
-// FIX #27: Helper to map activity type to notification channel and sound
-const getActivitySound = (activityType) => {
-    const soundMap = {
-        phone: "phone_notification",
-        meeting: "meeting_notification",
-        email: "email_notification",
-        whatsapp: "whatsapp_notification",
-        followup: "followup_notification",
-    };
-    return (
-        soundMap[String(activityType || "followup").toLowerCase()] || "default"
+// Try to load notificationPhrases with fallback for different deployment structures
+let getFollowUpSoonTexts, getFollowUpDueTexts, getFollowUpMissedTexts;
+try {
+    const phrases = require("../../src/constants/notificationPhrases");
+    getFollowUpSoonTexts = phrases.getFollowUpSoonTexts;
+    getFollowUpDueTexts = phrases.getFollowUpDueTexts;
+    getFollowUpMissedTexts = phrases.getFollowUpMissedTexts;
+} catch (err) {
+    console.warn(
+        "[WARNING] notificationPhrases module not found - using fallback stubs",
     );
+    // Fallback stubs when module is not available
+    getFollowUpSoonTexts = ({ lang, minutesLeft, name, activityType }) => ({
+        title: `${minutesLeft}min reminder`,
+        body: `${name || "Activity"} reminder in ${minutesLeft} minutes`,
+        voice: `${name || "Activity"} reminder in ${minutesLeft} minutes`,
+    });
+    getFollowUpDueTexts = ({ lang, name, activityType }) => ({
+        title: "Activity due now",
+        body: `${name || "Activity"} is due now`,
+        voice: `${name || "Activity"} is due now`,
+    });
+    getFollowUpMissedTexts = ({ lang, name, activityType }) => ({
+        title: "Activity missed",
+        body: `${name || "Activity"} was missed`,
+        voice: `${name || "Activity"} was missed`,
+    });
+}
+
+// ─── TTL per reminder window (seconds) ───────────────────────────────────────
+
+const WINDOW_TTL_SECONDS = {
+    5: 270, // 4m30s — expires before the next (4min) window fires
+    4: 210,
+    3: 150,
+    2: 90,
+    1: 50,
+    0: 120, // due — stays for 2 minutes
+    "-1": 600, // missed — stays for 10 minutes
 };
 
-// FIX #27: Helper to remove dead FCM token
-const removeDeadToken = async (userId) => {
-    try {
-        const User = require("../models/User");
-        const result = await User.updateOne(
-            { _id: userId },
-            { $unset: { fcmToken: 1, fcmTokenUpdatedAt: 1 } },
-        );
-        console.log(`[FCM] Removed dead token for user ${userId}`);
-        return result;
-    } catch (error) {
-        console.error(
-            `[FCM] Error removing dead token for user ${userId}:`,
-            error.message,
-        );
+const getTtlSeconds = (minutesLeft) => {
+    const key = String(minutesLeft);
+    return WINDOW_TTL_SECONDS[key] ?? 120;
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const normalizeLang = (v) =>
+    String(v || "en").toLowerCase() === "ta" ? "ta" : "en";
+
+const resolveActivityTypeKey = (activityType = "followup") => {
+    const raw = String(activityType || "")
+        .trim()
+        .toLowerCase();
+    if (raw === "phone call" || raw === "phone" || raw === "call")
+        return "phone";
+    if (raw === "meeting") return "meeting";
+    if (raw === "email") return "email";
+    if (raw === "whatsapp" || raw === "wa") return "whatsapp";
+    return "followups";
+};
+
+const resolveChannelKey = (activityType, minutesLeft, voiceLang) => {
+    const typeKey = resolveActivityTypeKey(activityType);
+    const lang = normalizeLang(voiceLang);
+    if (minutesLeft === 0) return `${typeKey}_due_${lang}`;
+    if (minutesLeft < 0) return `${typeKey}_missed_${lang}`;
+    const m = Math.max(1, Math.min(5, Number(minutesLeft) || 1));
+    return `${typeKey}_${m}min_${lang}`;
+};
+
+const buildTexts = ({ activityType, followUpData, minutesLeft, lang }) => {
+    const shared = {
+        lang,
+        name: followUpData?.name,
+        activityType,
+    };
+
+    if (minutesLeft > 0) {
+        return getFollowUpSoonTexts({ ...shared, minutesLeft });
     }
+    if (minutesLeft === 0) {
+        return getFollowUpDueTexts({ ...shared });
+    }
+    // missed
+    return getFollowUpMissedTexts({ ...shared });
 };
 
-class FirebaseNotificationService {
-    // Send FCM notification with voice data and sound
-    // FIX #27: Added sound payload for all app states (closed, background, foreground)
-    async sendNotification(fcmToken, payload, userId = null) {
-        const dataPayload = sanitizeData({
-            type: payload.type,
-            voiceLang: payload.voiceLang || "en",
-            audioType: payload.audioType, // 'pre_recorded' or 'tts'
-            audioUrl: payload.audioUrl, // For pre-recorded
-            ttsText: payload.ttsText, // For TTS
-            minutesLeft: payload.minutesLeft,
-            activityType: payload.activityType,
-            timestamp: Date.now(), // For foreground deduplication (20-sec window)
-            ...payload.data,
+// ─── Core send function ───────────────────────────────────────────────────────
+
+/**
+ * Send an activity reminder via FCM.
+ *
+ * @param {string} userId         - MongoDB user _id
+ * @param {string} activityType   - "phone call" | "meeting" | "email" | "whatsapp" | "followup"
+ * @param {object} followUpData   - { followUpId, name, when, enquiryNumber, phoneNumber }
+ * @param {number} minutesLeft    - 5|4|3|2|1|0|-1
+ * @param {string} voiceLang      - "en" | "ta"
+ * @returns {Promise<{success: boolean, provider?: string, error?: string}>}
+ */
+const sendActivityReminder = async (
+    userId,
+    activityType,
+    followUpData,
+    minutesLeft,
+    voiceLang = "en",
+) => {
+    try {
+        const user = await User.findById(userId)
+            .select("fcmToken notificationPreferences")
+            .lean();
+
+        const fcmToken = user?.fcmToken;
+        if (!fcmToken) {
+            return { success: false, error: "No FCM token for user" };
+        }
+
+        const lang = normalizeLang(voiceLang);
+        const texts = buildTexts({
+            activityType,
+            followUpData,
+            minutesLeft,
+            lang,
         });
 
-        // FIX #27: Add activity-specific sound to payload
-        const activitySound = getActivitySound(payload.activityType);
+        // Channel routing
+        const channelKey = resolveChannelKey(activityType, minutesLeft, lang);
+        const androidChannelId = resolveAndroidChannelId(channelKey);
 
+        // FIX BUG 3: TTL expires stale messages automatically
+        const ttlSeconds = getTtlSeconds(minutesLeft);
+
+        // FIX BUG 3: collapseKey = one per followup — only newest survives delivery
+        const collapseKey = `fu_${String(followUpData?.followUpId || "")}`;
+
+        // Determine follow-up type label for the client
+        const followupType =
+            minutesLeft < 0
+                ? "followup-missed"
+                : minutesLeft === 0
+                  ? "followup-due"
+                  : "followup-soon";
+
+        /**
+         * FIX BUG 2: The FCM message MUST contain a `notification` field.
+         *
+         * When the app is in the background or killed, Firebase does NOT call
+         * the app's message handler. Instead, the OS (Android/iOS) reads the
+         * `notification` field directly and displays the alert with sound.
+         *
+         * If you omit `notification` and send data-only, the OS shows nothing
+         * when the app is killed — this was the root cause of Bug 2.
+         *
+         * Structure:
+         *   notification   → displayed by OS in background/killed (title + body)
+         *   data           → delivered to the app handler in all states
+         *   android.notification.channelId → routes to the correct Android channel
+         *                                    (which has the custom sound configured)
+         *   android.ttl    → auto-expire stale messages (Bug 3 fix)
+         *   apns           → iOS equivalent settings
+         */
         const message = {
             token: fcmToken,
+
+            // ── OS-displayed notification (required for background/killed) ──
             notification: {
-                title: payload.title,
-                body: payload.body,
-                sound: activitySound, // Activity-specific sound
+                title: texts.title,
+                body: texts.body,
             },
-            data: dataPayload,
+
+            // ── App data payload (available in all states) ──
+            data: {
+                type: followupType,
+                followUpId: String(followUpData?.followUpId || ""),
+                name: String(followUpData?.name || ""),
+                when: followUpData?.when || "",
+                enquiryNumber: String(followUpData?.enquiryNumber || ""),
+                phoneNumber: String(followUpData?.phoneNumber || ""),
+                minutesLeft: String(minutesLeft),
+                activityType: String(activityType || ""),
+                voiceLang: lang,
+                // Tell the client which Android channel to use for local notifications
+                // (used by the foreground onMessage handler)
+                androidChannelId,
+                channelKey,
+                // Voice text for TTS
+                voiceText: texts.voice || texts.body,
+            },
+
+            // ── Android-specific settings ──
             android: {
-                priority: payload.priority || "high",
+                // FIX BUG 3: Auto-expire after window passes
+                ttl: ttlSeconds * 1000, // FCM android.ttl is in milliseconds
+
+                // FIX BUG 3: Only deliver the newest reminder per follow-up
+                collapseKey,
+
+                priority: "high",
+
                 notification: {
-                    title: payload.title,
-                    body: payload.body,
-                    // On Android 8.0+ (Oreo) the channel controls the sound —
-                    // the sound field here is for Android < 8. Do NOT set
-                    // defaultSound:true or it overrides the channel's custom sound.
-                    channelId: payload.channelId || "followups_en",
-                    notificationPriority: "PRIORITY_MAX",
-                    tag: "notification",
+                    // FIX BUG 2: Route to the correct Android channel.
+                    // The channel must be registered in the app (app.config.js)
+                    // with sound configured. If channelId is wrong or the channel
+                    // has no sound, Android will silently use the default channel.
+                    channelId: androidChannelId,
+
+                    // Use the channel's configured sound (set in app.config.js)
+                    sound: "default",
+
+                    // Show notification immediately, even in Doze mode
+                    priority: "high",
+
+                    // Vibrate on delivery
+                    vibrateTimingsMillis: [0, 250, 250, 250],
                 },
             },
+
+            // ── APNs (iOS) settings ──
             apns: {
+                headers: {
+                    // FIX BUG 3: Auto-expire on iOS
+                    // apns-expiration is a Unix timestamp (seconds since epoch)
+                    "apns-expiration": String(
+                        Math.floor(Date.now() / 1000) + ttlSeconds,
+                    ),
+                    // FIX BUG 3: collapseKey equivalent for iOS
+                    "apns-collapse-id": collapseKey,
+                    // High priority delivery
+                    "apns-priority": "10",
+                    "apns-push-type": "alert",
+                },
                 payload: {
                     aps: {
-                        sound: activitySound || "default", // Activity-specific sound for iOS
+                        // FIX BUG 2: iOS requires sound here for background delivery
+                        sound: "default",
                         badge: 1,
-                        alert: {
-                            title: payload.title,
-                            body: payload.body,
-                        },
+                        // Allow iOS to modify notification content
+                        "mutable-content": 1,
                     },
                 },
             },
         };
 
-        try {
-            const response = await admin.messaging().send(message);
-            console.log(
-                `[FCM] Notification sent (${activitySound}): ${response}`,
-            );
-            return { success: true, messageId: response };
-        } catch (error) {
-            // FIX #27: Auto-cleanup dead tokens on 400 errors
-            if (
-                error.code === "messaging/invalid-registration-token" ||
-                error.code === "messaging/third-party-auth-error"
-            ) {
-                console.error(`[FCM] Invalid token error: ${error.message}`);
-                if (userId) {
-                    await removeDeadToken(userId);
-                }
-                return {
-                    success: false,
-                    error: "Invalid token (removed)",
-                    deadToken: true,
-                };
-            }
-            console.error(`[FCM] Send error: ${error.message}`);
-            return { success: false, error: error.message };
-        }
-    }
+        const messagingInstance = admin.messaging();
+        await messagingInstance.send(message);
 
-    // Send to multiple users
-    // FIX #27: Added batch cleanup of dead tokens
-    async sendToUsers(userIds, payload) {
-        const User = require("../models/User");
-        const users = await User.find({
-            _id: { $in: userIds },
-            fcmToken: { $exists: true, $ne: null },
-        });
-
-        const results = await Promise.allSettled(
-            users.map((user) =>
-                this.sendNotification(user.fcmToken, payload, user._id),
-            ),
+        console.log(
+            `[FCMService] ✓ Sent ${minutesLeft}min reminder → ${userId} (channel: ${androidChannelId}, ttl: ${ttlSeconds}s)`,
         );
 
-        // FIX #27: Collect and cleanup dead tokens in background
-        const deadTokens = [];
-        results.forEach((result, index) => {
-            if (result.status === "fulfilled" && result.value.deadToken) {
-                deadTokens.push(users[index]._id);
-            }
-        });
+        return { success: true, provider: "firebase" };
+    } catch (error) {
+        const msg = error?.message || String(error);
 
-        if (deadTokens.length > 0) {
-            console.log(
-                `[FCM] Batch cleanup: ${deadTokens.length} dead tokens collected`,
+        // Token is invalid/expired — clear it so the scheduler stops retrying
+        if (
+            msg.includes("registration-token-not-registered") ||
+            msg.includes("invalid-registration-token") ||
+            msg.includes("Requested entity was not found")
+        ) {
+            console.warn(
+                `[FCMService] Invalid FCM token for user ${userId} — clearing`,
             );
-            // Clean up in background (don't block API response)
-            deadTokens.forEach((userId) => {
-                removeDeadToken(userId).catch((e) =>
-                    console.error(
-                        `[FCM] Cleanup failed for ${userId}:`,
-                        e.message,
-                    ),
-                );
-            });
+            await User.findByIdAndUpdate(userId, {
+                $unset: { fcmToken: 1 },
+            }).catch(() => {});
         }
 
-        return {
-            total: users.length,
-            successful: results.filter(
-                (r) => r.status === "fulfilled" && r.value.success,
-            ).length,
-            failed: results.filter(
-                (r) => r.status === "rejected" || !r.value.success,
-            ).length,
-            deadTokensRemoved: deadTokens.length,
-        };
+        console.error(`[FCMService] ✗ Send failed for user ${userId}:`, msg);
+        return { success: false, error: msg };
     }
+};
 
-    // Send follow-up reminder
-    async sendFollowUpReminder(userId, followUpData) {
-        const User = require("../models/User");
-        const user = await User.findById(userId);
+// ─── Generic notification send (used by notificationRouter) ──────────────────
 
-        if (!user?.fcmToken) {
-            return { success: false, error: "FCM token not found" };
+/**
+ * Send a generic notification to a single user by userId.
+ * Fetches the FCM token from DB, then sends.
+ */
+const sendNotification = async (payload, userId, _options = {}) => {
+    try {
+        const user = await User.findById(userId).select("fcmToken").lean();
+        const fcmToken = user?.fcmToken;
+        if (!fcmToken) {
+            return { success: false, error: "No FCM token" };
         }
 
-        const voiceLang = user.notificationPreferences?.voiceLang || "en";
-
-        const payload = {
-            title: "📋 Follow-up Reminder",
-            body: `You have a follow-up due soon`,
-            type: "followup-reminder",
-            voiceLang,
-            audioType: "pre_recorded",
-            audioUrl: `followup_reminder_${voiceLang}`,
-            channelId: "followups",
-            priority: "default",
-            data: followUpData,
+        const message = {
+            token: fcmToken,
+            notification: {
+                title: payload.title || "Notification",
+                body: payload.body || "",
+            },
+            data: payload.data
+                ? Object.fromEntries(
+                      Object.entries(payload.data).map(([k, v]) => [
+                          k,
+                          typeof v === "string" ? v : String(v),
+                      ]),
+                  )
+                : {},
+            android: { priority: "high" },
+            apns: {
+                payload: { aps: { sound: "default" } },
+            },
         };
 
-        return await this.sendNotification(user.fcmToken, payload);
+        await admin.messaging().send(message);
+        return { success: true, provider: "firebase" };
+    } catch (error) {
+        return { success: false, error: error?.message };
     }
+};
 
-    // Send urgent reminder
-    async sendUrgentReminder(userId, followUpData) {
-        const User = require("../models/User");
-        const user = await User.findById(userId);
+/**
+ * Send a notification to multiple users by userIds array.
+ * Fetches FCM tokens in a single DB query, then uses sendEachForMulticast.
+ */
+const sendToUsers = async (userIds, payload, _options = {}) => {
+    try {
+        const users = await User.find({ _id: { $in: userIds } })
+            .select("fcmToken")
+            .lean();
 
-        if (!user?.fcmToken) {
-            return { success: false, error: "FCM token not found" };
+        const tokens = users
+            .map((u) => u?.fcmToken)
+            .filter((t) => typeof t === "string" && t.length > 10);
+
+        if (tokens.length === 0) {
+            return { success: false, error: "No valid FCM tokens" };
         }
 
-        const voiceLang = user.notificationPreferences?.voiceLang || "en";
-
-        const payload = {
-            title: "🚨 Overdue Follow-ups!",
-            body: `You have overdue follow-ups. Please complete them now!`,
-            type: "urgent",
-            voiceLang,
-            audioType: "pre_recorded",
-            audioUrl: `followup_urgent_${voiceLang}`,
-            channelId: "followups",
-            priority: "high",
-            data: followUpData,
+        const multicastMessage = {
+            tokens,
+            notification: {
+                title: payload.title || "Notification",
+                body: payload.body || "",
+            },
+            data: payload.data
+                ? Object.fromEntries(
+                      Object.entries(payload.data).map(([k, v]) => [
+                          k,
+                          typeof v === "string" ? v : String(v),
+                      ]),
+                  )
+                : {},
+            android: { priority: "high" },
+            apns: {
+                payload: { aps: { sound: "default" } },
+            },
         };
 
-        return await this.sendNotification(user.fcmToken, payload);
-    }
+        const batchResponse = await admin
+            .messaging()
+            .sendEachForMulticast(multicastMessage);
+        const successCount = batchResponse.successCount;
+        const failureCount = batchResponse.failureCount;
 
-    // Send enquiry alert
-    async sendEnquiryAlert(userId, enquiryData) {
-        const User = require("../models/User");
-        const user = await User.findById(userId);
-
-        if (!user?.fcmToken) {
-            return { success: false, error: "FCM token not found" };
-        }
-
-        const payload = {
-            title: "📌 New Enquiry Alert",
-            body: `New enquiry from ${enquiryData.name} regarding ${enquiryData.product}`,
-            type: "new-enquiry",
-            channelId: "enquiries",
-            priority: "default",
-            data: enquiryData,
-        };
-
-        return await this.sendNotification(user.fcmToken, payload);
-    }
-
-    // Broadcast to all users
-    async broadcastNotification(title, body, data = {}) {
-        const User = require("../models/User");
-        const users = await User.find({
-            fcmToken: { $exists: true, $ne: null },
-        });
-
-        if (users.length === 0) {
-            return { message: "No users with FCM tokens" };
-        }
-
-        const results = await Promise.allSettled(
-            users.map((user) => {
-                const payload = {
-                    title,
-                    body,
-                    type: "broadcast",
-                    channelId: "default",
-                    priority: "default",
-                    data,
-                };
-                return this.sendNotification(user.fcmToken, payload);
-            }),
+        console.log(
+            `[FCMService] Batch: ${successCount} sent, ${failureCount} failed`,
         );
 
-        const successful = results.filter(
-            (r) => r.status === "fulfilled" && r.value.success,
-        ).length;
-        const failed = results.filter(
-            (r) => r.status === "rejected" || !r.value.success,
-        ).length;
-
-        return {
-            success: true,
-            message: "Broadcast completed",
-            sent: successful,
-            failed: failed,
-        };
+        return { success: true, successCount, failureCount };
+    } catch (error) {
+        return { success: false, error: error?.message };
     }
-}
+};
 
-module.exports = new FirebaseNotificationService();
+module.exports = {
+    sendActivityReminder,
+    sendNotification,
+    sendToUsers,
+};

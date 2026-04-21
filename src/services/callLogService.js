@@ -1,199 +1,238 @@
+/**
+ * callLogService.js
+ * Frontend service for call log syncing and fetching.
+ * Works with react-native-call-log on Android (enterprise builds only).
+ */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import getApiClient from "./apiClient";
 import { emitAppEvent } from "./appEvents";
 
 const CACHE_KEY = "calllog_last_sync_time";
 
+// ─── Transforms ───────────────────────────────────────────────────────────────
+
 /**
- * Transform raw Android CallLog data to CRM schema
- * @param {Array} rawLogs - Raw call logs from react-native-call-log
- * @returns {Array} Transformed logs
+ * Map Android call log type values to CRM enum strings.
+ * Android numeric types: 0 = INCOMING, 1 = OUTGOING, 2 = MISSED, 3 = VOICEMAIL, 4 = REJECTED, 5 = BLOCKED
  */
 const transformCallData = (rawLogs) => {
     if (!Array.isArray(rawLogs)) return [];
 
-    return rawLogs.map((log) => {
-        // Map Android types to CRM types
-        let callType = "incoming";
-        if (log.type === "OUTGOING" || log.type === 1) {
-            callType = "outgoing";
-        } else if (log.type === "MISSED" || log.type === 2) {
-            callType = "missed";
-        } else if (log.type === "INCOMING" || log.type === 0) {
-            callType = "incoming";
-        } else if (log.type === "REJECTED" || log.type === 4) {
-            callType = "rejected";
-        } else if (log.type === "BLOCKED" || log.type === 5) {
-            callType = "rejected";
-        }
+    return rawLogs
+        .filter((log) => log && log.phoneNumber) // skip logs with no number
+        .map((log) => {
+            const typeRaw = log.type;
 
-        // Handle duration = 0 as rejected/ringing cut
-        if (log.duration === "0" || log.duration === 0) {
-            if (callType === "incoming") {
+            let callType = "incoming";
+            if (typeRaw === "OUTGOING" || typeRaw === 1 || typeRaw === "1") {
+                callType = "outgoing";
+            } else if (
+                typeRaw === "MISSED" ||
+                typeRaw === 2 ||
+                typeRaw === "2"
+            ) {
+                callType = "missed";
+            } else if (
+                typeRaw === "INCOMING" ||
+                typeRaw === 0 ||
+                typeRaw === "0"
+            ) {
+                callType = "incoming";
+            } else if (
+                typeRaw === "REJECTED" ||
+                typeRaw === 4 ||
+                typeRaw === "4" ||
+                typeRaw === "BLOCKED" ||
+                typeRaw === 5 ||
+                typeRaw === "5"
+            ) {
                 callType = "rejected";
             }
-        }
 
-        const callTime = log.dateTime
-            ? new Date(parseInt(log.dateTime, 10))
-            : new Date();
+            const durationSec = parseInt(log.duration || 0, 10);
 
-        return {
-            phoneNumber: (log.phoneNumber || "").trim(),
-            callType,
-            callDuration: parseInt(log.duration || 0, 10),
-            callTime: callTime.toISOString(),
-            contactName: log.name || "",
-        };
-    });
+            // Zero-duration incoming → treat as rejected/missed-ring
+            if (durationSec === 0 && callType === "incoming") {
+                callType = "rejected";
+            }
+
+            // Zero-duration outgoing → still counts as outgoing (rang, they didn't pick up)
+
+            // Parse callTime safely — handle invalid dates
+            let callTime = new Date();
+            if (log.dateTime) {
+                const parsed = parseInt(log.dateTime, 10);
+                if (!Number.isNaN(parsed) && parsed > 0) {
+                    const dt = new Date(parsed);
+                    if (!Number.isNaN(dt.getTime())) {
+                        callTime = dt;
+                    }
+                }
+            }
+
+            return {
+                phoneNumber: String(log.phoneNumber || "").trim(),
+                callType,
+                callDuration: durationSec, // ← IMPORTANT: backend field is callDuration
+                callTime: callTime.toISOString(),
+                contactName: String(log.name || "").trim(),
+            };
+        });
 };
 
 /**
- * Generate unique key for duplicate prevention
- * @param {string} phoneNumber
- * @param {string} callTime ISO string or timestamp
- * @param {number} duration seconds
- * @returns {string} Unique key
+ * Build a unique key per call to prevent duplicate syncs.
  */
-const generateUniqueKey = (phoneNumber, callTime, duration) => {
+const generateUniqueKey = (phoneNumber, callTime, callDuration) => {
     const ts =
-        typeof callTime === "string" ? new Date(callTime).getTime() : callTime;
-    return `${phoneNumber}_${ts}_${duration}`;
+        typeof callTime === "string"
+            ? new Date(callTime).getTime()
+            : Number(callTime);
+    const phone = String(phoneNumber || "")
+        .replace(/\D/g, "")
+        .slice(-10);
+    return `${phone}_${ts}_${callDuration}`;
 };
 
 /**
- * Filter new logs based on last sync time
- * @param {Array} logs - Transformed logs
- * @param {number|null} lastSyncTime - Timestamp in ms
- * @returns {Array} Logs newer than lastSyncTime
+ * Keep only logs newer than the last successful sync timestamp.
  */
 const filterNewLogs = (logs, lastSyncTime) => {
     if (!lastSyncTime) return logs;
-
     return logs.filter((log) => {
         const logTime = new Date(log.callTime).getTime();
         return logTime > lastSyncTime;
     });
 };
 
-/**
- * Get last sync timestamp from local storage
- * @returns {Promise<number|null>}
- */
+// ─── AsyncStorage helpers ─────────────────────────────────────────────────────
+
 export const getLastSyncTime = async () => {
     try {
         const stored = await AsyncStorage.getItem(CACHE_KEY);
         if (!stored) return null;
-        return parseInt(stored, 10);
+        const parsed = parseInt(stored, 10);
+        return Number.isFinite(parsed) ? parsed : null;
     } catch (err) {
-        console.warn("Error reading lastSyncTime:", err);
+        console.warn(
+            "[CallLogService] Error reading lastSyncTime:",
+            err.message,
+        );
         return null;
     }
 };
 
-/**
- * Set last sync timestamp in local storage
- * @param {number} timestamp - Milliseconds since epoch
- * @returns {Promise<void>}
- */
 export const setLastSyncTime = async (timestamp) => {
     try {
         await AsyncStorage.setItem(CACHE_KEY, String(timestamp));
     } catch (err) {
-        console.warn("Error saving lastSyncTime:", err);
+        console.warn(
+            "[CallLogService] Error saving lastSyncTime:",
+            err.message,
+        );
     }
 };
 
+// ─── Sync ─────────────────────────────────────────────────────────────────────
+
 /**
- * Sync device call logs to backend
- * Requires react-native-call-log to be installed
- * @returns {Promise<{success: boolean, inserted: number, duplicates: number}>}
+ * Sync device call logs to backend.
+ * Requires react-native-call-log and READ_CALL_LOG permission.
+ * Safe to call even when the library is unavailable — returns gracefully.
+ *
+ * @returns {Promise<{success: boolean, inserted?: number, duplicates?: number, error?: string}>}
  */
 export const syncDeviceCallLogs = async () => {
     try {
-        console.log("[CallLog] Sync started");
+        console.log("[CallLogService] Sync started");
 
-        // Dynamically require react-native-call-log (will fail gracefully if not available)
         let CallLogs;
         try {
             CallLogs = require("react-native-call-log").default;
         } catch {
-            console.error("[CallLog] react-native-call-log not installed");
-            return {
-                success: false,
-                error: "CallLog library not available",
-            };
+            console.error(
+                "[CallLogService] react-native-call-log not installed",
+            );
+            return { success: false, error: "CallLog library not available" };
         }
 
-        // Fetch device call logs
+        if (!CallLogs?.loadAll) {
+            return { success: false, error: "CallLog.loadAll not available" };
+        }
+
+        // Fetch all device logs (react-native-call-log returns an array)
         const rawLogs = await CallLogs.loadAll();
-        console.log(`[CallLog] Fetched ${rawLogs.length} logs from device`);
-
-        if (!Array.isArray(rawLogs) || rawLogs.length === 0) {
-            console.log("[CallLog] No logs to sync");
-            return { success: true, inserted: 0, duplicates: 0 };
-        }
-
-        // Transform logs
-        const transformedLogs = transformCallData(rawLogs);
-        console.log(`[CallLog] Transformed ${transformedLogs.length} logs`);
-
-        // Get last sync time and filter new logs only
-        const lastSyncTime = await getLastSyncTime();
-        const newLogs = filterNewLogs(transformedLogs, lastSyncTime);
         console.log(
-            `[CallLog] Found ${newLogs.length} new logs since last sync`,
+            `[CallLogService] Fetched ${rawLogs?.length ?? 0} logs from device`,
         );
 
-        if (newLogs.length === 0) {
-            console.log("[CallLog] No new logs to sync");
+        if (!Array.isArray(rawLogs) || rawLogs.length === 0) {
             return { success: true, inserted: 0, duplicates: 0 };
         }
 
-        // Post to backend
-        const client = await getApiClient();
-        const result = await client.post("/calllogs/sync", { logs: newLogs });
+        // Transform → CRM schema
+        const transformedLogs = transformCallData(rawLogs);
+        console.log(
+            `[CallLogService] Transformed → ${transformedLogs.length} logs`,
+        );
 
-        if (result.success) {
-            // Update last sync time
-            const now = new Date().getTime();
+        // Filter to only new logs since last sync
+        const lastSyncTime = await getLastSyncTime();
+        const newLogs = filterNewLogs(transformedLogs, lastSyncTime);
+        console.log(`[CallLogService] New since last sync: ${newLogs.length}`);
+
+        if (newLogs.length === 0) {
+            return { success: true, inserted: 0, duplicates: 0 };
+        }
+
+        // POST to backend
+        const client = await getApiClient();
+        const response = await client.post("/calllogs/sync", { logs: newLogs });
+
+        // apiClient may return response.data directly or wrap it
+        const result = response?.data ?? response;
+
+        if (result?.success !== false) {
+            const now = Date.now();
             await setLastSyncTime(now);
 
+            const inserted = Number(result?.inserted ?? 0);
+            const duplicates = Number(result?.duplicates ?? 0);
+
             console.log(
-                `[CallLog] Sync complete. Inserted: ${result.inserted}, Duplicates: ${result.duplicates}`,
+                `[CallLogService] Sync complete — inserted: ${inserted}, duplicates: ${duplicates}`,
             );
 
-            // Emit event for UI refresh
-            if (result.inserted > 0) {
+            if (inserted > 0) {
                 emitAppEvent("CALL_LOG_SYNCED", {
-                    count: result.inserted,
+                    count: inserted,
                     timestamp: now,
                 });
             }
 
-            return result;
+            return { success: true, inserted, duplicates };
         }
 
         return {
             success: false,
-            error: result.error || "Sync failed",
+            error: result?.error || result?.message || "Sync failed",
         };
     } catch (err) {
-        console.error("[CallLog] Sync error:", err);
-        return {
-            success: false,
-            error: err.message,
-        };
+        console.error("[CallLogService] Sync error:", err.message);
+        return { success: false, error: err.message };
     }
 };
 
+// ─── Fetch ────────────────────────────────────────────────────────────────────
+
 /**
- * Fetch call logs for a specific phone number
- * @param {string} phoneNumber - Phone number to filter by
- * @param {string} callType - Filter by type (optional): incoming, outgoing, missed, rejected
- * @param {number} page - Page number (default: 1)
- * @param {number} limit - Items per page (default: 50)
- * @returns {Promise<{success: boolean, data: Array, pagination: object}>}
+ * Fetch call logs for a specific phone number from the backend.
+ *
+ * @param {string}      phoneNumber
+ * @param {string|null} callType    - "incoming"|"outgoing"|"missed"|"rejected"|null (all)
+ * @param {number}      page        - default 1
+ * @param {number}      limit       - default 50
+ * @returns {Promise<{success:boolean, data:Array, pagination:object}>}
  */
 export const getCallLogsByPhone = async (
     phoneNumber,
@@ -202,50 +241,64 @@ export const getCallLogsByPhone = async (
     limit = 50,
 ) => {
     try {
-        const params = {
-            phone: phoneNumber,
-            page,
-            limit,
-        };
-
-        if (callType) {
-            params.callType = callType;
-        }
-
-        console.log("[CallLogService] 🚀 Making request with params:", params);
-
-        const client = await getApiClient();
-        const result = await client.get("/calllogs", { params });
-
-        console.log("[CallLogService] 📦 Raw response:", {
-            status: result.status,
-            statusText: result.statusText,
-            data: result.data,
-        });
-
-        if (result.data?.success !== false) {
+        if (!phoneNumber || !String(phoneNumber).trim()) {
             return {
-                success: true,
-                data: result.data?.data || result.data || [],
-                pagination: result.data?.pagination || {},
+                success: false,
+                error: "Phone number is required",
+                data: [],
             };
         }
 
+        const params = {
+            phone: String(phoneNumber).trim(),
+            page: Number(page) || 1,
+            limit: Number(limit) || 50,
+        };
+
+        if (callType && callType !== "all" && callType !== "All") {
+            params.callType = callType;
+        }
+
+        console.log("[CallLogService] Fetching logs with params:", params);
+
+        const client = await getApiClient();
+        const response = await client.get("/calllogs", { params });
+
+        // Handle both axios (response.data) and custom apiClient patterns
+        const body = response?.data ?? response;
+
+        console.log("[CallLogService] Response body:", {
+            success: body?.success,
+            count:
+                body?.data?.length ?? (Array.isArray(body) ? body.length : "?"),
+        });
+
+        if (body?.success === false) {
+            return {
+                success: false,
+                error:
+                    body?.error || body?.message || "Failed to fetch call logs",
+                data: [],
+            };
+        }
+
+        // data may be at body.data (paginated) or body itself (array)
+        const data = Array.isArray(body?.data)
+            ? body.data
+            : Array.isArray(body)
+              ? body
+              : [];
+
         return {
-            success: false,
-            error:
-                result.data?.error ||
-                result.data?.message ||
-                "Failed to fetch call logs",
-            data: [],
+            success: true,
+            data,
+            pagination: body?.pagination || {},
         };
     } catch (err) {
-        console.error("[CallLogService] ❌ Request error:", {
+        console.error("[CallLogService] Fetch error:", {
             message: err.message,
             status: err?.response?.status,
-            statusText: err?.response?.statusText,
             data: err?.response?.data,
-            error: err,
         });
 
         const errorMessage =
@@ -254,24 +307,21 @@ export const getCallLogsByPhone = async (
             err.message ||
             "Failed to fetch call logs";
 
-        return {
-            success: false,
-            error: errorMessage,
-            data: [],
-        };
+        return { success: false, error: errorMessage, data: [] };
     }
 };
 
+// ─── Formatters ───────────────────────────────────────────────────────────────
+
 /**
- * Format call duration to human-readable string
- * @param {number} seconds - Duration in seconds
- * @returns {string} Formatted duration (e.g., "2m 15s" or "45s")
+ * Format seconds to "2m 15s", "45s", "0s"
  */
 export const formatDuration = (seconds) => {
-    if (!seconds || seconds === 0) return "0s";
+    const total = Number(seconds ?? 0);
+    if (!total || total < 0) return "0s";
 
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
 
     if (mins === 0) return `${secs}s`;
     if (secs === 0) return `${mins}m`;
@@ -279,27 +329,30 @@ export const formatDuration = (seconds) => {
 };
 
 /**
- * Format call date/time for display
- * @param {string|Date} callTime ISO string or Date object
- * @returns {object} {date: "Apr 18", time: "2:30 PM"}
+ * Format a callTime ISO string to {date: "Apr 18", time: "2:30 PM"}
  */
 export const formatCallTime = (callTime) => {
     try {
+        if (!callTime) return { date: "N/A", time: "N/A" };
         const dt = new Date(callTime);
-        const date = dt.toLocaleDateString("en-US", {
+        if (Number.isNaN(dt.getTime())) return { date: "N/A", time: "N/A" };
+
+        const date = dt.toLocaleDateString("en-IN", {
             month: "short",
             day: "numeric",
         });
-        const time = dt.toLocaleTimeString("en-US", {
+        const time = dt.toLocaleTimeString("en-IN", {
             hour: "numeric",
             minute: "2-digit",
             hour12: true,
         });
         return { date, time };
-    } catch (err) {
+    } catch {
         return { date: "N/A", time: "N/A" };
     }
 };
+
+// ─── Default export (for callLogService.methodName usage) ─────────────────────
 
 export default {
     syncDeviceCallLogs,

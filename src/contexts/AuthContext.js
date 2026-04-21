@@ -11,6 +11,7 @@ import notificationService, {
     showBillingPlanNotification,
     getDevicePushToken,
     registerPushTokenWithServer,
+    initializeNotifications,
 } from "../services/notificationService";
 import { API_URL } from "../services/apiConfig";
 import { clearApiClient } from "../services/apiClient";
@@ -618,30 +619,62 @@ export const AuthProvider = ({ children }) => {
         setIsLoggedIn(true);
         refreshBillingPlan().catch(() => {});
 
+        // Initialize notifications (creates Android channels, sets up handlers)
+        try {
+            console.log("[Auth] Initializing notifications system...");
+            const notifResult = await initializeNotifications();
+            if (notifResult) {
+                console.log("[Auth] ✓ Notification system initialized");
+            } else {
+                console.warn("[Auth] ⚠ Notification initialization incomplete");
+            }
+        } catch (notifError) {
+            console.warn(
+                "[Auth] Notification initialization error:",
+                notifError?.message,
+            );
+        }
+
+        // Initialize socket immediately after login to receive FORCE_LOGOUT and other real-time events
+        try {
+            const { initSocket } = await import("../services/socketService");
+            await initSocket();
+            console.log("[Auth] Socket initialized after login");
+        } catch (_error) {
+            console.warn(
+                "[Auth] Socket initialization failed:",
+                _error?.message,
+            );
+            // Not critical - socket will be initialized when needed
+        }
+
         // Register push token for closed-app notifications
         try {
             console.log(
-                "[Auth] Registering push token for closed-app notifications...",
+                "[Auth] Registering FCM push token for closed-app notifications...",
             );
             const pushToken = await getDevicePushToken();
             if (pushToken) {
+                console.log(
+                    `[Auth] Got FCM token: ${pushToken.substring(0, 20)}...`,
+                );
                 const registered = await registerPushTokenWithServer(pushToken);
                 if (registered) {
                     console.log(
-                        "[Auth] ✓ Push token successfully registered - closed-app notifications enabled",
+                        "[Auth] ✓ FCM token registered with server - closed-app notifications enabled",
                     );
                 } else {
                     console.warn(
-                        "[Auth] ⚠ Push token registration failed - notifications may not work when app is closed",
+                        "[Auth] ⚠ FCM token registration with server failed - check user.fcmToken in DB",
                     );
                 }
             } else {
-                console.warn("[Auth] ⚠ Could not obtain push token");
+                console.warn("[Auth] ⚠ Could not obtain FCM token from device");
             }
         } catch (error) {
             // Don't let push token registration failure block login
             console.error(
-                "[Auth] ✗ Error during push token registration:",
+                "[Auth] ✗ Error during FCM token registration:",
                 error?.message,
             );
         }

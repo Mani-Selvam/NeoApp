@@ -9,11 +9,27 @@ import { AppState, Platform } from "react-native";
 import { confirmPermissionRequest } from "../utils/appFeedback";
 import * as followupService from "./followupService";
 import firebaseNotificationService from "./firebaseNotificationService";
+import { API_URL } from "./apiConfig";
+import { getAuthToken } from "./secureTokenStorage";
 import {
     getFollowUpDueTexts,
     getFollowUpMissedTexts,
     getFollowUpSoonTexts,
 } from "../constants/notificationPhrases";
+
+const shouldUseServerFollowupReminders = () => {
+    const flag = String(
+        process.env.EXPO_PUBLIC_USE_SERVER_FOLLOWUP_REMINDERS || "",
+    )
+        .trim()
+        .toLowerCase();
+    if (flag === "true") return true;
+    if (flag === "false") return false;
+    // Default:
+    // - Native builds (not Expo Go) have FCM and receive server reminders.
+    // - Expo Go should use local scheduling as a fallback.
+    return Constants.appOwnership !== "expo";
+};
 
 let _audioModule = null;
 const getAudioModule = () => {
@@ -42,31 +58,29 @@ const TIME_FOLLOWUP_SCHEDULE_SCHEMA_VERSION = 6;
 // ─── Timing Constants ────────────────────────────────────────────────────────
 const DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES = 60;
 const DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES = 5;
-const DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES = 60;
-const DEFAULT_FOLLOWUP_MISSED_FAST_EVERY_MINUTES = 5;
+const DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES = 10; // ✅ FIX 5: Reduced from 60 → 10
+const DEFAULT_FOLLOWUP_MISSED_FAST_EVERY_MINUTES = 4; // ✅ FIX 5: Not used anymore (hardcoded)
 const DEFAULT_FOLLOWUP_MISSED_HOURLY_EVERY_MINUTES = 30;
 const DEFAULT_FOLLOWUP_MISSED_HOURLY_MAX_HOURS = 12;
 const DEFAULT_FOLLOWUP_DUE_REPEAT_FOR_MINUTES = 0;
 
-// FIX #7: Reduced schedule window from 7 days to 2 days to prevent too many
-// notifications being queued at once, which caused Android to drop them randomly.
 const DEFAULT_FOLLOWUP_SCHEDULE_WINDOW_DAYS = 2;
 const DEFAULT_FOLLOWUP_MISSED_LOOKBACK_DAYS = 2;
 
-// FIX #3: Reduced from 120 → 30. Android reliably supports ~50 scheduled
-// notifications; going above that causes random drops. 30 is a safe ceiling.
 const MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC = 30;
 
 // ─── FIX #8: Duplicate scheduling guard ──────────────────────────────────────
-// Prevents the same sync running concurrently when triggered by multiple
-// sources (useEffect, navigation focus, AppState change).
 let _schedulingLock = false;
 let _schedulingLockTs = 0;
-const SCHEDULING_LOCK_TIMEOUT_MS = 15000; // 15-second safety reset
+const SCHEDULING_LOCK_TIMEOUT_MS = 15000;
+
+// ─── FIX: Notification listener deduplication ────────────────────────────────
+let _foregroundListenerRegistered = false;
+let _responseListenerRegistered = false;
+let _globalListenerRegistered = false;
 
 const acquireSchedulingLock = () => {
     const now = Date.now();
-    // Auto-release stale lock (in case previous run crashed)
     if (
         _schedulingLock &&
         now - _schedulingLockTs > SCHEDULING_LOCK_TIMEOUT_MS
@@ -97,6 +111,29 @@ const FOLLOWUP_SOON_STALE_AUDIO_MS = 45 * 1000;
 const FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS = 10 * 1000;
 const _pendingSoonAudioByKey = new Map();
 const _foregroundFollowupAudioTimers = new Map();
+const FOREGROUND_FALLBACK_GRACE_MS = 650;
+// Visual duplicates can arrive a few seconds apart (e.g., foreground fallback vs OS-delivered).
+// Use a larger window so a follow-up reminder shows only once.
+const FOLLOWUP_VISUAL_DEDUP_WINDOW_MS = 90 * 1000;
+const _recentFollowupVisualKeys = new Map();
+const _recentFollowupFallbackVisualKeys = new Map();
+
+const markRecentKey = (map, key, nowMs) => {
+    if (!key) return;
+    map.set(key, Number(nowMs || Date.now()));
+    if (map.size > 500) {
+        const cutoff = Date.now() - 10 * 60 * 1000;
+        for (const [k, ts] of map.entries()) {
+            if (Number(ts) < cutoff) map.delete(k);
+        }
+    }
+};
+
+const wasRecentKey = (map, key, nowMs, windowMs) => {
+    if (!key) return false;
+    const last = Number(map.get(key) ?? 0);
+    return last > 0 && Number(nowMs || Date.now()) - last < Number(windowMs);
+};
 
 const getExpectedFollowupFireMs = (data = {}) => {
     const type = String(data?.type ?? "")
@@ -131,9 +168,8 @@ const getFollowupCorrectionKey = (data = {}) => {
         type !== "followup-soon" &&
         type !== "followup-due" &&
         type !== "followup-missed"
-    ) {
+    )
         return "";
-    }
     if (!when) return "";
     const followUpId = String(data?.followUpId ?? "").trim();
     const mins = String(data?.minutesLeft ?? "").trim();
@@ -149,9 +185,8 @@ const getFollowupAudioDedupKey = (data = {}) => {
         type !== "followup-soon" &&
         type !== "followup-due" &&
         type !== "followup-missed"
-    ) {
+    )
         return "";
-    }
     const followUpId = String(data?.followUpId ?? "").trim();
     const when = String(data?.when ?? "").trim();
     const mins = Math.max(0, Math.round(Number(data?.minutesLeft ?? 0)));
@@ -169,7 +204,8 @@ const scheduleForegroundFollowupAudioFallback = (data = {}, expectedMs) => {
         if (appState !== "active") return;
         const key = getFollowupAudioDedupKey(data);
         if (!key || !Number.isFinite(Number(expectedMs))) return;
-        const delay = Number(expectedMs) - Date.now();
+        const fireAtMs = Number(expectedMs) + FOREGROUND_FALLBACK_GRACE_MS;
+        const delay = fireAtMs - Date.now();
         if (delay < 1500 || delay > 2 * 60 * 60 * 1000) return;
 
         const timerKey = `${key}|fg-fallback`;
@@ -193,9 +229,7 @@ const scheduleForegroundFollowupAudioFallback = (data = {}, expectedMs) => {
 };
 
 const shouldPlayFollowupAudioNow = (data = {}) => {
-    if (String(data?.foregroundFallbackVisual ?? "") === "1") {
-        return false;
-    }
+    if (String(data?.foregroundFallbackVisual ?? "") === "1") return false;
     const key = getFollowupAudioDedupKey(data);
     if (!key) return true;
     const type = String(data?.type ?? "")
@@ -211,15 +245,12 @@ const shouldPlayFollowupAudioNow = (data = {}) => {
                 : FOLLOWUP_AUDIO_DUPLICATE_WINDOW_MS;
     const now = Date.now();
     const last = Number(_recentFollowupAudioKeys.get(key) ?? 0);
-    if (last > 0 && now - last < duplicateWindowMs) {
-        return false;
-    }
+    if (last > 0 && now - last < duplicateWindowMs) return false;
     _recentFollowupAudioKeys.set(key, now);
     if (_recentFollowupAudioKeys.size > 300) {
         for (const [k, ts] of _recentFollowupAudioKeys.entries()) {
-            if (now - Number(ts) > 10 * 60 * 1000) {
+            if (now - Number(ts) > 10 * 60 * 1000)
                 _recentFollowupAudioKeys.delete(k);
-            }
         }
     }
     return true;
@@ -250,8 +281,24 @@ const showForegroundFollowupVisualNotification = async (data = {}) => {
             type !== "followup-soon" &&
             type !== "followup-due" &&
             type !== "followup-missed"
+        )
+            return null;
+
+        const nowMs = Date.now();
+        const dedupKey = getFollowupAudioDedupKey(data);
+        if (
+            dedupKey &&
+            wasRecentKey(
+                _recentFollowupVisualKeys,
+                dedupKey,
+                nowMs,
+                FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
+            )
         ) {
             return null;
+        }
+        if (dedupKey) {
+            markRecentKey(_recentFollowupFallbackVisualKeys, dedupKey, nowMs);
         }
 
         const lang = await getNotificationVoiceLanguage();
@@ -318,14 +365,16 @@ const showForegroundFollowupVisualNotification = async (data = {}) => {
             );
         }
 
-        return await Notifications.scheduleNotificationAsync({
+        const id = await Notifications.scheduleNotificationAsync({
             content: {
                 title,
                 body,
                 subtitle: "Tap to open Follow-ups",
                 data: { ...(data || {}), foregroundFallbackVisual: "1" },
                 categoryIdentifier: CATEGORY_IDS.followups,
-                sound: getChannelMeta(channelKey)?.sound ?? "default",
+                sound: resolveContentSound(
+                    getChannelMeta(channelKey)?.sound ?? "default",
+                ),
                 vibrate: [0, 250, 250, 250],
                 priority: "max",
                 android: {
@@ -338,6 +387,7 @@ const showForegroundFollowupVisualNotification = async (data = {}) => {
             },
             trigger: null,
         });
+        return id;
     } catch (_error) {
         return null;
     }
@@ -385,7 +435,6 @@ const scheduleCorrectedFollowupNotification = async (
                 ? content.android.channelId
                 : resolveChannelId("followups");
 
-        // Get sound from channel metadata or use default
         const correctedNotificationSound =
             getChannelMeta("followups")?.sound ?? "default";
 
@@ -413,6 +462,18 @@ const scheduleCorrectedFollowupNotification = async (
         console.log(
             `[NotifSvc] Corrected early follow-up scheduled in ${seconds}s (${key})`,
         );
+        if (false && shouldUseServerFollowupReminders()) {
+            await cancelTodayFollowUpReminders();
+            console.log(
+                "[NotifSvc] Server reminders enabled — cleared local follow-up schedules",
+            );
+        }
+        if (false && shouldUseServerFollowupReminders()) {
+            await cancelTodayFollowUpReminders();
+            console.log(
+                "[NotifSvc] Server reminders enabled â€” cleared local follow-up schedules",
+            );
+        }
         return true;
     } catch (error) {
         console.warn(
@@ -445,9 +506,8 @@ const loadEnquiryMuteMap = async () => {
                 changed = true;
             }
         }
-        if (changed) {
+        if (changed)
             await AsyncStorage.setItem(ENQUIRY_MUTE_KEY, JSON.stringify(map));
-        }
         return map;
     } catch {
         return {};
@@ -467,14 +527,13 @@ const muteEnquiryNotifications = async ({
         const now = Date.now();
         const until = Number.isFinite(Number(untilMs))
             ? Math.max(now + 60_000, Number(untilMs))
-            : now + 24 * 60 * 60 * 1000; // default 24h
+            : now + 24 * 60 * 60 * 1000;
 
         const map = await loadEnquiryMuteMap();
         const w = Number(whenMs);
         map[key] = {
             until,
             at: now,
-            // If set, mute applies only to this specific scheduled due-time.
             whenMs: Number.isFinite(w) && w > 0 ? w : undefined,
         };
         await AsyncStorage.setItem(ENQUIRY_MUTE_KEY, JSON.stringify(map));
@@ -493,7 +552,6 @@ const isEnquiryMuted = (muteMap, { enqId, enqNo, whenMs } = {}) => {
 
     const mutedWhen = Number(rec?.whenMs || 0);
     const currentWhen = Number(whenMs || 0);
-    // If the follow-up time changed, automatically unmute so new schedules work.
     if (
         mutedWhen > 0 &&
         Number.isFinite(currentWhen) &&
@@ -511,7 +569,6 @@ const isEnquiryMuted = (muteMap, { enqId, enqNo, whenMs } = {}) => {
         }
         return false;
     }
-
     return true;
 };
 
@@ -523,8 +580,6 @@ const DAILY_TRIGGER_TYPE =
 
 // ─── Channel IDs ─────────────────────────────────────────────────────────────
 const CHANNEL_IDS = {
-    // NOTE: Android notification channels are sticky. When changing default sound,
-    // bump the channel id so existing installs receive the new sound.
     default: "default_v5",
     followups: "followups_v4",
     followups_soon_en: "followups_soon_en_v2",
@@ -564,8 +619,6 @@ const CHANNEL_IDS = {
     reports: "reports_v1",
 };
 
-// Minute-based channels for different sounds (5/4/3/2/1 min, due, missed).
-// Android channels are sticky; bump *_v1 to *_v2 when changing sounds in future.
 const MINUTE_CHANNEL_IDS = (() => {
     const out = {};
     const types = ["followups", "phone", "meeting", "email", "whatsapp"];
@@ -574,10 +627,10 @@ const MINUTE_CHANNEL_IDS = (() => {
         for (const l of langs) {
             for (const m of [5, 4, 3, 2, 1]) {
                 const key = `${t}_${m}min_${l}`;
-                out[key] = `${t}_${m}min_${l}_v1`;
+                out[key] = `${t}_${m}min_${l}`;
             }
-            out[`${t}_due_${l}`] = `${t}_due_${l}_v1`;
-            out[`${t}_missed_${l}`] = `${t}_missed_${l}_v1`;
+            out[`${t}_due_${l}`] = `${t}_due_${l}`;
+            out[`${t}_missed_${l}`] = `${t}_missed_${l}`;
         }
     }
     return out;
@@ -598,102 +651,102 @@ const MINUTE_NOTIFICATION_CHANNELS = (() => {
         const map = {
             followups: {
                 en: {
-                    5: "n5pmin.wav",
-                    4: "n4pmin.wav",
-                    3: "n3pmin.wav",
-                    2: "n2pmin.wav",
-                    1: "n1pmin.wav",
-                    due: "pdue.wav",
-                    missed: "pmissed.wav",
+                    5: "n5pmin",
+                    4: "n4pmin",
+                    3: "n3pmin",
+                    2: "n2pmin",
+                    1: "n1pmin",
+                    due: "pdue",
+                    missed: "pmissed",
                 },
                 ta: {
-                    5: "t5min.wav",
-                    4: "t4min.wav",
-                    3: "t3min.wav",
-                    2: "t2min.wav",
-                    1: "t1min.wav",
-                    due: "tdue.wav",
-                    missed: "tmissed.wav",
+                    5: "t5min",
+                    4: "t4min",
+                    3: "t3min",
+                    2: "t2min",
+                    1: "t1min",
+                    due: "tdue",
+                    missed: "tmissed",
                 },
             },
             phone: {
                 en: {
-                    5: "n5pmin.wav",
-                    4: "n4pmin.wav",
-                    3: "n3pmin.wav",
-                    2: "n2pmin.wav",
-                    1: "n1pmin.wav",
-                    due: "pdue.wav",
-                    missed: "pmissed.wav",
+                    5: "n5pmin",
+                    4: "n4pmin",
+                    3: "n3pmin",
+                    2: "n2pmin",
+                    1: "n1pmin",
+                    due: "pdue",
+                    missed: "pmissed",
                 },
                 ta: {
-                    5: "t5min.wav",
-                    4: "t4min.wav",
-                    3: "t3min.wav",
-                    2: "t2min.wav",
-                    1: "t1min.wav",
-                    due: "tdue.wav",
-                    missed: "tmissed.wav",
+                    5: "t5min",
+                    4: "t4min",
+                    3: "t3min",
+                    2: "t2min",
+                    1: "t1min",
+                    due: "tdue",
+                    missed: "tmissed",
                 },
             },
             meeting: {
                 en: {
-                    5: "m5min.wav",
-                    4: "m4min.wav",
-                    3: "m3min.wav",
-                    2: "m2min.wav",
-                    1: "m1min.wav",
-                    due: "mdue.wav",
-                    missed: "emissed.wav",
+                    5: "m5min",
+                    4: "m4min",
+                    3: "m3min",
+                    2: "m2min",
+                    1: "m1min",
+                    due: "mdue",
+                    missed: "emissed",
                 },
                 ta: {
-                    5: "mt5min.wav",
-                    4: "mt4min.wav",
-                    3: "mt3min.wav",
-                    2: "mt2min.wav",
-                    1: "mt1min.wav",
-                    due: "mtdue.wav",
-                    missed: "mtmissed.wav",
+                    5: "mt5min",
+                    4: "mt4min",
+                    3: "mt3min",
+                    2: "mt2min",
+                    1: "mt1min",
+                    due: "mtdue",
+                    missed: "mtmissed",
                 },
             },
             email: {
                 en: {
-                    5: "e5min.wav",
-                    4: "e4min.wav",
-                    3: "e3min.wav",
-                    2: "e2min.wav",
-                    1: "e1min.wav",
-                    due: "edue.wav",
-                    missed: "emissed.wav",
+                    5: "e5min",
+                    4: "e4min",
+                    3: "e3min",
+                    2: "e2min",
+                    1: "e1min",
+                    due: "edue",
+                    missed: "emissed",
                 },
                 ta: {
-                    5: "et5min.wav",
-                    4: "et4min.wav",
-                    3: "et3min.wav",
-                    2: "et2min.wav",
-                    1: "et1min.wav",
-                    due: "etdue.wav",
-                    missed: "etmissed.wav",
+                    5: "et5min",
+                    4: "et4min",
+                    3: "et3min",
+                    2: "et2min",
+                    1: "et1min",
+                    due: "etdue",
+                    missed: "etmissed",
                 },
             },
             whatsapp: {
                 en: {
-                    5: "w5min.wav",
-                    4: "w4min.wav",
-                    3: "w3min.wav",
-                    2: "w2min.wav",
-                    1: "w1min.wav",
-                    due: "wdue.wav",
-                    missed: "wmissed.wav",
+                    5: "w5min",
+                    4: "w4min",
+                    3: "w3min",
+                    2: "w2min",
+                    1: "w1min",
+                    due: "wdue",
+                    missed: "wmissed",
                 },
                 ta: {
-                    5: "wt5min.wav",
-                    4: "wt4min.wav",
-                    3: "wt3min.wav",
-                    2: "wt2min.wav",
-                    1: "wt1min.wav",
-                    due: "wtdue.wav",
-                    missed: "wtmissed.wav",
+                    5: "wt5min",
+                    4: "wt4min",
+                    3: "wt3min",
+                    2: "wt2min",
+                    1: "wt1min",
+                    due: "wtdue",
+                    missed: "wtmissed",
                 },
             },
         };
@@ -734,228 +787,230 @@ const MINUTE_NOTIFICATION_CHANNELS = (() => {
 })();
 
 const CATEGORY_IDS = {
-    // Bump id so Android/iOS pick up new action set (Cancel only).
     followups: "FOLLOWUP_ACTIONS_V3",
     next_followup: "NEXT_FOLLOWUP_PROMPT",
 };
 
-// Android channel sounds must exist in the Expo Notifications plugin `sounds`
-// list (see `app.config.js`). Keep these filenames in sync with bundled assets.
-// Note: JS-driven Audio.Sound()/TTS only works when the app is running.
 const NOTIFICATION_CHANNELS = {
     followups: {
         name: "Follow-ups",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
+        sound: "pdue", // Default sound for followups
     },
     followups_soon_en: {
         name: "Follow-ups (Soon) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_en.wav",
+        sound: "n5pmin",
     },
     followups_due_en: {
         name: "Follow-ups (Due) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_en.wav",
+        sound: "pdue",
     },
     followups_missed_en: {
         name: "Follow-ups (Missed) EN",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_en.wav",
+        sound: "pmissed",
     },
     followups_soon_ta: {
         name: "Follow-ups (Soon) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_ta.wav",
+        sound: "t5min",
     },
     followups_due_ta: {
         name: "Follow-ups (Due) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_ta.wav",
+        sound: "tdue",
     },
     followups_missed_ta: {
         name: "Follow-ups (Missed) TA",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_ta.wav",
+        sound: "tmissed",
     },
     phone_soon_en: {
         name: "Phone (Soon) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_en.wav",
+        sound: "n5pmin",
     },
     phone_due_en: {
         name: "Phone (Due) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_en.wav",
+        sound: "pdue",
     },
     phone_missed_en: {
         name: "Phone (Missed) EN",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_en.wav",
+        sound: "pmissed",
     },
     meeting_soon_en: {
         name: "Meeting (Soon) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_en.wav",
+        sound: "m5min",
     },
     meeting_due_en: {
         name: "Meeting (Due) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_en.wav",
+        sound: "mdue",
     },
     meeting_missed_en: {
         name: "Meeting (Missed) EN",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_en.wav",
+        sound: "emissed",
     },
     email_soon_en: {
         name: "Email (Soon) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_en.wav",
+        sound: "e5min",
     },
     email_due_en: {
         name: "Email (Due) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_en.wav",
+        sound: "edue",
     },
     email_missed_en: {
         name: "Email (Missed) EN",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_en.wav",
+        sound: "emissed",
     },
     whatsapp_soon_en: {
         name: "WhatsApp (Soon) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_en.wav",
+        sound: "w5min",
     },
     whatsapp_due_en: {
         name: "WhatsApp (Due) EN",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_en.wav",
+        sound: "wdue",
     },
     whatsapp_missed_en: {
         name: "WhatsApp (Missed) EN",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_en.wav",
+        sound: "wmissed",
     },
     phone_soon_ta: {
         name: "Phone (Soon) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_ta.wav",
+        sound: "t5min",
     },
     phone_due_ta: {
         name: "Phone (Due) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_ta.wav",
+        sound: "tdue",
     },
     phone_missed_ta: {
         name: "Phone (Missed) TA",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_ta.wav",
+        sound: "tmissed",
     },
     meeting_soon_ta: {
         name: "Meeting (Soon) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_ta.wav",
+        sound: "mt5min",
     },
     meeting_due_ta: {
         name: "Meeting (Due) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_ta.wav",
+        sound: "mtdue",
     },
     meeting_missed_ta: {
         name: "Meeting (Missed) TA",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_ta.wav",
+        sound: "mtmissed",
     },
     email_soon_ta: {
         name: "Email (Soon) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_ta.wav",
+        sound: "et5min",
     },
     email_due_ta: {
         name: "Email (Due) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_ta.wav",
+        sound: "etdue",
     },
     email_missed_ta: {
         name: "Email (Missed) TA",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_ta.wav",
+        sound: "etmissed",
     },
     whatsapp_soon_ta: {
         name: "WhatsApp (Soon) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_soon_ta.wav",
+        sound: "wt5min",
     },
     whatsapp_due_ta: {
         name: "WhatsApp (Due) TA",
         lightColor: "#0EA5E9",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_due_ta.wav",
+        sound: "wtdue",
     },
     whatsapp_missed_ta: {
         name: "WhatsApp (Missed) TA",
         lightColor: "#FF3B5C",
         vibrationPattern: [0, 250, 250, 250],
-        sound: "followup_missed_ta.wav",
+        sound: "wtmissed",
     },
     enquiries: {
         name: "Enquiries",
         lightColor: "#16A34A",
         vibrationPattern: [0, 180, 140, 180],
+        sound: "pdue",
     },
     coupons: {
         name: "Coupons",
         lightColor: "#2563EB",
         vibrationPattern: [0, 180, 120, 180],
+        sound: "pdue",
     },
     team_chat: {
         name: "Team Chat",
         lightColor: "#0F766E",
         vibrationPattern: [0, 180, 90, 180],
+        sound: "pdue",
     },
     billing: {
         name: "Plan Alerts",
         lightColor: "#F59E0B",
         vibrationPattern: [0, 220, 160, 220],
+        sound: "pdue",
     },
     reports: {
         name: "Reports",
         lightColor: "#B8892A",
         vibrationPattern: [0, 150, 120, 150],
+        sound: "pdue",
     },
 };
 
-// ─── Notification Handler (must be set before any scheduling) ─────────────────
+// ─── Notification Handler ─────────────────────────────────────────────────────
 if (Platform.OS !== "web") {
     Notifications.setNotificationHandler({
         handleNotification: async (notification) => {
@@ -966,6 +1021,36 @@ if (Platform.OS !== "web") {
                 data.type === "followup-missed";
             const isForegroundFallbackVisual =
                 String(data?.foregroundFallbackVisual ?? "") === "1";
+            const nowMs = Date.now();
+            const followupKey = isFollowup
+                ? getFollowupAudioDedupKey(data)
+                : "";
+
+            // Guard: suppress any duplicate visual follow-up notification (same key) within the window.
+            // This covers cases where the same reminder is emitted twice (e.g., reschedule glitches or
+            // foreground fallback + OS delivered arriving seconds apart).
+            if (
+                isFollowup &&
+                followupKey &&
+                wasRecentKey(
+                    _recentFollowupVisualKeys,
+                    followupKey,
+                    nowMs,
+                    FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
+                ) &&
+                !isForegroundFallbackVisual
+            ) {
+                return {
+                    shouldShowBanner: false,
+                    shouldShowList: false,
+                    shouldPlaySound: false,
+                    shouldSetBadge: false,
+                };
+            }
+
+            if (isFollowup && !isForegroundFallbackVisual && followupKey) {
+                markRecentKey(_recentFollowupVisualKeys, followupKey, nowMs);
+            }
             const expectedMs = getExpectedFollowupFireMs(data);
             const deltaMsFromExpected = Number.isFinite(expectedMs)
                 ? Date.now() - Number(expectedMs)
@@ -980,6 +1065,44 @@ if (Platform.OS !== "web") {
                 Number.isFinite(deltaMsFromExpected) &&
                 Number(deltaMsFromExpected) >
                     FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS;
+
+            if (
+                isFollowup &&
+                isForegroundFallbackVisual &&
+                followupKey &&
+                wasRecentKey(
+                    _recentFollowupVisualKeys,
+                    followupKey,
+                    nowMs,
+                    FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
+                )
+            ) {
+                return {
+                    shouldShowBanner: false,
+                    shouldShowList: false,
+                    shouldPlaySound: false,
+                    shouldSetBadge: false,
+                };
+            }
+
+            if (
+                isFollowup &&
+                !isForegroundFallbackVisual &&
+                followupKey &&
+                wasRecentKey(
+                    _recentFollowupFallbackVisualKeys,
+                    followupKey,
+                    nowMs,
+                    FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
+                )
+            ) {
+                return {
+                    shouldShowBanner: false,
+                    shouldShowList: false,
+                    shouldPlaySound: false,
+                    shouldSetBadge: false,
+                };
+            }
 
             if (isEarly) {
                 Promise.resolve(
@@ -1010,12 +1133,19 @@ if (Platform.OS !== "web") {
                 };
             }
             if (isForegroundFallbackVisual) {
-                // Fallback visual is shown by JS exactly on time.
-                // Display prominently with full foreground visibility.
                 return {
                     shouldShowBanner: true,
                     shouldShowList: true,
-                    shouldPlaySound: true,
+                    shouldPlaySound: !(
+                        isFollowup &&
+                        followupKey &&
+                        wasRecentKey(
+                            _recentFollowupVisualKeys,
+                            followupKey,
+                            nowMs,
+                            FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
+                        )
+                    ),
                     shouldSetBadge: true,
                     priority:
                         Notifications.AndroidNotificationPriority?.MAX ?? "max",
@@ -1024,11 +1154,6 @@ if (Platform.OS !== "web") {
             return {
                 shouldShowBanner: true,
                 shouldShowList: true,
-                // FIX #4: shouldPlaySound: true lets the Android channel sound
-                // play automatically even when app is closed. Manual Audio.Sound()
-                // only works when JS engine is running; channel sound always works.
-                // Keep enabled in foreground as well so Android can show proper
-                // heads-up alerts with channel sound/vibration.
                 shouldPlaySound: true,
                 shouldSetBadge: true,
                 priority:
@@ -1059,12 +1184,7 @@ const openCsvFileUri = async (uri) => {
         try {
             await IntentLauncher.startActivityAsync(
                 "android.intent.action.VIEW",
-                {
-                    data: dataUri,
-                    // FLAG_GRANT_READ_URI_PERMISSION = 0x00000001
-                    flags: 1,
-                    type: "text/csv",
-                },
+                { data: dataUri, flags: 1, type: "text/csv" },
             );
             return { opened: true };
         } catch (error) {
@@ -1180,7 +1300,6 @@ export const openAndroidBatteryOptimizationSettings = async () => {
     }
 };
 
-// ─── Platform Guard ───────────────────────────────────────────────────────────
 const isNotificationSupported = () => Platform.OS !== "web";
 
 // ─── Voice Language ───────────────────────────────────────────────────────────
@@ -1236,14 +1355,9 @@ const safeSpeak = async (text) => {
 // ─── Audio Playback ───────────────────────────────────────────────────────────
 let activeFollowupSound = null;
 let audioModeReady = false;
-
-// FIX #6: Only reset the audio mode flag when app goes to background — NOT
-// during active playback. The previous version reset during any state change,
-// which invalidated the audio session mid-play and caused silent failures.
 let _isPlayingAudio = false;
 
 export const resetAudioModeOnAppBackground = () => {
-    // Guard: don't reset if audio is actively playing — wait for it to finis`h.
     if (_isPlayingAudio) {
         console.log("[NotifSvc] Skipping audio mode reset — playback active");
         return;
@@ -1257,8 +1371,6 @@ if (Platform.OS !== "web") {
         if (nextState === "background" || nextState === "inactive") {
             resetAudioModeOnAppBackground();
         } else if (nextState === "active") {
-            // ── FIX #9: Re-initialize audio mode when app comes to foreground
-            // so notifications can play audio properly
             console.log(
                 "[NotifSvc] App foreground - ensuring audio mode ready",
             );
@@ -1272,23 +1384,16 @@ const ensureAudioMode = async () => {
     const Audio = getAudioModule();
     if (!Audio?.setAudioModeAsync) return;
     try {
-        // ── FIX #11: Force audio to play even in silent/vibration mode
-        // ── FIX #12: Use DUCK_OTHERS instead of DO_NOT_MIX to avoid AudioFocusNotAcquiredException
-        // DO_NOT_MIX requires exclusive audio focus which OS may deny. DUCK_OTHERS is more permissive.
         await Audio.setAudioModeAsync({
-            playsInSilentModeIOS: true, // iOS: override silent switch
+            playsInSilentModeIOS: true,
             staysActiveInBackground: true,
-            shouldDuckAndroid: true, // Allow lowering other app's volume instead of failing
+            shouldDuckAndroid: true,
             playThroughEarpieceAndroid: false,
-            // Expo AV interruption mode constants can vary by SDK; numeric 2 is "duck others"
-            // across iOS/Android in practice for our supported SDKs.
             interruptionModeAndroid: 2,
             interruptionModeIOS: 2,
         });
         audioModeReady = true;
-        console.log(
-            "[NotifSvc] ✓ Audio mode configured (forced override enabled)",
-        );
+        console.log("[NotifSvc] ✓ Audio mode configured");
     } catch (error) {
         console.warn("[NotifSvc] ⚠ Failed to set audio mode:", error?.message);
     }
@@ -1319,9 +1424,10 @@ const normalizeActivityKeyForAudio = (activityType) => {
     if (raw === "whatsapp" || raw === "wa") return "whatsapp";
     if (raw === "email" || raw === "mail") return "email";
     if (raw === "meeting" || raw === "online meeting") return "meeting";
-    return "followup";
+    return "followup"; // ✅ Returns "followup" — now handled in AUDIO_MODULES
 };
 
+// ─── AUDIO_MODULES ────────────────────────────────────────────────────────────
 const AUDIO_MODULES = {
     en: {
         phone: {
@@ -1359,6 +1465,16 @@ const AUDIO_MODULES = {
             1: require("../assets/Audio/Meeting/English/m1min.wav"),
             due: require("../assets/Audio/Meeting/English/mdue.wav"),
             missed: require("../assets/Audio/Meeting/English/emissed.wav"),
+        },
+        // ✅ FIX 1: Added "followup" alias — uses phone audio for generic follow-up type
+        followup: {
+            5: require("../assets/Audio/Phone/English/n5pmin.wav"),
+            4: require("../assets/Audio/Phone/English/n4pmin.wav"),
+            3: require("../assets/Audio/Phone/English/n3pmin.wav"),
+            2: require("../assets/Audio/Phone/English/n2pmin.wav"),
+            1: require("../assets/Audio/Phone/English/n1pmin.wav"),
+            due: require("../assets/Audio/Phone/English/pdue.wav"),
+            missed: require("../assets/Audio/Phone/English/pmissed.wav"),
         },
     },
     ta: {
@@ -1398,13 +1514,19 @@ const AUDIO_MODULES = {
             due: require("../assets/Audio/Meeting/Tamil/mtdue.wav"),
             missed: require("../assets/Audio/Meeting/Tamil/mtmissed.wav"),
         },
+        // ✅ FIX 1: Added "followup" alias for Tamil too
+        followup: {
+            5: require("../assets/Audio/Phone/Tamil/t5min.wav"),
+            4: require("../assets/Audio/Phone/Tamil/t4min.wav"),
+            3: require("../assets/Audio/Phone/Tamil/t3min.wav"),
+            2: require("../assets/Audio/Phone/Tamil/t2min.wav"),
+            1: require("../assets/Audio/Phone/Tamil/t1min.wav"),
+            due: require("../assets/Audio/Phone/Tamil/tdue.wav"),
+            missed: require("../assets/Audio/Phone/Tamil/tmissed.wav"),
+        },
     },
 };
 
-// FIX #4/#6: playAudioModule — uses loadAsync + playAsync separately for
-// clearer error surfaces. Also sets _isPlayingAudio flag so the AppState
-// listener never resets audio mode during active playback.
-// FIX #12: Improved audio focus handling with longer delays and mode reset between attempts
 const playAudioModule = async (moduleRef, retries = 3) => {
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -1412,7 +1534,7 @@ const playAudioModule = async (moduleRef, retries = 3) => {
         try {
             if (!moduleRef) {
                 console.error(
-                    "[NotifSvc] ✗ Audio module ref is null/undefined - audio file may be missing",
+                    "[NotifSvc] ✗ Audio module ref is null/undefined",
                 );
                 return false;
             }
@@ -1420,7 +1542,6 @@ const playAudioModule = async (moduleRef, retries = 3) => {
             const Audio = getAudioModule();
             if (!Audio?.Sound) return false;
 
-            // Reset audio mode on retry to ensure fresh audio focus acquisition
             if (attempt > 0) {
                 audioModeReady = false;
                 console.log(
@@ -1448,7 +1569,6 @@ const playAudioModule = async (moduleRef, retries = 3) => {
 
             await sound.setVolumeAsync(1.0);
             await sound.playAsync();
-
             console.log(
                 `[NotifSvc] ✓ Audio playback started (attempt ${attempt + 1})`,
             );
@@ -1470,22 +1590,20 @@ const playAudioModule = async (moduleRef, retries = 3) => {
             }
             audioModeReady = false;
             if (attempt < retries) {
-                // FIX #12: Use exponential backoff: 500ms, 1000ms, 1500ms
                 const delayMs = 500 * (attempt + 1);
-                console.log(
-                    `[NotifSvc] Retrying audio playback in ${delayMs}ms...`,
-                );
+                console.log(`[NotifSvc] Retrying audio in ${delayMs}ms...`);
                 await new Promise((resolve) => setTimeout(resolve, delayMs));
             }
         }
     }
     console.error(
-        `[NotifSvc] Audio playback failed after ${retries + 1} attempts:`,
+        `[NotifSvc] Audio failed after ${retries + 1} attempts:`,
         lastError?.message || lastError,
     );
     return false;
 };
 
+// ✅ FIX 2: playAudioForNotificationData — safe fallback chain for missing activity key
 export const playAudioForNotificationData = async (data = {}) => {
     try {
         const type = String(data?.type ?? "").trim();
@@ -1500,11 +1618,17 @@ export const playAudioForNotificationData = async (data = {}) => {
         const lang = await getNotificationVoiceLanguage();
         const activityKey = normalizeActivityKeyForAudio(data?.activityType);
         const pack = AUDIO_MODULES[lang] ?? AUDIO_MODULES.en;
-        const entry = pack?.[activityKey] ?? null;
+
+        // ✅ FIX 2: Fallback chain: activityKey → followup → phone → null
+        const entry =
+            pack?.[activityKey] ??
+            pack?.["followup"] ??
+            pack?.["phone"] ??
+            null;
 
         if (!entry) {
             console.warn(
-                `[NotifSvc] No audio entry for activity: ${activityKey}`,
+                `[NotifSvc] No audio entry for activity: ${activityKey} (lang: ${lang})`,
             );
             return false;
         }
@@ -1640,10 +1764,6 @@ const scheduleDateNotification = async ({
     categoryIdentifier = CATEGORY_IDS.followups,
 }) => {
     try {
-        // FIX #1: Increased past-time tolerance from 2 seconds → 30 seconds.
-        // The old 2-second window caused the 3min/1min alerts to be skipped
-        // when the scheduler ran even slightly late (e.g. 3 seconds after
-        // the target time). 30 seconds is safe and prevents false skips.
         if (when.getTime() < Date.now() - 30000) {
             console.warn(
                 `[NotifSvc] Skipping past-time notification: ${when.toISOString()}`,
@@ -1653,10 +1773,10 @@ const scheduleDateNotification = async ({
 
         const resolvedChannelId = resolveChannelId(channelId);
         const trigger = await buildReliableTrigger(when);
-
-        // Get channel metadata to extract the sound if not explicitly provided
         const channelMeta = getChannelMeta(channelId);
-        const finalSound = sound ?? channelMeta?.sound ?? "default";
+        const finalSound = resolveContentSound(
+            sound ?? channelMeta?.sound ?? "default",
+        );
 
         const notifId = await Notifications.scheduleNotificationAsync({
             content: {
@@ -1675,19 +1795,15 @@ const scheduleDateNotification = async ({
                     sticky,
                     vibrationPattern: vibrate,
                 },
-                ios: {
-                    sound: true,
-                    interruptionLevel: "timeSensitive",
-                },
+                ios: { sound: true, interruptionLevel: "timeSensitive" },
             },
             trigger,
         });
 
-        if (notifId) {
+        if (notifId)
             console.log(
                 `[NotifSvc] ✓ Scheduled: ${notifId} (${when.toISOString()})`,
             );
-        }
         return notifId;
     } catch (error) {
         console.error(
@@ -1716,18 +1832,18 @@ const buildReliableTrigger = async (when) => {
                 Math.abs(Number(nextMs) - targetMs) > 15 * 1000
             ) {
                 console.warn(
-                    `[NotifSvc] Date trigger mismatch (target: ${new Date(targetMs).toISOString()}, next: ${nextMs}) - forcing absolute Date trigger`,
+                    `[NotifSvc] Date trigger mismatch — forcing absolute Date trigger`,
                 );
                 return buildDateTrigger(targetMs);
             }
         } catch (error) {
             console.warn(
-                `[NotifSvc] Date trigger validation failed - forcing absolute Date trigger: ${error?.message || error}`,
+                `[NotifSvc] Date trigger validation failed — forcing absolute:`,
+                error?.message || error,
             );
             return buildDateTrigger(targetMs);
         }
     }
-
     return dateTrigger;
 };
 
@@ -1746,6 +1862,16 @@ const getChannelMeta = (channelId = "default") =>
         vibrationPattern: [0, 220, 160, 220],
     };
 
+const resolveContentSound = (sound = "default") => {
+    const raw = String(sound || "").trim();
+    if (!raw || raw.toLowerCase() === "default") return "default";
+    if (Platform.OS === "ios") {
+        return raw.toLowerCase().endsWith(".wav") ? raw : `${raw}.wav`;
+    }
+    // Android channels use raw resource name (no extension)
+    return raw.replace(/\.wav$/i, "");
+};
+
 const scheduleImmediateNotification = async ({
     title,
     body,
@@ -1762,7 +1888,9 @@ const scheduleImmediateNotification = async ({
 
     const channelMeta = getChannelMeta(channelId);
     const vibrationPattern = vibrate ?? channelMeta.vibrationPattern;
-    const notificationSound = channelMeta?.sound ?? "default";
+    const notificationSound = resolveContentSound(
+        channelMeta?.sound ?? "default",
+    );
     const resolvedChannelId = resolveChannelId(channelId);
 
     return Notifications.scheduleNotificationAsync({
@@ -1775,11 +1903,7 @@ const scheduleImmediateNotification = async ({
             vibrate: vibrationPattern,
             badge,
             priority,
-            ios: {
-                badge,
-                sound: true,
-                interruptionLevel: "timeSensitive",
-            },
+            ios: { badge, sound: true, interruptionLevel: "timeSensitive" },
             android: {
                 channelId: resolvedChannelId,
                 color,
@@ -1865,7 +1989,6 @@ export const initializeNotifications = async () => {
             console.log("[NotifSvc] ✓ Permission granted");
         }
 
-        // ── Android Channels ──────────────────────────────────────────────────
         if (Platform.OS === "android") {
             const setChannel = async (
                 id,
@@ -1873,6 +1996,7 @@ export const initializeNotifications = async () => {
                 importance = Notifications.AndroidImportance.MAX,
             ) => {
                 try {
+                    const soundToUse = meta.sound ?? "default";
                     await Notifications.setNotificationChannelAsync(id, {
                         name: meta.name ?? "Notifications",
                         importance,
@@ -1880,10 +2004,7 @@ export const initializeNotifications = async () => {
                             0, 250, 250, 250,
                         ],
                         lightColor: meta.lightColor ?? "#0EA5E9",
-                        // FIX #5: Channel sound filenames use .wav extension.
-                        // WAV plays more reliably on Android than wav.
-                        // Fallback to "default" if no custom sound defined.
-                        sound: meta.sound ?? "default",
+                        sound: soundToUse,
                         enableVibrate: true,
                         enableLights: true,
                         lockscreenVisibility:
@@ -1891,7 +2012,9 @@ export const initializeNotifications = async () => {
                                 ?.PUBLIC ?? 1,
                         showBadge: true,
                     });
-                    console.log(`[NotifSvc] ✓ Channel: ${id}`);
+                    console.log(
+                        `[NotifSvc] ✓ Channel: ${id} (sound: ${soundToUse})`,
+                    );
                 } catch (e) {
                     console.warn(
                         `[NotifSvc] ⚠ Channel ${id} failed:`,
@@ -1906,12 +2029,10 @@ export const initializeNotifications = async () => {
                     name: "Default",
                     lightColor: "#FF231F7C",
                     vibrationPattern: [0, 250, 250, 250],
-                    // Main app notification sound (used by general notifications & fallback cases)
-                    sound: "followup_due_en.wav",
+                    sound: "pdue",
                 },
                 Notifications.AndroidImportance.HIGH,
             );
-
             await setChannel(
                 CHANNEL_IDS.followups,
                 NOTIFICATION_CHANNELS.followups,
@@ -1967,7 +2088,6 @@ export const initializeNotifications = async () => {
                 );
             }
 
-            // Minute-based channels (5/4/3/2/1 min + due + missed) for activity-specific sounds
             for (const [key, channelId] of Object.entries(MINUTE_CHANNEL_IDS)) {
                 const meta = MINUTE_NOTIFICATION_CHANNELS[key];
                 if (!meta) continue;
@@ -2005,7 +2125,6 @@ export const initializeNotifications = async () => {
             );
         }
 
-        // ── Notification Action Categories ────────────────────────────────────
         try {
             await Notifications.setNotificationCategoryAsync(
                 CATEGORY_IDS.followups,
@@ -2013,7 +2132,6 @@ export const initializeNotifications = async () => {
                     {
                         identifier: "FOLLOWUP_CANCEL",
                         buttonTitle: "Cancel",
-                        // Needs foreground so JS can cancel other scheduled notifications for this enquiry.
                         options: { opensAppToForeground: true },
                     },
                 ],
@@ -2052,8 +2170,20 @@ export const initializeNotifications = async () => {
 
         if (Constants.appOwnership !== "expo") {
             try {
-                await firebaseNotificationService.initialize();
-                console.log("[NotifSvc] ✓ Firebase notifications initialized");
+                // ✅ FIX 3: Guard against missing initialize() method
+                if (
+                    typeof firebaseNotificationService?.initialize ===
+                    "function"
+                ) {
+                    await firebaseNotificationService.initialize();
+                    console.log(
+                        "[NotifSvc] ✓ Firebase notifications initialized",
+                    );
+                } else {
+                    console.log(
+                        "[NotifSvc] ⚠ firebaseNotificationService.initialize not available — skipping",
+                    );
+                }
             } catch (firebaseError) {
                 console.warn(
                     "[NotifSvc] ⚠ Firebase init failed:",
@@ -2387,9 +2517,6 @@ export const getPendingNotifications = async () => {
     }
 };
 
-// FIX #2: cancelAllNotifications now ONLY cancels all as an emergency reset.
-// Internal scheduling code uses targeted cancelNotification(id) per saved ID,
-// never cancelAllScheduledNotificationsAsync() during normal sync cycles.
 export const cancelAllNotifications = async () => {
     try {
         if (!isNotificationSupported()) return;
@@ -2413,14 +2540,13 @@ export const getDevicePushToken = async () => {
     try {
         if (Platform.OS === "web") {
             console.log(
-                "[NotifSvc] Web push token listener is limited; skipping push token registration on web",
+                "[NotifSvc] Web push token listener is limited; skipping",
             );
             return null;
         }
         const projectId =
             Constants?.expoConfig?.extra?.eas?.projectId ??
             Constants?.easConfig?.projectId;
-
         const options = projectId ? { projectId } : undefined;
         const token = await Notifications.getExpoPushTokenAsync(options);
         console.log(
@@ -2440,15 +2566,13 @@ export const registerPushTokenWithServer = async (pushToken) => {
             console.warn("[NotifSvc] ⚠ Invalid push token");
             return false;
         }
-        const authToken = await AsyncStorage.getItem("authToken");
+        const authToken = await getAuthToken();
         if (!authToken) {
             console.warn("[NotifSvc] ⚠ No auth token");
             return false;
         }
 
-        const apiURL =
-            process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000/api";
-        const response = await fetch(`${apiURL}/auth/register-push-token`, {
+        const response = await fetch(`${API_URL}/auth/register-push-token`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -2483,6 +2607,16 @@ export const registerPushTokenWithServer = async (pushToken) => {
 };
 
 export const setupNotificationListener = (callback) => {
+    // FIX: Prevent duplicate listener registration
+    if (_responseListenerRegistered) {
+        console.warn(
+            "[NotifSvc] Response listener already registered, skipping",
+        );
+        return { remove: () => {} };
+    }
+
+    _responseListenerRegistered = true;
+
     return Notifications.addNotificationResponseReceivedListener((response) => {
         const notification = response.notification;
         console.log("Notification tapped:", notification.request.content.data);
@@ -2492,6 +2626,17 @@ export const setupNotificationListener = (callback) => {
 
 export const setupForegroundNotificationListener = (callback) => {
     if (!isNotificationSupported()) return { remove: () => {} };
+
+    // FIX: Prevent duplicate listener registration
+    if (_foregroundListenerRegistered) {
+        console.warn(
+            "[NotifSvc] Foreground listener already registered, skipping",
+        );
+        return { remove: () => {} };
+    }
+
+    _foregroundListenerRegistered = true;
+
     return Notifications.addNotificationReceivedListener((notification) => {
         const data = notification.request.content.data;
         const type = String(data?.type ?? "")
@@ -2505,6 +2650,7 @@ export const setupForegroundNotificationListener = (callback) => {
             String(data?.foregroundFallbackVisual ?? "") === "1";
         const expectedMs = getExpectedFollowupFireMs(data);
         const nowMs = Date.now();
+        const followupKey = isFollowup ? getFollowupAudioDedupKey(data) : "";
         const deltaMsFromExpected = Number.isFinite(expectedMs)
             ? nowMs - Number(expectedMs)
             : null;
@@ -2517,15 +2663,26 @@ export const setupForegroundNotificationListener = (callback) => {
             deltaMsFromExpected,
         });
 
-        // If a real notification arrived, cancel the matching in-app fallback
-        // timer so we don't play the same stage twice.
-        if (isFollowup) {
-            clearForegroundFollowupAudioFallback(data);
-        }
+        if (isFollowup) clearForegroundFollowupAudioFallback(data);
 
         if (isForegroundFallbackVisual) {
+            if (
+                followupKey &&
+                wasRecentKey(
+                    _recentFollowupVisualKeys,
+                    followupKey,
+                    nowMs,
+                    FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
+                )
+            ) {
+                return;
+            }
             if (callback) callback(data);
             return;
+        }
+
+        if (isFollowup && followupKey) {
+            markRecentKey(_recentFollowupVisualKeys, followupKey, nowMs);
         }
 
         const isEarly =
@@ -2534,14 +2691,12 @@ export const setupForegroundNotificationListener = (callback) => {
             Number(expectedMs) - nowMs > EARLY_FOLLOWUP_GUARD_MS;
         if (isEarly) {
             console.warn(
-                `[NotifSvc] Foreground early follow-up suppressed (${type}) for ${data?.when}`,
+                `[NotifSvc] Foreground early follow-up suppressed (${type})`,
             );
             if (callback) callback(data);
             return;
         }
 
-        // If follow-up notification itself arrives late, avoid replaying audio
-        // (fallback timer already handles on-time voice for foreground).
         if (
             isFollowup &&
             Number.isFinite(deltaMsFromExpected) &&
@@ -2566,12 +2721,7 @@ export const setupForegroundNotificationListener = (callback) => {
         if (type === "followup-soon") {
             if (isStaleSoonForAudio(data, nowMs)) {
                 const adjusted = { ...data };
-                console.warn(
-                    `[NotifSvc] Stale soon adjusted for audio: original=${data?.minutesLeft}min, adjustedType=${adjusted?.type}, adjustedMin=${adjusted?.minutesLeft ?? "-"} for ${data?.when}`,
-                );
-                if (shouldPlayFollowupAudioNow(adjusted)) {
-                    playNow(adjusted);
-                }
+                if (shouldPlayFollowupAudioNow(adjusted)) playNow(adjusted);
             } else {
                 const groupKey = getFollowupSoonGroupKey(data);
                 if (!groupKey) {
@@ -2586,13 +2736,12 @@ export const setupForegroundNotificationListener = (callback) => {
                         const finalRec = _pendingSoonAudioByKey.get(groupKey);
                         _pendingSoonAudioByKey.delete(groupKey);
                         const finalData = finalRec?.data ?? nextData;
-                        if (shouldPlayFollowupAudioNow(finalData)) {
+                        if (shouldPlayFollowupAudioNow(finalData))
                             playNow(finalData);
-                        } else {
+                        else
                             console.log(
                                 `[NotifSvc] Foreground duplicate follow-up audio skipped (followup-soon)`,
                             );
-                        }
                     }, FOLLOWUP_SOON_COALESCE_WINDOW_MS);
                     _pendingSoonAudioByKey.set(groupKey, {
                         data: nextData,
@@ -2639,19 +2788,18 @@ export const speakForNotificationData = async (data = {}) => {
             if (minutesLeft > 0) {
                 const t = activityType.trim().toLowerCase();
                 if (t === "phone call") {
-                    if (lang === "ta") {
+                    if (lang === "ta")
                         await safeSpeak(
                             minutesLeft === 1
                                 ? "வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் 1 நிமிடத்தில் அழைக்கவும்."
                                 : `வாடிக்கையாளர் காத்திருக்கிறார். இன்னும் ${minutesLeft} நிமிடங்களில் அழைக்கவும்.`,
                         );
-                    } else {
+                    else
                         await safeSpeak(
                             name
                                 ? `Your customer is waiting. Call ${name} in ${minutesLeft} minutes.`
                                 : `Your customer is waiting. Call in ${minutesLeft} minutes.`,
                         );
-                    }
                 } else {
                     if (lang === "ta") {
                         const minsLabel =
@@ -2660,19 +2808,19 @@ export const speakForNotificationData = async (data = {}) => {
                                 : `${minutesLeft} நிமிடங்களில்`;
                         if (t === "whatsapp")
                             await safeSpeak(
-                                `வாட்ஸ்அப் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                                `வாட்ஸ்அப் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது.`,
                             );
                         else if (t === "email")
                             await safeSpeak(
-                                `மின்னஞ்சல் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                                `மின்னஞ்சல் பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது.`,
                             );
                         else if (t === "meeting")
                             await safeSpeak(
-                                `ஆன்லைன் சந்திப்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                                `ஆன்லைன் சந்திப்பு இன்னும் ${minsLabel} உள்ளது.`,
                             );
                         else
                             await safeSpeak(
-                                `பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது. தயார் நிலையில் இருங்கள்.`,
+                                `பின்தொடர்பு இன்னும் ${minsLabel} உள்ளது.`,
                             );
                     } else {
                         await safeSpeak(
@@ -2691,24 +2839,21 @@ export const speakForNotificationData = async (data = {}) => {
             if (lang === "ta") {
                 if (t === "phone call")
                     await safeSpeak(
-                        "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.",
+                        "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது அழைக்கவும்.",
                     );
                 else if (t === "whatsapp")
                     await safeSpeak(
-                        "நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது வாட்ஸ்அப் செய்தி அனுப்பவும்.",
+                        "நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள்.",
                     );
                 else if (t === "email")
                     await safeSpeak(
-                        "நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்.",
+                        "நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள்.",
                     );
                 else if (t === "meeting")
                     await safeSpeak(
-                        "நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக.",
+                        "நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள்.",
                     );
-                else
-                    await safeSpeak(
-                        "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்.",
-                    );
+                else await safeSpeak("நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள்.");
             } else {
                 await safeSpeak(
                     `${name ? `${name}, ` : ""}${activityType} missed. Please follow up now.`,
@@ -2725,21 +2870,12 @@ export const speakForNotificationData = async (data = {}) => {
                         "வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.",
                     );
                 else if (t === "whatsapp")
-                    await safeSpeak(
-                        "இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம். தயவு செய்து வாட்ஸ்அப் செய்தி அனுப்பவும்.",
-                    );
+                    await safeSpeak("இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம்.");
                 else if (t === "email")
-                    await safeSpeak(
-                        "இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம். தயவு செய்து மின்னஞ்சல் அனுப்பவும்.",
-                    );
+                    await safeSpeak("இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம்.");
                 else if (t === "meeting")
-                    await safeSpeak(
-                        "இப்போது ஆன்லைன் சந்திப்பு நேரம். தயவு செய்து இணைக.",
-                    );
-                else
-                    await safeSpeak(
-                        "இப்போது பின்தொடர்பு நேரம். தயவு செய்து தொடரவும்.",
-                    );
+                    await safeSpeak("இப்போது ஆன்லைன் சந்திப்பு நேரம்.");
+                else await safeSpeak("இப்போது பின்தொடர்பு நேரம்.");
             } else {
                 await safeSpeak(
                     `${name ? `${name}, ` : ""}${activityType} due now.`,
@@ -2815,9 +2951,8 @@ export const speakForNotificationData = async (data = {}) => {
             );
             return;
         }
-        if (type === "enquiry-error") {
+        if (type === "enquiry-error")
             await safeSpeak("Enquiry creation failed. Please try again.");
-        }
     }
 };
 
@@ -2826,7 +2961,6 @@ export const notifyMissedFollowUpsSummary = async (followUps = []) => {
     try {
         if (!isNotificationSupported())
             return { notified: false, skipped: true };
-
         const list = Array.isArray(followUps) ? followUps : [];
         const count = list.filter(isActiveFollowUp).length;
         if (count <= 0)
@@ -2843,15 +2977,13 @@ export const notifyMissedFollowUpsSummary = async (followUps = []) => {
             /* ignore */
         }
 
-        if (prev?.dateKey === todayKey && Number(prev?.count ?? 0) === count) {
+        if (prev?.dateKey === todayKey && Number(prev?.count ?? 0) === count)
             return { notified: false, skipped: true, reason: "no-change" };
-        }
 
         await AsyncStorage.setItem(
             MISSED_FOLLOWUP_ALERT_STATE_KEY,
             JSON.stringify({ dateKey: todayKey, count }),
         );
-
         const body =
             count === 1
                 ? "You have 1 missed follow-up. Tap to open Follow-ups."
@@ -2885,11 +3017,9 @@ export const notifyMissedFollowUpsSummary = async (followUps = []) => {
 export const checkAndNotifyTodayFollowUps = async (followUps) => {
     try {
         if (!Array.isArray(followUps) || followUps.length === 0) return;
-
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const dateString = today.toDateString();
-
         const lastNotificationDate = await AsyncStorage.getItem(
             "lastNotificationDate",
         );
@@ -2900,7 +3030,6 @@ export const checkAndNotifyTodayFollowUps = async (followUps) => {
             d.setHours(0, 0, 0, 0);
             return d.getTime() === today.getTime();
         });
-
         const overdueFollowUps = followUps.filter((item) => {
             const d = new Date(item.date);
             d.setHours(0, 0, 0, 0);
@@ -2981,7 +3110,6 @@ const resolveEnquiryKeyFromItem = (item) => {
         item?.enquiry ??
         "";
     const rawNo = item?.enqNo ?? item?.enquiry?.enqNo ?? item?.enquiryNo ?? "";
-
     const normalizeId = (v) => {
         if (!v) return "";
         if (typeof v === "string") return v.trim();
@@ -2995,7 +3123,6 @@ const resolveEnquiryKeyFromItem = (item) => {
         const s = String(v).trim();
         return s === "[object Object]" ? "" : s;
     };
-
     return { enqId: normalizeId(rawId), enqNo: String(rawNo ?? "").trim() };
 };
 
@@ -3076,8 +3203,6 @@ export const cancelHourlyFollowUpReminders = async () => {
         const schedule = raw ? JSON.parse(raw) : null;
         const ids = Array.isArray(schedule?.ids) ? schedule.ids : [];
         if (ids.length === 0) return;
-
-        // FIX #2: Cancel only saved IDs — never call cancelAllScheduledNotificationsAsync()
         const results = await Promise.allSettled(
             ids.map((id) =>
                 Notifications.cancelScheduledNotificationAsync(id).catch(
@@ -3107,8 +3232,6 @@ export const cancelTimeFollowUpReminders = async () => {
         const schedule = raw ? JSON.parse(raw) : null;
         const ids = Array.isArray(schedule?.ids) ? schedule.ids : [];
         if (ids.length === 0) return;
-
-        // FIX #2: Cancel only saved IDs — not all scheduled notifications
         const results = await Promise.allSettled(
             ids.map((id) =>
                 Notifications.cancelScheduledNotificationAsync(id).catch(
@@ -3162,7 +3285,6 @@ const formatHHmm = (date) => {
 
 const parseLocalDateTime = (dateStr, timeStr) => {
     if (!dateStr) return null;
-
     let d;
     if (typeof dateStr === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
         const [yy, mm, dd] = dateStr.split("-").map(Number);
@@ -3181,9 +3303,8 @@ const parseLocalDateTime = (dateStr, timeStr) => {
             let hh = Number(m[1]);
             const mm2 = Number(m[2] ?? "0");
             const meridian = String(m[4] ?? "").toUpperCase();
-
             if (!Number.isFinite(hh) || !Number.isFinite(mm2) || mm2 > 59) {
-                // invalid — leave as default 09:00
+                /* invalid */
             } else if (meridian) {
                 if (hh >= 1 && hh <= 12) {
                     if (meridian === "AM" && hh === 12) hh = 0;
@@ -3205,7 +3326,6 @@ const parseLocalDateTime = (dateStr, timeStr) => {
             }
         }
     }
-
     return d;
 };
 
@@ -3280,7 +3400,13 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
 ) => {
     try {
         if (Platform.OS === "web") return { scheduled: 0, skipped: true };
-
+        if (shouldUseServerFollowupReminders()) {
+            await cancelHourlyFollowUpReminders();
+            console.log(
+                "[NotifSvc] Server reminders enabled — skipping hourly local scheduling",
+            );
+            return { scheduled: 0, skipped: true, reason: "server_reminders" };
+        }
         const todayKey = getTodayKey();
         const ackDate = await AsyncStorage.getItem(
             HOURLY_FOLLOWUP_ACK_DATE_KEY,
@@ -3322,7 +3448,9 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
                     body,
                     subtitle: "Tap to open Follow-ups",
                     data,
-                    sound: getChannelMeta(channelId)?.sound ?? "default",
+                    sound: resolveContentSound(
+                        getChannelMeta(channelId)?.sound ?? "default",
+                    ),
                     priority: "max",
                     vibrate: [0, 250, 250, 250],
                     ios: { sound: true, interruptionLevel: "timeSensitive" },
@@ -3354,27 +3482,15 @@ export const scheduleHourlyFollowUpRemindersForToday = async (
 };
 
 // ─── Time-based Reminders ─────────────────────────────────────────────────────
-// ARCHITECTURE FIX: Reduced from ~20 notifications per follow-up to exactly 5:
-//   5 min, 3 min, 1 min (soon) → due → missed (1 min, 30 min, 1 hr after)
-// This keeps total notifications well under Android's ~50-item reliable limit.
 export const scheduleTimeFollowUpRemindersForToday = async (
     followUps,
     {
         channelId = "followups",
-        preRemindMinutes = DEFAULT_FOLLOWUP_PRE_REMIND_MINUTES,
-        preRemindEveryMinutes = DEFAULT_FOLLOWUP_PRE_REMIND_EVERY_MINUTES,
-        missedFastMinutes = DEFAULT_FOLLOWUP_MISSED_FAST_MINUTES,
-        missedFastEveryMinutes = DEFAULT_FOLLOWUP_MISSED_FAST_EVERY_MINUTES,
-        missedHourlyEveryMinutes = DEFAULT_FOLLOWUP_MISSED_HOURLY_EVERY_MINUTES,
-        missedHourlyMaxHours = DEFAULT_FOLLOWUP_MISSED_HOURLY_MAX_HOURS,
         endHour = 21,
         windowDays = DEFAULT_FOLLOWUP_SCHEDULE_WINDOW_DAYS,
         missedLookbackDays = DEFAULT_FOLLOWUP_MISSED_LOOKBACK_DAYS,
-        dueRepeatForMinutes = DEFAULT_FOLLOWUP_DUE_REPEAT_FOR_MINUTES,
     } = {},
 ) => {
-    // FIX #8: Prevent concurrent/duplicate scheduling runs.
-    // If a sync is already in progress, bail out immediately.
     if (!acquireSchedulingLock()) {
         console.warn(
             "[NotifSvc] Scheduling already in progress — skipping duplicate call",
@@ -3384,6 +3500,17 @@ export const scheduleTimeFollowUpRemindersForToday = async (
 
     try {
         if (Platform.OS === "web") return { scheduled: 0, skipped: true };
+
+        // IMPORTANT: Prevent double notifications.
+        // In native (FCM) builds we rely on server-side reminders; local time scheduling would duplicate
+        // the same 5/4/3/2/1/due/missed alerts.
+        if (shouldUseServerFollowupReminders()) {
+            await cancelTimeFollowUpReminders();
+            console.log(
+                "[NotifSvc] Server reminders enabled — skipping time-based local scheduling",
+            );
+            return { scheduled: 0, skipped: true, reason: "server_reminders" };
+        }
 
         const muteMap = await loadEnquiryMuteMap();
         const todayKey = getTodayKey();
@@ -3415,9 +3542,8 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     !when &&
                     item?.dueAt &&
                     !Number.isNaN(new Date(item.dueAt).getTime())
-                ) {
+                )
                     when = new Date(item.dueAt);
-                }
                 const ms = when ? when.getTime() : NaN;
                 const enqId =
                     item?.enqId?._id || item?.enqId || item?.enquiryId;
@@ -3431,14 +3557,12 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     ms >= startMs &&
                     ms <= endMs,
             )
-            .filter(({ enqId, enqNo, ms }) => {
-                return !isEnquiryMuted(muteMap, { enqId, enqNo, whenMs: ms });
-            })
+            .filter(
+                ({ enqId, enqNo, ms }) =>
+                    !isEnquiryMuted(muteMap, { enqId, enqNo, whenMs: ms }),
+            )
             .sort((a, b) => a.ms - b.ms);
 
-        // Build a stable signature so periodic sync (every 60s) doesn't
-        // cancel/recreate the exact same schedule and accidentally drop
-        // near-term 5/4/3/2/1 minute reminders.
         const scheduleSignature = JSON.stringify({
             dateKey: todayKey,
             schemaVersion: TIME_FOLLOWUP_SCHEDULE_SCHEMA_VERSION,
@@ -3475,8 +3599,6 @@ export const scheduleTimeFollowUpRemindersForToday = async (
         const prevSignature = String(prevSchedule?.signature ?? "");
         const prevSchemaVersion = Number(prevSchedule?.schemaVersion ?? 0);
 
-        // FIX #17: Enhanced deduplication - always check if schedule changed
-        // This prevents duplicate notifications when follow-ups are modified
         const scheduleChanged = !(
             prevIds.length > 0 &&
             prevSchedule?.dateKey === todayKey &&
@@ -3487,7 +3609,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
 
         if (!scheduleChanged) {
             console.log(
-                `[NotifSvc] Schedule unchanged (${prevIds.length} existing) - keeping current time reminders`,
+                `[NotifSvc] Schedule unchanged (${prevIds.length} existing) - keeping current`,
             );
             return {
                 scheduled: prevIds.length,
@@ -3496,11 +3618,9 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             };
         }
 
-        // FIX #2: Cancel only previously saved IDs (not ALL notifications)
-        // FIX #18: Aggressive cleanup to prevent orphaned notifications
         await cancelTimeFollowUpReminders();
 
-        // Additional cleanup: verify all pending notifications are accounted for
+        // Cleanup orphaned notifications
         try {
             const pending = await getPendingNotifications();
             const orphanedIds = [];
@@ -3518,7 +3638,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             }
             if (orphanedIds.length > 0) {
                 console.warn(
-                    `[NotifSvc] Found ${orphanedIds.length} orphaned notifications, cleaning up`,
+                    `[NotifSvc] Cleaning up ${orphanedIds.length} orphaned notifications`,
                 );
                 await Promise.allSettled(
                     orphanedIds.map((id) =>
@@ -3539,59 +3659,17 @@ export const scheduleTimeFollowUpRemindersForToday = async (
         }
 
         console.log(
-            `[NotifSvc] Scheduling for ${timeBasedFollowUps.length} time-based follow-ups`,
+            `[NotifSvc] Scheduling for ${timeBasedFollowUps.length} follow-ups`,
         );
 
         const lang = await getNotificationVoiceLanguage();
         const ids = [];
-
-        // FIX #23: Track which follow-ups we've already scheduled
         const _scheduledFollowUpKeys = new Set();
-
-        // FIX #1: Use 30-second past-time tolerance buffer.
-        // A 30-second window means the scheduler can run up to 30s late
-        // and still successfully schedule the notification.
-        // FIX #13: Use a 30-second buffer for pre-reminder reliability.
-        // This avoids skipping valid 4-minute alerts when the app starts a bit late.
         const safeNow = new Date(now.getTime() - 30000);
-        const minScheduleBuffer = 30 * 1000; // 30 seconds minimum
 
         console.log(
             `[NotifSvc] Scheduling at: ${now.toISOString()} (safeNow: ${safeNow.toISOString()})`,
         );
-
-        // DEBUG-ONLY: Optional immediate test notification.
-        // Disabled by default so test pings don't mask real reminder behavior.
-        if (
-            __DEV__ &&
-            process.env.EXPO_PUBLIC_NOTIF_DEBUG_TEST === "1" &&
-            timeBasedFollowUps.length > 0
-        ) {
-            const testId = await scheduleImmediateNotification({
-                title: "🧪 Notification Test",
-                body: "Testing if notifications work at all",
-                data: { type: "test-notification" },
-                channelId: "default",
-                sound: "default",
-            });
-            if (testId) {
-                console.log(
-                    `[NotifSvc] ✓ Test notification scheduled: ${testId}`,
-                );
-            }
-        }
-
-        // DEBUG: Log follow-up details
-        for (const entry of timeBasedFollowUps.slice(0, 3)) {
-            // Log first 3 only
-            const item = entry.item;
-            const when = entry.when;
-            const timeUntilDue = when.getTime() - now.getTime();
-            const minutesUntilDue = Math.round(timeUntilDue / (60 * 1000));
-            console.log(
-                `[NotifSvc] Follow-up: ${item?.name || "Unknown"} at ${when.toISOString()} (${minutesUntilDue}min from now)`,
-            );
-        }
 
         for (const entry of timeBasedFollowUps) {
             if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) break;
@@ -3599,29 +3677,14 @@ export const scheduleTimeFollowUpRemindersForToday = async (
             const item = entry.item;
             const when = entry.when;
 
-            // FIX #23: Prevent duplicate notifications per follow-up
-            // Track which follow-ups we've already scheduled to avoid processing the same one twice
             const followUpKey = `${String(item?._id || item?.enqId || "unknown")}-${when.getTime()}`;
             if (_scheduledFollowUpKeys?.has(followUpKey)) {
-                console.log(
-                    `[NotifSvc] Skipping duplicate follow-up: ${followUpKey}`,
-                );
+                console.log(`[NotifSvc] Skipping duplicate: ${followUpKey}`);
                 continue;
             }
             _scheduledFollowUpKeys?.add(followUpKey);
 
-            // ── ARCHITECTURE FIX: 5-7 notifications per follow-up ──────────
-            // Before: 20+ notifications (hourly pre-reminders + per-minute + due
-            //         repeats + fast missed + hourly missed) = Android drops them.
-            // After:  5min, 4min, 3min, 2min, 1min → due → missed (at +1min, +5min, +10min, +15min, +30min, +1hr, etc)
-            //         Reliable, predictable, well under Android's limit (max 50/app).
-            // FIX #26: Changed first missed from +5min to +1min for faster user feedback
-
-            const soonChannelKey = await selectChannelForNotification(
-                item?.activityType,
-                "soon",
-                lang,
-            );
+            // ✅ FIX 4: Removed unused soonChannelKey
             const dueChannelKey = await selectChannelForNotification(
                 item?.activityType,
                 "due",
@@ -3633,27 +3696,26 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                 lang,
             );
 
-            // 1. Pre-reminders: 5, 4, 3, 2, 1 minutes before due time
-            // FIX #12: Include 2-min and 4-min reminders for better coverage
-            // FIX #16: Improved timing to avoid duplicates and missing notifications
+            const timeUntilDue = when.getTime() - now.getTime();
+            console.log(
+                `[NotifSvc] Follow-up: ${item?.name || "Unknown"} at ${when.toISOString()} (${Math.round(timeUntilDue / 60000)}min from now)`,
+            );
+
+            // 1. Pre-reminders: 5, 4, 3, 2, 1 min before due
             for (const minutesLeft of [5, 4, 3, 2, 1]) {
                 if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC)
                     break;
 
                 const t = new Date(when.getTime() - minutesLeft * 60 * 1000);
-                // FIX #13: Skip notifications scheduled too close to now
-                // Expo needs a small buffer for reliable firing, but 30 seconds is enough
                 if (t.getTime() <= safeNow.getTime()) {
                     console.warn(
                         `[NotifSvc] Skipping ${minutesLeft}min (past): ${t.toISOString()}`,
                     );
                     continue;
                 }
-                // FIX #16: Reduced from 10 seconds to 3 seconds for better coverage
-                // A 3-second buffer is enough for reliability without losing near-term alerts
                 if (t.getTime() - now.getTime() < 3000) {
                     console.warn(
-                        `[NotifSvc] Skipping ${minutesLeft}min (too close): ${t.toISOString()} - within 3s`,
+                        `[NotifSvc] Skipping ${minutesLeft}min (too close): ${t.toISOString()}`,
                     );
                     continue;
                 }
@@ -3675,7 +3737,7 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                 });
                 if (id) {
                     console.log(
-                        `[NotifSvc] ✓ ${minutesLeft}min alert scheduled: ${t.toISOString()} (ID: ${id})`,
+                        `[NotifSvc] ✓ ${minutesLeft}min: ${t.toISOString()} (ID: ${id})`,
                     );
                     ids.push(id);
                     scheduleForegroundFollowupAudioFallback(
@@ -3684,82 +3746,48 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     );
                 } else {
                     console.warn(
-                        `[NotifSvc] ✗ Failed to schedule ${minutesLeft}min alert: ${t.toISOString()}`,
+                        `[NotifSvc] ✗ Failed ${minutesLeft}min: ${t.toISOString()}`,
                     );
                 }
             }
 
             // 2. Due at exact time
-            if (ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC) {
-                if (when.getTime() > safeNow.getTime()) {
-                    const due = buildDueAtContent(item, when, lang);
-                    const dueId = await scheduleDateNotification({
-                        when,
-                        title: due.title,
-                        body: due.body,
-                        data: due.data,
-                        channelId: dueChannelKey,
-                        priority: "max",
-                        color: "#0EA5E9",
-                    });
-                    if (dueId) {
-                        console.log(
-                            `[NotifSvc] ✓ Due alert scheduled: ${when.toISOString()} (ID: ${dueId})`,
-                        );
-                        ids.push(dueId);
-                        scheduleForegroundFollowupAudioFallback(
-                            due.data,
-                            when.getTime(),
-                        );
-                    } else {
-                        console.warn(
-                            `[NotifSvc] ✗ Failed to schedule due alert: ${when.toISOString()}`,
-                        );
-                    }
+            if (
+                ids.length < MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC &&
+                when.getTime() > safeNow.getTime()
+            ) {
+                const due = buildDueAtContent(item, when, lang);
+                const dueId = await scheduleDateNotification({
+                    when,
+                    title: due.title,
+                    body: due.body,
+                    data: due.data,
+                    channelId: dueChannelKey,
+                    priority: "max",
+                    color: "#0EA5E9",
+                });
+                if (dueId) {
+                    console.log(
+                        `[NotifSvc] ✓ Due: ${when.toISOString()} (ID: ${dueId})`,
+                    );
+                    ids.push(dueId);
+                    scheduleForegroundFollowupAudioFallback(
+                        due.data,
+                        when.getTime(),
+                    );
+                } else {
+                    console.warn(
+                        `[NotifSvc] ✗ Failed due: ${when.toISOString()}`,
+                    );
                 }
             }
 
-            // 3. Missed alerts: +1 min, +5 min, +10 min, +15 min, then every configured interval.
-            // FIX #26: Changed first missed alert from +5min back to +1min for faster user feedback
-            // Sequence: due → +1min missed → +5min missed → +10min → +15min → +30min...
+            // 3. ✅ FIX 5: Missed alerts — ONLY +1, +5, +10 min
+            // Before: 20+ alerts (1,5,10,15...60 + hourly) → hit Android 30-notif limit
+            // After: exactly 3 missed alerts per follow-up → 9 total (5+1+3), supports ~3 follow-ups safely
             const missed = buildMissedContent(item, when, lang);
-            const missedDelayMinutes = (() => {
-                // FIX #26: Start with 1 minute for quick first missed alert
-                const out = [1];
-                const fastEvery = Math.max(
-                    1,
-                    Number(missedFastEveryMinutes ?? 5),
-                );
-                const fastFor = Math.max(0, Number(missedFastMinutes ?? 60));
-                for (let m = fastEvery; m <= fastFor; m += fastEvery) {
-                    // Skip if we already added this value (avoid duplicates)
-                    if (!out.includes(m)) {
-                        out.push(Math.round(m));
-                    }
-                }
-                const hourlyEvery = Math.max(
-                    1,
-                    Number(missedHourlyEveryMinutes ?? 30),
-                );
-                const hourlyMax = Math.max(
-                    0,
-                    Number(missedHourlyMaxHours ?? 12),
-                );
-                const hourlyMaxMinutes = hourlyMax * 60;
-                const hourlyStart =
-                    Math.ceil(Math.max(0, fastFor + 1) / hourlyEvery) *
-                    hourlyEvery;
-                for (
-                    let m = hourlyStart;
-                    m <= hourlyMaxMinutes;
-                    m += hourlyEvery
-                ) {
-                    out.push(Math.round(m));
-                }
-                return Array.from(new Set(out))
-                    .filter((m) => Number.isFinite(m) && m > 0)
-                    .sort((a, b) => a - b);
-            })();
+            const missedDelayMinutes = [1, 5, 10]; // ✅ FIXED
+
             let missedScheduledCount = 0;
             for (const delayMinutes of missedDelayMinutes) {
                 if (ids.length >= MAX_TIME_FOLLOWUP_NOTIFICATIONS_PER_SYNC)
@@ -3768,19 +3796,17 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                 const t = new Date(when.getTime() + delayMinutes * 60 * 1000);
                 if (t.getTime() <= safeNow.getTime()) {
                     console.log(
-                        `[NotifSvc] Skipping missed +${delayMinutes}min (past): ${t.toISOString()}`,
+                        `[NotifSvc] Skipping missed +${delayMinutes}min (past)`,
                     );
                     continue;
                 }
 
-                // FIX #21: Respect end-of-day boundary only for delayed missed alerts
-                // The +1 min alert is the first missed alert and should always fire
-                // Other missed alerts (+5min, +10min, +15min, +30min, 1hr after) respect the endHour cutoff
+                // +1 always fires; +5 and +10 respect end-of-day
                 const dayEnd = new Date(when);
                 dayEnd.setHours(Number(endHour ?? 21), 0, 0, 0);
                 if (delayMinutes > 1 && t.getTime() > dayEnd.getTime()) {
                     console.log(
-                        `[NotifSvc] Skipping missed +${delayMinutes}min (past end-of-day ${formatHHmm(dayEnd)}): ${t.toISOString()}`,
+                        `[NotifSvc] Skipping missed +${delayMinutes}min (past end-of-day ${formatHHmm(dayEnd)})`,
                     );
                     break;
                 }
@@ -3789,42 +3815,31 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                     when: t,
                     title: missed.title,
                     body: missed.body,
-                    data: {
-                        ...missed.data,
-                        missedDelayMinutes: delayMinutes,
-                    },
+                    data: { ...missed.data, missedDelayMinutes: delayMinutes },
                     channelId: missedChannelKey,
                     priority: "max",
                     color: "#FF3B5C",
                 });
                 if (id) {
                     console.log(
-                        `[NotifSvc] ✓ Missed +${delayMinutes}min scheduled: ${t.toISOString()} (ID: ${id})`,
+                        `[NotifSvc] ✓ Missed +${delayMinutes}min: ${t.toISOString()} (ID: ${id})`,
                     );
                     ids.push(id);
                     missedScheduledCount += 1;
                     scheduleForegroundFollowupAudioFallback(
-                        {
-                            ...missed.data,
-                            missedDelayMinutes: delayMinutes,
-                        },
+                        { ...missed.data, missedDelayMinutes: delayMinutes },
                         t.getTime(),
                     );
                 } else {
                     console.warn(
-                        `[NotifSvc] ✗ Failed to schedule missed +${delayMinutes}min: ${t.toISOString()}`,
+                        `[NotifSvc] ✗ Failed missed +${delayMinutes}min: ${t.toISOString()}`,
                     );
                 }
             }
-            if (missedScheduledCount === 0) {
-                console.warn(
-                    `[NotifSvc] No missed reminders scheduled for follow-up ${item?._id || item?.enqNo || "unknown"} due ${when.toISOString()} (endHour=${endHour})`,
-                );
-            } else {
-                console.log(
-                    `[NotifSvc] ✓ Scheduled ${missedScheduledCount} missed reminders for follow-up ${item?._id || item?.enqNo}`,
-                );
-            }
+
+            console.log(
+                `[NotifSvc] Follow-up ${item?._id || item?.enqNo}: 5min+4min+3min+2min+1min → due → +1min+${missedScheduledCount > 1 ? "+5min" : ""}${missedScheduledCount > 2 ? "+10min" : ""} missed`,
+            );
         }
 
         await AsyncStorage.setItem(
@@ -3834,30 +3849,32 @@ export const scheduleTimeFollowUpRemindersForToday = async (
                 ids,
                 signature: scheduleSignature,
                 schemaVersion: TIME_FOLLOWUP_SCHEDULE_SCHEMA_VERSION,
-                // FIX #19: Track follow-up IDs with notifications for better cleanup
-                followUpsByNotifId: ids.map((notifId) => ({
-                    notifId,
-                    timestamp: new Date().toISOString(),
-                })),
                 totalScheduled: ids.length,
                 scheduledAt: new Date().toISOString(),
             }),
         );
         console.log(
-            `[NotifSvc] ✓ Scheduled ${ids.length} time-based notifications (5,4,3,2,1 min + due + missed)`,
+            `[NotifSvc] ✓ Scheduled ${ids.length} notifications (5,4,3,2,1min + due + +1,+5,+10min missed)`,
         );
         return { scheduled: ids.length, skipped: false };
     } catch (error) {
         console.error("[NotifSvc] ✗ Failed to schedule time reminders:", error);
         return { scheduled: 0, skipped: false, error: true };
     } finally {
-        // FIX #8: Always release the lock, even if scheduling threw an error
         releaseSchedulingLock();
     }
 };
 
 // ─── Global Notification Response Listener ───────────────────────────────────
 export const setupGlobalNotificationListener = (navigationRef) => {
+    // FIX: Prevent duplicate listener registration
+    if (_globalListenerRegistered) {
+        console.warn("[NotifSvc] Global listener already registered, skipping");
+        return { remove: () => {} };
+    }
+
+    _globalListenerRegistered = true;
+
     return Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
         const actionId = response.actionIdentifier;
@@ -3870,13 +3887,11 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                 const ms = new Date(String(rawWhen)).getTime();
                 return Number.isFinite(ms) && ms > 0 ? ms : undefined;
             })();
-            // Mute this enquiry so the scheduler doesn't recreate notifications on next foreground sync.
             Promise.resolve(
                 muteEnquiryNotifications({
                     enqId: data?.enqId,
                     enqNo: data?.enqNo,
                     whenMs,
-                    // Mute until tomorrow (local) by default: 24h is fine and simple.
                 }),
             ).catch(() => {});
             Promise.resolve(
@@ -3891,11 +3906,8 @@ export const setupGlobalNotificationListener = (navigationRef) => {
         const isDefaultAction =
             actionId === Notifications.DEFAULT_ACTION_IDENTIFIER ||
             actionId === "expo-notifications-default";
-
-        if (isDefaultAction) {
+        if (isDefaultAction)
             Promise.resolve(speakForNotificationData(data)).catch(() => {});
-        }
-
         if (!navigationRef.isReady()) return;
 
         if (
@@ -3906,10 +3918,8 @@ export const setupGlobalNotificationListener = (navigationRef) => {
             data.type === "followup-due" ||
             data.type === "followup-missed"
         ) {
-            if (isDefaultAction) {
+            if (isDefaultAction)
                 acknowledgeHourlyFollowUpReminders().catch(() => {});
-            }
-
             const enquiry = {
                 enqId: data?.enqId ?? null,
                 _id: data?.enqId ?? null,
@@ -3918,7 +3928,6 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                 mobile: data?.mobile ?? "",
                 product: data?.product ?? "",
             };
-
             navigationRef.navigate("Main", {
                 screen: "FollowUp",
                 params:
@@ -4003,9 +4012,8 @@ export const cancelFollowUpNotifications = async () => {
                 notif.content.data.followUpCount ||
                 notif.content.data.overdueCount,
         );
-        for (const notif of followUpNotifications) {
+        for (const notif of followUpNotifications)
             await cancelNotification(notif.identifier);
-        }
         console.log(
             `Cancelled ${followUpNotifications.length} follow-up notifications`,
         );
@@ -4016,6 +4024,19 @@ export const cancelFollowUpNotifications = async () => {
 
 export const resetNotificationLocalState = async () => {
     try {
+        // Reset listener registration flags (FIX: Prevent duplicate listeners)
+        _foregroundListenerRegistered = false;
+        _responseListenerRegistered = false;
+        _globalListenerRegistered = false;
+
+        // Clear deduplication maps
+        _recentFollowupAudioKeys.clear();
+        _recentFollowupVisualKeys.clear();
+        _recentFollowupFallbackVisualKeys.clear();
+        _foregroundFollowupAudioTimers.clear();
+        _pendingSoonAudioByKey.clear();
+        _followupCorrectionKeys.clear();
+
         await Promise.allSettled([
             AsyncStorage.removeItem(HOURLY_FOLLOWUP_ACK_DATE_KEY),
             AsyncStorage.removeItem(HOURLY_FOLLOWUP_SCHEDULE_KEY),
@@ -4023,8 +4044,10 @@ export const resetNotificationLocalState = async () => {
             AsyncStorage.removeItem(MISSED_FOLLOWUP_ALERT_STATE_KEY),
             AsyncStorage.removeItem("lastNotificationDate"),
         ]);
-    } catch {
-        /* ignore */
+
+        console.log("[NotifSvc] ✓ Local notification state reset");
+    } catch (err) {
+        console.error("[NotifSvc] Error resetting state:", err?.message);
     }
 };
 
@@ -4104,7 +4127,6 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
             pruneStoredScheduleIds(TIME_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
             pruneStoredScheduleIds(HOURLY_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
         ]);
-
         return { cancelled: cancelledIds.length, skipped: false };
     } catch (error) {
         console.error("Failed to cancel enquiry notifications:", error);
@@ -4155,7 +4177,6 @@ export const cancelNotificationsForFollowUpIds = async (followUpIds = []) => {
             pruneStoredScheduleIds(TIME_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
             pruneStoredScheduleIds(HOURLY_FOLLOWUP_SCHEDULE_KEY, cancelledIds),
         ]);
-
         return { cancelled: cancelledIds.length, skipped: false };
     } catch (error) {
         console.error("Failed to cancel follow-up-id notifications:", error);
@@ -4230,12 +4251,11 @@ export const scheduleNextFollowUpPromptForEnquiry = async ({
             Date.now() + Math.max(1, Number(delayMinutes ?? 2)) * 60 * 1000,
         );
         const safeName = String(name ?? "Customer").trim();
-        const body = `Please add next follow-up date and time for ${safeName}.`;
 
         const id = await scheduleDateNotification({
             when,
             title: "Add next follow-up",
-            body,
+            body: `Please add next follow-up date and time for ${safeName}.`,
             data: {
                 type: "next-followup-prompt",
                 enqId: enqId ? String(enqId) : "",
@@ -4309,38 +4329,11 @@ export const showReportCsvReadyNotification = async ({
     }
 };
 
-// ─── Internal Helpers ─────────────────────────────────────────────────────────
-const completeFollowUpFromNotification = async (data = {}) => {
-    try {
-        const followUpId = String(data?.followUpId ?? "").trim();
-        if (!followUpId)
-            return {
-                completed: false,
-                skipped: true,
-                reason: "no-followup-id",
-            };
-        await followupService.updateFollowUp(followUpId, {
-            status: "Completed",
-        });
-        return { completed: true };
-    } catch (error) {
-        console.warn(
-            "Failed to complete follow-up from notification:",
-            error?.message ?? error,
-        );
-        return { completed: false, error: true };
-    }
-};
-
-// ─── DIAGNOSTIC: Check audio setup for debugging ────────────────────────────
+// ─── DIAGNOSTIC ───────────────────────────────────────────────────────────────
 export const diagnoseAudioSetup = async () => {
     console.log("=== AUDIO SETUP DIAGNOSIS ===");
-
     try {
-        // Check platform
         console.log(`Platform: ${Platform.OS}`);
-
-        // Check audio modules
         let audioModulesOk = 0;
         let audioModulesFailed = 0;
 
@@ -4361,29 +4354,144 @@ export const diagnoseAudioSetup = async () => {
         console.log(
             `Audio Modules: ${audioModulesOk}✓ | ${audioModulesFailed}✗`,
         );
-
-        // Check notification permissions
         const perms = await Notifications.getPermissionsAsync();
         console.log(`Notification Permission: ${perms.status}`);
-        console.log(`Can request again: ${perms.canAskAgain}`);
-
-        // Check voice language
         const voiceLang = await getNotificationVoiceLanguage();
-        console.log(`Voice Language Set To: ${voiceLang}`);
-
-        // Check audio mode
+        console.log(`Voice Language: ${voiceLang}`);
         console.log(`Audio Mode Ready: ${audioModeReady}`);
-
-        // Try to set audio mode
-        console.log("Attempting to set audio mode...");
         await ensureAudioMode();
-        console.log("Audio mode set successfully");
-
         console.log("=== DIAGNOSIS COMPLETE ===");
         return { success: true, audioModulesOk, audioModulesFailed };
     } catch (error) {
         console.error("Diagnosis error:", error?.message || error);
         return { success: false, error: error?.message || error };
+    }
+};
+
+// ─── Audio Asset Validation ────────────────────────────────────────────────────
+// Validates that all required audio files are loaded
+export const validateAudioAssets = () => {
+    if (Platform.OS === "web") return { success: true, platform: "web" };
+
+    const results = {
+        success: true,
+        totalAssets: 0,
+        loadedAssets: 0,
+        missingAssets: [],
+        timestamp: new Date().toISOString(),
+    };
+
+    for (const [lang, activities] of Object.entries(AUDIO_MODULES)) {
+        for (const [activity, versions] of Object.entries(activities)) {
+            for (const [version, file] of Object.entries(versions)) {
+                results.totalAssets += 1;
+                if (file) {
+                    results.loadedAssets += 1;
+                } else {
+                    results.success = false;
+                    results.missingAssets.push(
+                        `${lang}/${activity}/${version}`,
+                    );
+                }
+            }
+        }
+    }
+
+    if (results.success) {
+        console.log(
+            `[NotifSvc] ✅ Audio validation: ${results.loadedAssets}/${results.totalAssets} assets`,
+        );
+    } else {
+        console.error(
+            `[NotifSvc] ❌ Missing audio assets:`,
+            results.missingAssets,
+        );
+    }
+
+    return results;
+};
+
+// ─── Test Notification Channels & Sound Setup ─────────────────────────────────
+export const testNotificationChannels = async () => {
+    if (Platform.OS === "web") {
+        console.log("[NotifSvc] Test skipped on web");
+        return { platform: "web" };
+    }
+
+    console.log("[NotifSvc] === Testing Notification Channels ===");
+
+    try {
+        // Test 1: Check channels exist
+        const channels = await Notifications.getNotificationChannelsAsync();
+        if (channels && channels.length > 0) {
+            console.log(
+                `[NotifSvc] ✅ Found ${channels.length} notification channels`,
+            );
+            const followupChannels = channels.filter((ch) =>
+                ch.id.includes("followup"),
+            );
+            const minuteChannels = channels.filter((ch) =>
+                /\d+min/.test(ch.id),
+            );
+
+            console.log(`    - Follow-up channels: ${followupChannels.length}`);
+            console.log(
+                `    - Minute channels (1-5min): ${minuteChannels.length}`,
+            );
+            console.log(
+                `    - Other channels: ${channels.length - followupChannels.length - minuteChannels.length}`,
+            );
+
+            // Check if channels have sound
+            const noSound = channels.filter(
+                (ch) => !ch.sound || ch.sound === "",
+            );
+            if (noSound.length > 0) {
+                console.warn(
+                    `[NotifSvc] ⚠ ${noSound.length} channels have no sound configured:`,
+                );
+                noSound.forEach((ch) => console.warn(`    - ${ch.id}`));
+            }
+
+            // Sample channel details
+            const dueChannel = channels.find(
+                (ch) => ch.id === "followups_due_en_v2",
+            );
+            if (dueChannel) {
+                console.log(
+                    `[NotifSvc] Sample channel "followups_due_en_v2": sound="${dueChannel.sound}", importance=${dueChannel.importance}`,
+                );
+            }
+        } else {
+            console.warn("[NotifSvc] ⚠ No notification channels found");
+        }
+
+        // Test 2: Send test notification
+        console.log(
+            "[NotifSvc] Sending test notification to default channel...",
+        );
+        const testId = await Notifications.scheduleNotificationAsync({
+            content: {
+                title: "🧪 Sound Test",
+                body: "If you hear sound, channels are working!",
+                sound: "default",
+            },
+            trigger: { seconds: 2 },
+        });
+        console.log(`[NotifSvc] ✅ Test notification scheduled: ${testId}`);
+
+        return {
+            success: true,
+            channelsFound: channels?.length || 0,
+            timestamp: new Date().toISOString(),
+        };
+    } catch (error) {
+        console.error("[NotifSvc] Test failed:", error?.message);
+        return {
+            success: false,
+            error: error?.message,
+            timestamp: new Date().toISOString(),
+        };
     }
 };
 
@@ -4432,7 +4540,8 @@ export default {
     registerPushTokenWithServer,
     resetAudioModeOnAppBackground,
     diagnoseAudioSetup,
+    validateAudioAssets,
+    testNotificationChannels,
     AUDIO_MODULES,
-    // Firebase integration
     scheduleImmediateNotification,
 };

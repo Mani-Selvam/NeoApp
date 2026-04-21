@@ -1,86 +1,86 @@
 {
-    "expo": {
-        "name": "NeoGroww",
-        "slug": "neoapp-manibro21",
-        "owner": "manibro21",
-        "version": "1.0.0",
-        "icon": "./src/assets/app-icon.png",
-        "orientation": "portrait",
-        "scheme": "myapp",
-        "userInterfaceStyle": "automatic",
-        "ios": {
-            "supportsTablet": true,
-            "bundleIdentifier": "com.mycompany.myapp",
-            "infoPlist": {
-                "ITSAppUsesNonExemptEncryption": false
-            }
-        },
-        "web": {
-            "output": "single",
-            "bundler": "metro"
-        },
-        "splash": {
-            "image": "./src/assets/app-icon.png",
-            "resizeMode": "contain",
-            "backgroundColor": "#FFFFFF"
-        },
-        "android": {
-            "package": "com.mycompany.myapp",
-            "versionCode": 2,
-            "googleServicesFile": "./google-services.json",
-            "blockedPermissions": [],
-            "adaptiveIcon": {
-                "foregroundImage": "./src/assets/adaptive-icon-foreground.png",
-                "backgroundColor": "#FFFFFF"
-            },
-            "permissions": [
-                "CALL_PHONE",
-                "POST_NOTIFICATIONS",
-                "android.permission.READ_CALL_LOG",
-                "android.permission.READ_PHONE_STATE",
-                "android.permission.READ_CONTACTS",
-                "android.permission.RECEIVE_BOOT_COMPLETED"
-            ]
-        },
-        "plugins": [
-            "expo-notifications",
-            "expo-image-picker",
-            "expo-av",
-            "expo-video",
-            "expo-font",
-            [
-                "expo-contacts",
-                {
-                    "contactsPermission": "The app needs access to your contacts to link call logs."
-                }
-            ],
-            [
-                "expo-build-properties",
-                {
-                    "android": {
-                        "compileSdkVersion": 36,
-                        "targetSdkVersion": 36,
-                        "ndkVersion": "26.1.10909125",
-                        "enableProguardModuleExtension": true
-                    }
-                }
-            ]
-        ],
-        "extra": {
-            "playStoreSafeMode": false,
-            "privacyPolicyUrl": "https://neophrondev.in/privacy/",
-            "accountDeletionUrl": "https://neophrondev.in/privacy/",
-            "firebase": {
-                "apiKey": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
-                "authDomain": "login-form-39e3e.firebaseapp.com",
-                "projectId": "login-form-39e3e",
-                "storageBucket": "login-form-39e3e.firebasestorage.app",
-                "messagingSenderId": "168810107337",
-                "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
-            },
-            "eas": {
-                "projectId": "15451405-013e-404e-a99f-023cc3d0f8ba"
-            }
+  "expo": {
+    "name": "NeoGroww",
+    "slug": "neoapp-manibro23",
+    "owner": "manibro23",
+    "version": "1.0.0",
+    "icon": "./src/assets/app-icon.png",
+    "orientation": "portrait",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mycompany.myapp",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "web": {
+      "output": "single",
+      "bundler": "metro"
+    },
+    "splash": {
+      "image": "./src/assets/app-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "android": {
+      "package": "com.mycompany.myapp",
+      "versionCode": 2,
+      "googleServicesFile": "./google-services.json",
+      "blockedPermissions": [],
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "permissions": [
+        "CALL_PHONE",
+        "POST_NOTIFICATIONS",
+        "android.permission.READ_CALL_LOG",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.READ_CONTACTS",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-image-picker",
+      "expo-av",
+      "expo-video",
+      "expo-font",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "The app needs access to your contacts to link call logs."
         }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "ndkVersion": "26.1.10909125",
+            "enableProguardModuleExtension": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "playStoreSafeMode": false,
+      "privacyPolicyUrl": "https://neophrondev.in/privacy/",
+      "accountDeletionUrl": "https://neophrondev.in/privacy/",
+      "firebase": {
+        "apiKey": "AIzaSyBMhgWWgAS13eKrrgMUsSlzeCJnmAw_REo",
+        "authDomain": "login-form-39e3e.firebaseapp.com",
+        "projectId": "login-form-39e3e",
+        "storageBucket": "login-form-39e3e.firebasestorage.app",
+        "messagingSenderId": "168810107337",
+        "appId": "1:168810107337:android:1e2b51148e53f9ad9e9818"
+      },
+      "eas": {
+        "projectId": "27208a4d-0b19-478c-9a94-799a7db3d56f"
+      }
     }
+  }
 }

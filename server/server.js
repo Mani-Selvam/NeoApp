@@ -100,6 +100,9 @@ io.use(async (socket, next) => {
             !String(user.activeSessionId || "").trim() ||
             String(user.activeSessionId) !== socket.data.sessionId
         ) {
+            console.log(
+                `Session revoked for user ${socket.data.userId}: activeSessionId=${user.activeSessionId}, socketSessionId=${socket.data.sessionId}`,
+            );
             return next(new Error("Session revoked"));
         }
 
@@ -256,6 +259,17 @@ const startServer = async () => {
         const warmStart = Date.now();
         await mongoose.connection.db.admin().ping();
         console.log(`⚡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
+
+        // Initialize reminder scheduler for background notifications
+        try {
+            const reminderScheduler = require("./services/reminderScheduler");
+            reminderScheduler.initializeReminderScheduler();
+        } catch (schedulerErr) {
+            console.warn(
+                "[Server] Reminder scheduler initialization failed:",
+                schedulerErr.message,
+            );
+        }
     } catch (e) {
         console.error("DB Connection failed:", e.message);
     }

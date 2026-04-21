@@ -105,10 +105,9 @@ export const updateFollowUp = async (id, followUpData) => {
         });
         return response.data;
     } catch (error) {
-        console.error(
-            "Update followup error:",
-            error.response?.data || error.message,
-        );
+        const status = Number(error?.response?.status || 0);
+        const log = status === 404 ? console.warn : console.error;
+        log("Update followup error:", error.response?.data || error.message);
         throw error;
     }
 };
@@ -127,10 +126,9 @@ export const deleteFollowUp = async (id) => {
         });
         return response.data;
     } catch (error) {
-        console.error(
-            "Delete followup error:",
-            error.response?.data || error.message,
-        );
+        const status = Number(error?.response?.status || 0);
+        const log = status === 404 ? console.warn : console.error;
+        log("Delete followup error:", error.response?.data || error.message);
         throw error;
     }
 };

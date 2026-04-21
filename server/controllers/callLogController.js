@@ -1,154 +1,303 @@
+/**
+ * callLogController.js
+ * Handles all /api/calllogs routes
+ *
+ * UPDATED: Incoming calls filtered by enquiry validation
+ * - Incoming: only from enquiry contact numbers
+ * - Outgoing: all kept (user initiated)
+ * - Missed/Rejected: all kept (relevant regardless)
+ */
 const CallLog = require("../models/CallLog");
+const Enquiry = require("../models/Enquiry");
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Generate unique key for duplicate prevention
- * @param {string} phoneNumber
- * @param {string|number} timestamp - Unix timestamp or ISO string
- * @param {number} duration - Call duration in seconds
- * @returns {string} Unique key
+ * Normalize phone: strip non-digits, keep last 10
  */
-const generateUniqueKey = (phoneNumber, timestamp, duration) => {
+const normalizePhone = (value) =>
+    String(value || "")
+        .replace(/\D/g, "")
+        .slice(-10);
+
+/**
+ * Build uniqueKey for duplicate prevention
+ */
+const buildUniqueKey = (phoneNumber, callTime, callDuration) => {
     const ts =
-        typeof timestamp === "string"
-            ? new Date(timestamp).getTime()
-            : Number(timestamp);
-    return `${phoneNumber}_${ts}_${duration}`;
+        callTime instanceof Date
+            ? callTime.getTime()
+            : new Date(callTime).getTime();
+    const phone = String(phoneNumber || "")
+        .replace(/\D/g, "")
+        .slice(-10);
+    return `${phone}_${ts}_${callDuration}`;
 };
 
 /**
+ * Build a set of enquiry phone suffixes (last-10 digits) for fast membership checks.
+ * This avoids N DB queries (one per incoming call) during sync.
+ */
+const buildEnquiryPhoneSuffixSet = async (companyId, phoneSuffixes) => {
+    const suffixSet = new Set();
+    if (!companyId) return suffixSet;
+    if (!Array.isArray(phoneSuffixes) || phoneSuffixes.length === 0)
+        return suffixSet;
+
+    const uniqueSuffixes = Array.from(
+        new Set(phoneSuffixes.map((s) => String(s || "").trim()).filter(Boolean)),
+    );
+    if (uniqueSuffixes.length === 0) return suffixSet;
+
+    const CHUNK = 50;
+    for (let i = 0; i < uniqueSuffixes.length; i += CHUNK) {
+        const chunk = uniqueSuffixes.slice(i, i + CHUNK);
+        const pattern = new RegExp(`(${chunk.join("|")})$`);
+
+        let enquiries = [];
+        try {
+            enquiries = await Enquiry.find({
+                company_id: companyId,
+                $or: [
+                    { mobile: { $regex: pattern } },
+                    { phoneNumber: { $regex: pattern } },
+                    { phone: { $regex: pattern } },
+                ],
+            })
+                .select("mobile phoneNumber phone")
+                .lean();
+        } catch (err) {
+            console.warn(
+                "[callLogController] buildEnquiryPhoneSuffixSet query failed:",
+                err,
+            );
+            enquiries = [];
+        }
+
+        for (const enquiry of enquiries) {
+            const mobile = normalizePhone(enquiry?.mobile);
+            const phoneNumber = normalizePhone(enquiry?.phoneNumber);
+            const phone = normalizePhone(enquiry?.phone);
+            if (mobile) suffixSet.add(mobile);
+            if (phoneNumber) suffixSet.add(phoneNumber);
+            if (phone) suffixSet.add(phone);
+        }
+    }
+
+    return suffixSet;
+};
+
+/**
+ * Filter incoming calls: only keep those from known enquiries
+ * Other call types: keep all (outgoing/missed/rejected are relevant regardless)
+ */
+const filterLogsBeforeSync = async (logs, companyId) => {
+    if (!Array.isArray(logs)) return [];
+
+    const incomingSuffixes = logs
+        .filter((l) => l?.callType === "incoming")
+        .map((l) => normalizePhone(l?.phoneNumber))
+        .filter(Boolean);
+    const enquirySuffixSet = await buildEnquiryPhoneSuffixSet(
+        companyId,
+        incomingSuffixes,
+    );
+
+    const filtered = [];
+
+    for (const log of logs) {
+        // Outgoing, Missed, Rejected → always keep
+        if (log.callType !== "incoming") {
+            filtered.push(log);
+            continue;
+        }
+
+        // Incoming → check if from enquiry
+        const normalized = normalizePhone(log.phoneNumber);
+        if (normalized && enquirySuffixSet.has(normalized)) {
+            filtered.push(log);
+        } else {
+            console.log(
+                `[callLogController] Filtered incoming call from non-enquiry: ${log.phoneNumber}`,
+            );
+        }
+    }
+
+    return filtered;
+};
+
+// ─── Controllers ─────────────────────────────────────────────────────────────
+
+/**
  * POST /api/calllogs/sync
- * Batch sync device call logs with duplicate prevention
+ * Batch-insert call logs from the device (idempotent via uniqueKey).
  */
 exports.syncDeviceLogs = async (req, res) => {
     try {
         const { logs } = req.body;
-        const userId = req.user?.userId;
-        const companyId = req.user?.companyId;
+        const companyId = req.user?.company_id || req.user?.companyId;
+        const userId = req.userId || req.user?.id || req.user?._id;
 
-        // Validate inputs
-        if (!Array.isArray(logs)) {
+        if (!companyId || !userId) {
             return res
-                .status(400)
-                .json({ success: false, error: "logs must be an array" });
+                .status(401)
+                .json({ success: false, error: "Unauthorized" });
         }
 
-        if (logs.length === 0) {
-            return res.status(200).json({
+        if (!Array.isArray(logs) || logs.length === 0) {
+            return res.json({
                 success: true,
                 inserted: 0,
                 duplicates: 0,
-                lastSyncTime: new Date().toISOString(),
+                filtered: 0,
             });
         }
 
-        // Prepare log entries for batch insert
-        const logsToInsert = [];
-        const duplicateKeys = [];
+        // FILTER: incoming calls by enquiry
+        const filteredLogs = await filterLogsBeforeSync(logs, companyId);
+        const skipped = logs.length - filteredLogs.length;
 
-        for (const log of logs) {
-            // Validate required fields
-            if (!log.phoneNumber || !log.callType || !log.callTime) {
-                console.warn("Skipping invalid log:", log);
-                continue;
-            }
-
-            const uniqueKey = generateUniqueKey(
-                log.phoneNumber,
-                log.callTime,
-                log.callDuration || 0,
-            );
-
-            // Check if already exists
-            const existingLog = await CallLog.findOne({ uniqueKey }).lean();
-            if (existingLog) {
-                duplicateKeys.push(uniqueKey);
-                continue;
-            }
-
-            logsToInsert.push({
-                companyId,
-                userId,
-                phoneNumber: log.phoneNumber.trim(),
-                callType: log.callType,
-                callDuration: log.callDuration || 0,
-                callTime: new Date(log.callTime),
-                contactName: log.contactName || "",
-                source: "device",
-                uniqueKey,
-                syncedAt: new Date(),
+        if (filteredLogs.length === 0) {
+            return res.json({
+                success: true,
+                inserted: 0,
+                duplicates: 0,
+                filtered: skipped,
+                message: `All ${skipped} logs were filtered out (incoming calls from non-enquiries)`,
             });
         }
 
-        // Batch insert
-        let insertedCount = 0;
-        if (logsToInsert.length > 0) {
+        let inserted = 0;
+        let duplicates = 0;
+        const errors = [];
+
+        // Process in batches of 100 to avoid huge inserts
+        const BATCH = 100;
+        for (let i = 0; i < filteredLogs.length; i += BATCH) {
+            const batch = filteredLogs.slice(i, i + BATCH);
+            const docs = batch
+                .filter((log) => {
+                    if (!log?.phoneNumber || !log?.callTime) return false;
+                    // Validate that callTime is a valid date
+                    const testDate = new Date(log.callTime);
+                    return !isNaN(testDate.getTime());
+                })
+                .map((log) => {
+                    const callTime = new Date(log.callTime);
+                    const callDuration = Number(
+                        log.callDuration ?? log.duration ?? 0,
+                    );
+                    const phoneNumber = String(log.phoneNumber || "").trim();
+                    const uniqueKey = buildUniqueKey(
+                        phoneNumber,
+                        callTime,
+                        callDuration,
+                    );
+
+                    return {
+                        companyId,
+                        userId,
+                        phoneNumber,
+                        callType: log.callType || "incoming",
+                        callDuration,
+                        callTime,
+                        contactName: String(log.contactName || "").trim(),
+                        source: "device",
+                        uniqueKey,
+                        syncedAt: new Date(),
+                    };
+                });
+
+            if (docs.length === 0) continue;
+
+            // insertMany with ordered:false so duplicates don't abort batch
             try {
-                await CallLog.insertMany(logsToInsert, { ordered: false });
-                insertedCount = logsToInsert.length;
+                const result = await CallLog.insertMany(docs, {
+                    ordered: false,
+                    rawResult: true,
+                });
+                inserted += result.insertedCount || 0;
+                duplicates += docs.length - (result.insertedCount || 0);
             } catch (err) {
-                // Handle partial insert failures
-                if (err.code === 11000) {
-                    // Duplicate key error during insertMany
-                    insertedCount = err.result?.insertedCount || 0;
+                if (err.code === 11000 || err.name === "BulkWriteError") {
+                    // Some or all were duplicates
+                    const writeErrors = err.result?.result?.writeErrors || [];
+                    const insertedInBatch =
+                        err.result?.result?.nInserted ??
+                        docs.length - writeErrors.length;
+                    inserted += insertedInBatch;
+                    duplicates += writeErrors.length;
                 } else {
-                    throw err;
+                    errors.push(err.message);
                 }
             }
         }
 
-        // Get highest sync time for next incremental sync
-        const lastSync = await CallLog.findOne(
-            { companyId, userId },
-            { syncedAt: 1 },
-        )
-            .sort({ syncedAt: -1 })
-            .lean();
-
-        res.status(200).json({
+        return res.json({
             success: true,
-            inserted: insertedCount,
-            duplicates: duplicateKeys.length,
-            lastSyncTime: lastSync?.syncedAt || new Date().toISOString(),
+            inserted,
+            duplicates,
+            filtered: skipped,
+            total: logs.length,
+            message: `Processed ${logs.length} logs: ${inserted} inserted, ${duplicates} duplicates, ${skipped} filtered`,
+            ...(errors.length > 0 ? { errors } : {}),
         });
     } catch (err) {
-        console.error("CallLog sync error:", err);
-        res.status(500).json({ success: false, error: err.message });
+        console.error("[callLogController] syncDeviceLogs error:", err);
+        return res.status(500).json({ success: false, error: err.message });
     }
 };
 
 /**
  * GET /api/calllogs/last-sync-time
- * Return the last sync timestamp for incremental syncs
+ * Returns the most recent syncedAt for the authenticated user's company.
  */
 exports.getLastSyncTime = async (req, res) => {
     try {
-        const userId = req.user?.userId;
-        const companyId = req.user?.companyId;
+        const companyId = req.user?.company_id || req.user?.companyId;
+        const userId = req.userId || req.user?.id || req.user?._id;
 
-        const lastSync = await CallLog.findOne(
-            { companyId, userId },
-            { syncedAt: 1 },
-        )
+        if (!companyId) {
+            return res
+                .status(401)
+                .json({ success: false, error: "Unauthorized" });
+        }
+
+        const latest = await CallLog.findOne({ companyId, userId })
             .sort({ syncedAt: -1 })
+            .select("syncedAt")
             .lean();
 
-        res.status(200).json({
+        return res.json({
             success: true,
-            lastSyncTime: lastSync?.syncedAt || null,
+            lastSyncTime: latest?.syncedAt?.getTime() || null,
         });
     } catch (err) {
-        console.error("GetLastSyncTime error:", err);
-        res.status(500).json({ success: false, error: err.message });
+        console.error("[callLogController] getLastSyncTime error:", err);
+        return res.status(500).json({ success: false, error: err.message });
     }
 };
 
 /**
  * GET /api/calllogs
- * List call logs by phone number with optional filters
- * Query params: phone (required), callType (optional), startDate, endDate, page, limit
+ * Fetch call logs for a phone number (last-10-digits normalized match).
+ * Query params:
+ *   phone     {string}  required
+ *   callType  {string}  optional: incoming|outgoing|missed|rejected
+ *   startDate {string}  optional ISO date
+ *   endDate   {string}  optional ISO date
+ *   page      {number}  default 1
+ *   limit     {number}  default 50 (max 200)
  */
 exports.getCallLogsByPhone = async (req, res) => {
     try {
+        const companyId = req.user?.company_id || req.user?.companyId;
+        if (!companyId) {
+            return res
+                .status(401)
+                .json({ success: false, error: "Unauthorized" });
+        }
+
         const {
             phone,
             callType,
@@ -157,110 +306,169 @@ exports.getCallLogsByPhone = async (req, res) => {
             page = 1,
             limit = 50,
         } = req.query;
-        const userId = req.user?.userId;
-        const companyId = req.user?.companyId;
 
-        // Validate phone
         if (!phone) {
+            return res.status(400).json({
+                success: false,
+                error: "phone query parameter is required",
+            });
+        }
+
+        const normalizedPhone = normalizePhone(phone);
+        if (!normalizedPhone) {
             return res
                 .status(400)
-                .json({ success: false, error: "phone parameter is required" });
+                .json({ success: false, error: "Invalid phone number" });
         }
 
-        // Build query
-        const query = { companyId, userId, phoneNumber: phone };
+        const pg = Math.max(1, Number(page) || 1);
+        const lim = Math.min(200, Math.max(1, Number(limit) || 50));
 
-        // Add callType filter if provided
-        if (callType) {
-            const validTypes = ["incoming", "outgoing", "missed", "rejected"];
-            if (validTypes.includes(callType)) {
-                query.callType = callType;
-            }
+        // Build query: match last 10 digits of stored phone
+        const query = {
+            companyId,
+            // Match stored phones whose last 10 digits equal the normalized query
+            $expr: {
+                $eq: [
+                    {
+                        $substr: [
+                            {
+                                $replaceAll: {
+                                    input: "$phoneNumber",
+                                    find: /\D/,
+                                    replacement: "",
+                                },
+                            },
+                            -10,
+                            10,
+                        ],
+                    },
+                    normalizedPhone,
+                ],
+            },
+        };
+
+        // Fallback: simpler $regex match (works when phone is stored as plain number string)
+        // We'll use a regex approach that matches the last 10 digits
+        delete query.$expr;
+        query.$or = [
+            {
+                phoneNumber: {
+                    $regex: normalizedPhone.replace(/(\d)/g, "$1") + "$",
+                    $options: "",
+                },
+            },
+            { phoneNumber: normalizedPhone },
+            { phoneNumber: new RegExp(normalizedPhone + "$") },
+        ];
+
+        if (
+            callType &&
+            ["incoming", "outgoing", "missed", "rejected"].includes(callType)
+        ) {
+            query.callType = callType;
         }
 
-        // Add date range filter if provided
         if (startDate || endDate) {
             query.callTime = {};
-            if (startDate) {
-                query.callTime.$gte = new Date(startDate);
-            }
+            if (startDate) query.callTime.$gte = new Date(startDate);
             if (endDate) {
-                query.callTime.$lte = new Date(endDate);
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                query.callTime.$lte = end;
             }
         }
 
-        // Execute query with pagination
-        const pageNum = Math.max(1, parseInt(page, 10) || 1);
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-        const skip = (pageNum - 1) * limitNum;
+        const [total, data] = await Promise.all([
+            CallLog.countDocuments(query),
+            CallLog.find(query)
+                .sort({ callTime: -1 })
+                .skip((pg - 1) * lim)
+                .limit(lim)
+                .lean(),
+        ]);
 
-        const logs = await CallLog.find(query)
-            .sort({ callTime: -1 })
-            .skip(skip)
-            .limit(limitNum)
-            .lean();
-
-        const total = await CallLog.countDocuments(query);
-
-        res.status(200).json({
+        return res.json({
             success: true,
-            data: logs,
+            data,
             pagination: {
                 total,
-                page: pageNum,
-                limit: limitNum,
-                totalPages: Math.ceil(total / limitNum),
+                page: pg,
+                limit: lim,
+                pages: Math.ceil(total / lim),
             },
         });
     } catch (err) {
-        console.error("GetCallLogsByPhone error:", err);
-        res.status(500).json({ success: false, error: err.message });
+        console.error("[callLogController] getCallLogsByPhone error:", err);
+        return res.status(500).json({ success: false, error: err.message });
     }
 };
 
 /**
  * GET /api/calllogs/stats
- * Get call statistics (optional - for future analytics)
+ * Aggregate call stats by type for a given phone + date range.
  */
 exports.getCallStats = async (req, res) => {
     try {
-        const { phone, startDate, endDate } = req.query;
-        const userId = req.user?.userId;
-        const companyId = req.user?.companyId;
+        const companyId = req.user?.company_id || req.user?.companyId;
+        if (!companyId) {
+            return res
+                .status(401)
+                .json({ success: false, error: "Unauthorized" });
+        }
 
-        const query = { companyId, userId };
+        const { phone, startDate, endDate } = req.query;
+
+        const matchStage = { companyId };
 
         if (phone) {
-            query.phoneNumber = phone;
+            const normalizedPhone = normalizePhone(phone);
+            matchStage.$or = [
+                { phoneNumber: normalizedPhone },
+                { phoneNumber: new RegExp(normalizedPhone + "$") },
+            ];
         }
 
         if (startDate || endDate) {
-            query.callTime = {};
-            if (startDate) {
-                query.callTime.$gte = new Date(startDate);
-            }
+            matchStage.callTime = {};
+            if (startDate) matchStage.callTime.$gte = new Date(startDate);
             if (endDate) {
-                query.callTime.$lte = new Date(endDate);
+                const end = new Date(endDate);
+                end.setHours(23, 59, 59, 999);
+                matchStage.callTime.$lte = end;
             }
         }
 
         const stats = await CallLog.aggregate([
-            { $match: query },
+            { $match: matchStage },
             {
                 $group: {
                     _id: "$callType",
                     count: { $sum: 1 },
                     totalDuration: { $sum: "$callDuration" },
+                    avgDuration: { $avg: "$callDuration" },
                 },
             },
         ]);
 
-        res.status(200).json({
+        const result = { incoming: 0, outgoing: 0, missed: 0, rejected: 0 };
+        const durations = { incoming: 0, outgoing: 0, missed: 0, rejected: 0 };
+
+        for (const s of stats) {
+            if (result[s._id] !== undefined) {
+                result[s._id] = s.count;
+                durations[s._id] = s.totalDuration;
+            }
+        }
+
+        return res.json({
             success: true,
-            stats,
+            counts: result,
+            totalDuration: durations,
+            total: Object.values(result).reduce((a, b) => a + b, 0),
         });
     } catch (err) {
-        console.error("GetCallStats error:", err);
-        res.status(500).json({ success: false, error: err.message });
+        console.error("[callLogController] getCallStats error:", err);
+        return res.status(500).json({ success: false, error: err.message });
     }
 };

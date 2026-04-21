@@ -156,6 +156,10 @@ const verifyToken = async (req, res, next) => {
 
     req.userId = decoded.userId;
     req.user = user;
+
+    // Normalize common aliases to reduce `company_id` vs `companyId` mismatches.
+    if (req.user && !req.user.id) req.user.id = req.user._id;
+    if (req.user && !req.user.companyId) req.user.companyId = req.user.company_id;
     next();
   } catch (err) {
     return res

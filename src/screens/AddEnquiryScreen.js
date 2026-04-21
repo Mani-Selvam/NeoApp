@@ -35,6 +35,8 @@ import {
 import ConfettiBurst from "../components/ConfettiBurst";
 import * as addressService from "../services/addressService";
 import getApiClient from "../services/apiClient";
+import { API_URL } from "../services/apiConfig";
+import { getAuthToken } from "../services/secureTokenStorage";
 import { emitEnquiryCreated, emitEnquiryUpdated } from "../services/appEvents";
 import * as leadSourceService from "../services/leadSourceService";
 import notificationService from "../services/notificationService";
@@ -1154,10 +1156,27 @@ export default function AddEnquiryScreen({ route, navigation }) {
 
                 // 🔴 CRITICAL: Do NOT set explicit Content-Type header
                 // Let axios/platform set it with proper boundary
-                const resp = isEditMode
-                    ? await client.put(`/enquiries/${editingEnquiry._id}`, fd)
-                    : await client.post("/enquiries", fd);
-                data = resp.data;
+                // ✅ Use fetch for mobile FormData — axios fails with ERR_NETWORK
+                const token = await getAuthToken();
+                const uploadUrl = isEditMode
+                    ? `${API_URL}/enquiries/${editingEnquiry._id}`
+                    : `${API_URL}/enquiries`;
+                const fetchResp = await fetch(uploadUrl, {
+                    method: isEditMode ? "PUT" : "POST",
+                    headers: {
+                        // ✅ No Content-Type — let fetch set boundary automatically
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: fd,
+                });
+                if (!fetchResp.ok) {
+                    const errData = await fetchResp.json().catch(() => ({}));
+                    throw new Error(
+                        errData?.message ||
+                            `Upload failed: ${fetchResp.status}`,
+                    );
+                }
+                data = await fetchResp.json();
             } else {
                 const payload = { ...body };
                 // 📷 Clean image field: remove if null, empty string, or invalid object
@@ -1172,13 +1191,27 @@ export default function AddEnquiryScreen({ route, navigation }) {
                 ) {
                     delete payload.image;
                 }
-                const resp = isEditMode
-                    ? await client.put(
-                          `/enquiries/${editingEnquiry._id}`,
-                          payload,
-                      )
-                    : await client.post("/enquiries", payload);
-                data = resp.data;
+                // ✅ Use fetch for mobile FormData — axios fails with ERR_NETWORK
+                const token = await getAuthToken();
+                const uploadUrl = isEditMode
+                    ? `${API_URL}/enquiries/${editingEnquiry._id}`
+                    : `${API_URL}/enquiries`;
+                const fetchResp = await fetch(uploadUrl, {
+                    method: isEditMode ? "PUT" : "POST",
+                    headers: {
+                        // ✅ No Content-Type — let fetch set boundary automatically
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: fd,
+                });
+                if (!fetchResp.ok) {
+                    const errData = await fetchResp.json().catch(() => ({}));
+                    throw new Error(
+                        errData?.message ||
+                            `Upload failed: ${fetchResp.status}`,
+                    );
+                }
+                data = await fetchResp.json();
             }
 
             if (data) {

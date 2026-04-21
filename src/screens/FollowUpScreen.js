@@ -63,6 +63,7 @@ import * as emailService from "../services/emailService";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
 import notificationService from "../services/notificationService";
+import callLogService from "../services/callLogService";
 import { initSocket } from "../services/socketService";
 import {
     buildFeatureUpgradeMessage,
@@ -190,6 +191,7 @@ const DETAIL_TABS = [
 const DETAIL_TAB_FEATURES = {
     whatsapp: "whatsapp",
     email: "email",
+    // contact tab is available to all users (no feature restriction)
 };
 
 const normalizePhone = (value) =>
@@ -295,21 +297,54 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [typeFilter, setTypeFilter] = useState("All");
-
     const loadLogs = useCallback(
         async ({ force = false, showSpinner = true } = {}) => {
-            // Call log feature has been removed
-            setLogs([]);
-            setLoading(false);
+            if (!phoneKey) {
+                setLogs([]);
+                setLoading(false);
+                return;
+            }
+            if (showSpinner) setLoading(true);
+            try {
+                // Import callLogService at the top of the file if not already imported:
+                // import callLogService from "../services/callLogService";
+                const result = await callLogService.getCallLogsByPhone(
+                    phoneKey,
+                    null, // null = fetch all types (filter client-side via typeFilter)
+                    1,
+                    200,
+                );
+                if (result.success) {
+                    setLogs(result.data || []);
+                } else {
+                    console.warn(
+                        "[FollowUpCallPanel] Fetch error:",
+                        result.error,
+                    );
+                    setLogs([]);
+                }
+            } catch (err) {
+                console.error(
+                    "[FollowUpCallPanel] loadLogs exception:",
+                    err.message,
+                );
+                setLogs([]);
+            } finally {
+                setLoading(false);
+            }
         },
         [phoneKey, enquiry?._id],
     );
 
     useEffect(() => {
-        loadLogs({ force: false }).catch(() => null);
-    }, [loadLogs, refreshKey]);
-
-    // Call log event listener removed with call log feature
+        const { onAppEvent } = require("../services/appEvents");
+        const unsub = onAppEvent("CALL_LOG_SYNCED", () => {
+            loadLogs({ force: true, showSpinner: false });
+        });
+        return () => {
+            if (typeof unsub === "function") unsub();
+        };
+    }, [loadLogs]);
 
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
@@ -478,9 +513,12 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
                                         </Text>
                                     </View>
                                     <Text style={DV.callMetaText}>
-                                        {item?.duration
-                                            ? `Duration ${formatCallDuration(item.duration)}`
-                                            : "No duration"}
+                                        {item?.callDuration
+                                            ? `Duration: ${formatCallDuration(item.callDuration)}`
+                                            : item?.callType === "missed" ||
+                                                item?.callType === "rejected"
+                                              ? "Not answered"
+                                              : "0s"}
                                     </Text>
                                     {!!item?.note && (
                                         <Text
@@ -4815,15 +4853,29 @@ export default function FollowUpScreen({ navigation, route }) {
     }, [showDroppedModal]);
 
     useEffect(() => {
-        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (data) => {
+        const sub = DeviceEventEmitter.addListener("CALL_ENDED", (_data) => {
             if (callStarted && callEnquiry) {
                 global.__callClaimedByScreen = true;
 
-                // Call log feature has been removed
-                setCallModalVisible(false);
+                // Sync call logs in background after call ends
+                if (AUTO_SAVE_CALL_LOGS) {
+                    try {
+                        const callLogService =
+                            require("../services/callLogService").default;
+                        const {
+                            requestAndCheckCallLog,
+                        } = require("../utils/callLogPermissions");
+                        Promise.resolve()
+                            .then(async () => {
+                                const status = await requestAndCheckCallLog();
+                                if (!status?.enabled) return;
+                                await callLogService.syncDeviceCallLogs();
+                            })
+                            .catch(() => {});
+                    } catch {}
+                }
+
                 setCallEnquiry(null);
-                setAutoCallData(null);
-                setAutoDuration(0);
                 setCallStarted(false);
                 setCallStartTime(null);
             }
@@ -4832,14 +4884,28 @@ export default function FollowUpScreen({ navigation, route }) {
     }, [callStarted, callEnquiry]);
 
     useEffect(() => {
-        // Call log feature has been removed
-        const sub = AppState.addEventListener("change", (next) => {
+        const sub = AppState.addEventListener("change", async (next) => {
             if (
                 next === "active" &&
                 callStarted &&
                 callStartTime &&
                 callEnquiry
             ) {
+                // App returned to foreground — the call has ended (or user switched back)
+                // Trigger a background sync so the new call log appears immediately.
+                if (AUTO_SAVE_CALL_LOGS) {
+                    try {
+                        const callLogService =
+                            require("../services/callLogService").default;
+                        const {
+                            requestAndCheckCallLog,
+                        } = require("../utils/callLogPermissions");
+                        const status = await requestAndCheckCallLog();
+                        if (status?.enabled) {
+                            callLogService.syncDeviceCallLogs().catch(() => {});
+                        }
+                    } catch {}
+                }
                 setCallEnquiry(null);
                 setCallStarted(false);
                 setCallStartTime(null);
@@ -4847,7 +4913,6 @@ export default function FollowUpScreen({ navigation, route }) {
         });
         return () => sub.remove();
     }, [callStarted, callStartTime, callEnquiry]);
-
     useEffect(() => {
         let pendingArgs = {
             clear: false,
@@ -6027,6 +6092,13 @@ export default function FollowUpScreen({ navigation, route }) {
             );
             return;
         }
+
+        const resetCallState = () => {
+            setCallStarted(false);
+            setCallStartTime(null);
+            setCallEnquiry(null);
+        };
+
         setCallEnquiry(enquiry);
         setCallStarted(true);
         setCallStartTime(Date.now());
@@ -6035,14 +6107,77 @@ export default function FollowUpScreen({ navigation, route }) {
                 Platform.OS === "android" &&
                 RNImmediatePhoneCall?.immediatePhoneCall
             ) {
+                const {
+                    ensurePhoneCallPermission,
+                } = require("../utils/phoneCallPermissions");
+                const { granted } = await ensurePhoneCallPermission();
+                if (!granted) {
+                    Alert.alert(
+                        "Permission required",
+                        "Allow Phone permission to place direct calls from the app.",
+                        [
+                            {
+                                text: "Cancel",
+                                style: "cancel",
+                                onPress: () => resetCallState(),
+                            },
+                            {
+                                text: "Open dialer",
+                                onPress: () =>
+                                    Linking.openURL(`tel:${digits}`).catch(
+                                        () => {},
+                                    ),
+                            },
+                        ],
+                    );
+                    return;
+                }
                 RNImmediatePhoneCall.immediatePhoneCall(digits);
                 return;
             }
+
+            if (Platform.OS === "android") {
+                const {
+                    ensurePhoneCallPermission,
+                } = require("../utils/phoneCallPermissions");
+                const { granted } = await ensurePhoneCallPermission();
+                if (granted) {
+                    try {
+                        const IntentLauncher = require("expo-intent-launcher");
+                        await IntentLauncher.startActivityAsync(
+                            "android.intent.action.CALL",
+                            { data: `tel:${digits}` },
+                        );
+                        return;
+                    } catch (_intentErr) {
+                        // fall through to tel: scheme
+                    }
+                } else {
+                    Alert.alert(
+                        "Permission required",
+                        "Allow Phone permission to place direct calls from the app.",
+                        [
+                            {
+                                text: "Cancel",
+                                style: "cancel",
+                                onPress: () => resetCallState(),
+                            },
+                            {
+                                text: "Open dialer",
+                                onPress: () =>
+                                    Linking.openURL(`tel:${digits}`).catch(
+                                        () => {},
+                                    ),
+                            },
+                        ],
+                    );
+                    return;
+                }
+            }
+
             await Linking.openURL(`tel:${digits}`);
         } catch (_error) {
-            setCallStarted(false);
-            setCallStartTime(null);
-            setCallEnquiry(null);
+            resetCallState();
             Alert.alert("Call failed", "Could not start the phone call.");
         }
     }, []);

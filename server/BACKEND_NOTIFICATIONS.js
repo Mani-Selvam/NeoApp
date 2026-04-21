@@ -12,6 +12,8 @@ async function sendExpoNotification(
     maxRetries = 3,
     channelId = "followups_soon_en",
 ) {
+    const { resolveAndroidChannelId } = require("./utils/notificationChannels");
+    const resolvedChannelId = resolveAndroidChannelId(channelId);
     const MAX_RETRIES = maxRetries;
     const EXPONENTIAL_BACKOFF = [1000, 2000, 5000]; // ms delays between retries
 
@@ -30,7 +32,7 @@ async function sendExpoNotification(
             const message = {
                 to: pushToken,
                 sound: "default",
-                channelId: channelId, // Android notification channel with custom sound
+                channelId: resolvedChannelId, // Android notification channel with custom sound
                 priority: priority,
                 ...notification,
             };
@@ -40,7 +42,7 @@ async function sendExpoNotification(
                 {
                     token: pushToken.substring(0, 30) + "...",
                     title: notification.title,
-                    channelId,
+                    channelId: resolvedChannelId,
                     priority,
                 },
             );
@@ -171,4 +173,3 @@ async function markTokenAsDead(pushToken) {
 module.exports = {
     sendExpoNotification,
 };
-
