@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema({
         sparse: true, // Allow multiple users to not have token
         index: true, // Index for quick lookups
     },
+    // Per-login notification session id (rotated on every app login)
+    // Used to prevent stale notifications after logout/login cycles.
+    fcmSessionId: { type: String, default: "" },
+    fcmSessionUpdatedAt: { type: Date },
     // When FCM token was last updated/validated
     fcmTokenUpdatedAt: { type: Date },
     // Legacy Expo push token (kept for backward compatibility / fallback delivery)

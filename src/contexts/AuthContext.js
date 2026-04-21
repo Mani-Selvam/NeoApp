@@ -12,6 +12,7 @@ import notificationService, {
     getDevicePushToken,
     registerPushTokenWithServer,
     initializeNotifications,
+    beginNotificationSessionForLogin,
 } from "../services/notificationService";
 import { API_URL } from "../services/apiConfig";
 import { clearApiClient } from "../services/apiClient";
@@ -619,6 +620,13 @@ export const AuthProvider = ({ children }) => {
         setIsLoggedIn(true);
         refreshBillingPlan().catch(() => {});
 
+        // Rotate notification session boundary for this login (prevents stale notifications)
+        try {
+            await beginNotificationSessionForLogin?.();
+        } catch {
+            /* ignore */
+        }
+
         // Initialize notifications (creates Android channels, sets up handlers)
         try {
             console.log("[Auth] Initializing notifications system...");
@@ -695,6 +703,14 @@ export const AuthProvider = ({ children }) => {
         } catch (_error) {
             // ignore socket disconnect issues
         }
+
+        // Ensure no notifications are delivered while logged out (delete/unregister tokens)
+        try {
+            await notificationService.endNotificationSessionForLogout?.();
+        } catch {
+            /* ignore */
+        }
+
         await deleteAuthToken();
         await AsyncStorage.removeItem("user");
         await AsyncStorage.removeItem("billingPlan");
@@ -716,6 +732,7 @@ export const AuthProvider = ({ children }) => {
         // Call monitoring removed with call log feature
         try {
             await notificationService.cancelAllNotifications?.();
+            await notificationService.dismissAllDeliveredNotifications?.();
             await notificationService.resetNotificationLocalState?.();
         } catch (e) {
             // ignore notification cancellation issues

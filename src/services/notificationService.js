@@ -2179,6 +2179,14 @@ export const initializeNotifications = async () => {
                     console.log(
                         "[NotifSvc] ✓ Firebase notifications initialized",
                     );
+
+                    // Enforce auth-gated behavior (logged-out: delete token; logged-in: ensure registered)
+                    if (
+                        typeof firebaseNotificationService?.syncAuthState ===
+                        "function"
+                    ) {
+                        await firebaseNotificationService.syncAuthState();
+                    }
                 } else {
                     console.log(
                         "[NotifSvc] ⚠ firebaseNotificationService.initialize not available — skipping",
@@ -2524,6 +2532,20 @@ export const cancelAllNotifications = async () => {
         console.log("All notifications cancelled");
     } catch (error) {
         console.error("Failed to cancel notifications:", error);
+    }
+};
+
+export const dismissAllDeliveredNotifications = async () => {
+    try {
+        if (!isNotificationSupported()) return;
+        await Notifications.dismissAllNotificationsAsync();
+        try {
+            await Notifications.setBadgeCountAsync(0);
+        } catch {
+            /* ignore */
+        }
+    } catch (error) {
+        console.error("Failed to dismiss delivered notifications:", error);
     }
 };
 
@@ -4037,6 +4059,12 @@ export const resetNotificationLocalState = async () => {
         _pendingSoonAudioByKey.clear();
         _followupCorrectionKeys.clear();
 
+        try {
+            await firebaseNotificationService?.resetLocalState?.();
+        } catch {
+            /* ignore */
+        }
+
         await Promise.allSettled([
             AsyncStorage.removeItem(HOURLY_FOLLOWUP_ACK_DATE_KEY),
             AsyncStorage.removeItem(HOURLY_FOLLOWUP_SCHEDULE_KEY),
@@ -4421,64 +4449,100 @@ export const testNotificationChannels = async () => {
     console.log("[NotifSvc] === Testing Notification Channels ===");
 
     try {
+        // Test 0: Permissions
+        try {
+            const perms = await Notifications.getPermissionsAsync();
+            console.log(
+                `[NotifSvc] Permission status: ${perms?.status} (canAskAgain=${String(perms?.canAskAgain)})`,
+            );
+        } catch (permError) {
+            console.warn(
+                "[NotifSvc] Failed to read permissions:",
+                permError?.message,
+            );
+        }
+
         // Test 1: Check channels exist
-        const channels = await Notifications.getNotificationChannelsAsync();
-        if (channels && channels.length > 0) {
-            console.log(
-                `[NotifSvc] ✅ Found ${channels.length} notification channels`,
-            );
-            const followupChannels = channels.filter((ch) =>
-                ch.id.includes("followup"),
-            );
-            const minuteChannels = channels.filter((ch) =>
-                /\d+min/.test(ch.id),
-            );
-
-            console.log(`    - Follow-up channels: ${followupChannels.length}`);
-            console.log(
-                `    - Minute channels (1-5min): ${minuteChannels.length}`,
-            );
-            console.log(
-                `    - Other channels: ${channels.length - followupChannels.length - minuteChannels.length}`,
-            );
-
-            // Check if channels have sound
-            const noSound = channels.filter(
-                (ch) => !ch.sound || ch.sound === "",
-            );
-            if (noSound.length > 0) {
-                console.warn(
-                    `[NotifSvc] ⚠ ${noSound.length} channels have no sound configured:`,
-                );
-                noSound.forEach((ch) => console.warn(`    - ${ch.id}`));
-            }
-
-            // Sample channel details
-            const dueChannel = channels.find(
-                (ch) => ch.id === "followups_due_en_v2",
-            );
-            if (dueChannel) {
+        let channels = [];
+        if (Platform.OS === "android") {
+            channels = await Notifications.getNotificationChannelsAsync();
+            if (channels && channels.length > 0) {
                 console.log(
-                    `[NotifSvc] Sample channel "followups_due_en_v2": sound="${dueChannel.sound}", importance=${dueChannel.importance}`,
+                    `[NotifSvc] ✅ Found ${channels.length} notification channels`,
                 );
+                const followupChannels = channels.filter((ch) =>
+                    ch.id.includes("followup"),
+                );
+                const minuteChannels = channels.filter((ch) =>
+                    /\d+min/.test(ch.id),
+                );
+
+                console.log(
+                    `    - Follow-up channels: ${followupChannels.length}`,
+                );
+                console.log(
+                    `    - Minute channels (1-5min): ${minuteChannels.length}`,
+                );
+                console.log(
+                    `    - Other channels: ${channels.length - followupChannels.length - minuteChannels.length}`,
+                );
+
+                // Check if channels have sound
+                const noSound = channels.filter(
+                    (ch) => !ch.sound || ch.sound === "",
+                );
+                if (noSound.length > 0) {
+                    console.warn(
+                        `[NotifSvc] ⚠ ${noSound.length} channels have no sound configured:`,
+                    );
+                    noSound.forEach((ch) => console.warn(`    - ${ch.id}`));
+                }
+
+                // Sample channel details
+                const dueChannel = channels.find(
+                    (ch) => ch.id === "followups_due_en_v2",
+                );
+                if (dueChannel) {
+                    console.log(
+                        `[NotifSvc] Sample channel "followups_due_en_v2": sound="${dueChannel.sound}", importance=${dueChannel.importance}`,
+                    );
+                }
+            } else {
+                console.warn("[NotifSvc] ⚠ No notification channels found");
             }
-        } else {
-            console.warn("[NotifSvc] ⚠ No notification channels found");
         }
 
         // Test 2: Send test notification
-        console.log(
-            "[NotifSvc] Sending test notification to default channel...",
-        );
-        const testId = await Notifications.scheduleNotificationAsync({
-            content: {
-                title: "🧪 Sound Test",
-                body: "If you hear sound, channels are working!",
-                sound: "default",
-            },
-            trigger: { seconds: 2 },
-        });
-        console.log(`[NotifSvc] ✅ Test notification scheduled: ${testId}`);
+        console.log("[NotifSvc] Sending test notification...");
+
+        const content = {
+            title: "🧪 Alert Test",
+            body: "You should see an alert/banner AND hear sound.",
+            sound: "default",
+            data: { type: "debug-test" },
+            ...(Platform.OS === "android"
+                ? {
+                      android: {
+                          channelId: CHANNEL_IDS.default,
+                          priority: "max",
+                      },
+                  }
+                : { ios: { sound: true, interruptionLevel: "active" } }),
+        };
+
+        let testId = null;
+        // eslint-disable-next-line import/namespace
+        const presentFn = Notifications?.presentNotificationAsync;
+        if (typeof presentFn === "function") {
+            testId = await presentFn(content);
+            console.log(`[NotifSvc] ✅ Test notification presented: ${testId}`);
+        } else {
+            testId = await Notifications.scheduleNotificationAsync({
+                content,
+                trigger: null,
+            });
+            console.log(`[NotifSvc] ✅ Test notification scheduled: ${testId}`);
+        }
 
         return {
             success: true,
@@ -4496,6 +4560,31 @@ export const testNotificationChannels = async () => {
 };
 
 // ─── Default Export ───────────────────────────────────────────────────────────
+// Auth-gating helpers (login/logout)
+export const beginNotificationSessionForLogin = async () => {
+    try {
+        await firebaseNotificationService?.beginLoginSession?.();
+    } catch {
+        /* ignore */
+    }
+};
+
+export const endNotificationSessionForLogout = async () => {
+    try {
+        await firebaseNotificationService?.endLogoutSession?.();
+    } catch {
+        /* ignore */
+    }
+};
+
+export const syncRemoteNotificationAuthState = async () => {
+    try {
+        await firebaseNotificationService?.syncAuthState?.();
+    } catch {
+        /* ignore */
+    }
+};
+
 export default {
     initializeNotifications,
     showFollowUpNotification,
@@ -4510,6 +4599,7 @@ export default {
     scheduleDailyNotification,
     getPendingNotifications,
     cancelAllNotifications,
+    dismissAllDeliveredNotifications,
     cancelNotification,
     getDevicePushToken,
     setupNotificationListener,
@@ -4538,6 +4628,9 @@ export default {
     setNotificationVoiceLanguage,
     resetNotificationLocalState,
     registerPushTokenWithServer,
+    beginNotificationSessionForLogin,
+    endNotificationSessionForLogout,
+    syncRemoteNotificationAuthState,
     resetAudioModeOnAppBackground,
     diagnoseAudioSetup,
     validateAudioAssets,

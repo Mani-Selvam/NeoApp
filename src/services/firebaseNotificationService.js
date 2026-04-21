@@ -40,7 +40,13 @@ import { getAuthToken } from "./secureTokenStorage";
 
 const STORAGE_KEYS = {
     lastFcmToken: "fcmToken_v1",
+    // Persisted dedup map to prevent "spam on restart" after reconnect
     lastProcessedNotifications: "lastProcessedNotifications_v1",
+    // Per-login session boundary (rotated on every login)
+    sessionId: "notifSessionId_v1",
+    sessionStartedAtMs: "notifSessionStartedAtMs_v1",
+    // Track which sessionId the server was last registered with
+    lastRegisteredSessionId: "fcmRegisteredSessionId_v1",
 };
 
 // ─── Deduplication ───────────────────────────────────────────────────────────
@@ -57,6 +63,101 @@ const STORAGE_KEYS = {
 const NOTIFICATION_DEDUP_WINDOW_MS = 90 * 1000; // 90 seconds
 
 const _recentNotificationIds = new Map();
+let _persistedDedupLoaded = false;
+let _dedupPersistTimer = null;
+const DEDUP_PERSIST_DEBOUNCE_MS = 1000;
+
+const generateSessionId = () =>
+    `s_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+const ensureSession = async ({ rotate = false } = {}) => {
+    const now = Date.now();
+    if (rotate) {
+        const next = generateSessionId();
+        await AsyncStorage.multiSet([
+            [STORAGE_KEYS.sessionId, next],
+            [STORAGE_KEYS.sessionStartedAtMs, String(now)],
+        ]);
+        return { sessionId: next, startedAtMs: now };
+    }
+
+    const existing = String(
+        (await AsyncStorage.getItem(STORAGE_KEYS.sessionId)) || "",
+    ).trim();
+    const startedAtRaw = await AsyncStorage.getItem(
+        STORAGE_KEYS.sessionStartedAtMs,
+    );
+    const startedAtMs = Number(startedAtRaw || 0) || 0;
+
+    if (existing) return { sessionId: existing, startedAtMs };
+
+    const next = generateSessionId();
+    await AsyncStorage.multiSet([
+        [STORAGE_KEYS.sessionId, next],
+        [STORAGE_KEYS.sessionStartedAtMs, String(now)],
+    ]);
+    return { sessionId: next, startedAtMs: now };
+};
+
+const clearSession = async () => {
+    await AsyncStorage.multiRemove([
+        STORAGE_KEYS.sessionId,
+        STORAGE_KEYS.sessionStartedAtMs,
+        STORAGE_KEYS.lastRegisteredSessionId,
+    ]);
+};
+
+const loadPersistedDedupMap = async () => {
+    if (_persistedDedupLoaded) return;
+    _persistedDedupLoaded = true;
+    try {
+        const raw = await AsyncStorage.getItem(
+            STORAGE_KEYS.lastProcessedNotifications,
+        );
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return;
+        const now = Date.now();
+        const cutoff = now - NOTIFICATION_DEDUP_WINDOW_MS * 2;
+        for (const [k, v] of Object.entries(parsed)) {
+            const ts = Number(v);
+            if (!k || !Number.isFinite(ts)) continue;
+            if (ts < cutoff) continue;
+            _recentNotificationIds.set(k, ts);
+        }
+    } catch {
+        /* ignore */
+    }
+};
+
+const persistDedupMap = () => {
+    try {
+        if (_dedupPersistTimer) return;
+        _dedupPersistTimer = setTimeout(async () => {
+            _dedupPersistTimer = null;
+            try {
+                const now = Date.now();
+                const cutoff = now - NOTIFICATION_DEDUP_WINDOW_MS * 2;
+                const entries = [..._recentNotificationIds.entries()]
+                    .filter(([, ts]) => Number(ts) >= cutoff)
+                    .sort((a, b) => Number(b[1]) - Number(a[1]))
+                    .slice(0, 250);
+
+                const out = {};
+                for (const [k, ts] of entries) out[k] = Number(ts);
+
+                await AsyncStorage.setItem(
+                    STORAGE_KEYS.lastProcessedNotifications,
+                    JSON.stringify(out),
+                );
+            } catch {
+                /* ignore */
+            }
+        }, DEDUP_PERSIST_DEBOUNCE_MS);
+    } catch {
+        /* ignore */
+    }
+};
 
 /**
  * FIX: Messages that arrive too far past their expected fire time are stale.
@@ -146,6 +247,7 @@ const isRecentNotification = (dedupKey) => {
     }
 
     _recentNotificationIds.set(dedupKey, now);
+    persistDedupMap();
 
     // Cleanup old entries
     if (_recentNotificationIds.size > 200) {
@@ -209,7 +311,7 @@ const isStaleFcmMessage = (data) => {
     }
 };
 
-const registerFcmTokenWithServer = async (fcmToken) => {
+const registerFcmTokenWithServer = async (fcmToken, sessionId = "") => {
     try {
         if (!fcmToken || typeof fcmToken !== "string" || fcmToken.length < 10) {
             return false;
@@ -224,7 +326,10 @@ const registerFcmTokenWithServer = async (fcmToken) => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${authToken}`,
             },
-            body: JSON.stringify({ fcmToken }),
+            body: JSON.stringify({
+                fcmToken,
+                sessionId: String(sessionId || "").trim(),
+            }),
         });
 
         if (!response.ok) {
@@ -243,6 +348,30 @@ const registerFcmTokenWithServer = async (fcmToken) => {
             "[FirebaseNotif] FCM token registration error:",
             error?.message,
         );
+        return false;
+    }
+};
+
+const unregisterNotificationTokensWithServer = async () => {
+    try {
+        const authToken = await getAuthToken();
+        if (!authToken) return false;
+
+        const apiURL = buildApiUrl();
+        const response = await fetch(
+            `${apiURL}/auth/unregister-notification-tokens`,
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({}),
+            },
+        );
+
+        return Boolean(response.ok);
+    } catch {
         return false;
     }
 };
@@ -287,6 +416,7 @@ class FirebaseNotificationService {
     _initialized = false;
     _unsubOnMessage = null;
     _unsubOnTokenRefresh = null;
+    _messaging = null;
 
     async initialize() {
         if (this._initialized) return true;
@@ -301,6 +431,9 @@ class FirebaseNotificationService {
         }
 
         const messaging = messagingFactory();
+        this._messaging = messaging;
+
+        await loadPersistedDedupMap();
 
         try {
             await messaging.registerDeviceForRemoteMessages?.();
@@ -308,23 +441,9 @@ class FirebaseNotificationService {
             /* ignore */
         }
 
-        try {
-            const token = await messaging.getToken();
-            if (token) {
-                const prev = await AsyncStorage.getItem(
-                    STORAGE_KEYS.lastFcmToken,
-                );
-                if (prev !== token) {
-                    await AsyncStorage.setItem(
-                        STORAGE_KEYS.lastFcmToken,
-                        token,
-                    );
-                }
-                await registerFcmTokenWithServer(token);
-            }
-        } catch (error) {
-            console.warn("[FirebaseNotif] getToken failed:", error?.message);
-        }
+        await this.syncAuthState().catch((error) => {
+            console.warn("[FirebaseNotif] syncAuthState failed:", error?.message);
+        });
 
         try {
             const check = await validateFcmTokenWithServer();
@@ -343,7 +462,12 @@ class FirebaseNotificationService {
                         STORAGE_KEYS.lastFcmToken,
                         fresh,
                     );
-                    await registerFcmTokenWithServer(fresh);
+                    const { sessionId } = await ensureSession();
+                    await AsyncStorage.setItem(
+                        STORAGE_KEYS.lastRegisteredSessionId,
+                        sessionId,
+                    );
+                    await registerFcmTokenWithServer(fresh, sessionId);
                 }
             }
         } catch {
@@ -354,6 +478,10 @@ class FirebaseNotificationService {
             async (nextToken) => {
                 try {
                     if (!nextToken) return;
+                    const authToken = await getAuthToken();
+                    if (!authToken) return;
+
+                    const { sessionId } = await ensureSession();
                     const prev = await AsyncStorage.getItem(
                         STORAGE_KEYS.lastFcmToken,
                     );
@@ -363,7 +491,11 @@ class FirebaseNotificationService {
                             nextToken,
                         );
                     }
-                    await registerFcmTokenWithServer(nextToken);
+                    await AsyncStorage.setItem(
+                        STORAGE_KEYS.lastRegisteredSessionId,
+                        sessionId,
+                    );
+                    await registerFcmTokenWithServer(nextToken, sessionId);
                 } catch {
                     /* ignore */
                 }
@@ -383,6 +515,10 @@ class FirebaseNotificationService {
          */
         this._unsubOnMessage = messaging.onMessage?.(async (remoteMessage) => {
             try {
+                // ✅ No notifications while logged out (foreground)
+                const authToken = await getAuthToken();
+                if (!authToken) return;
+
                 // FIX: Build stable dedup key
                 const dedupKey = buildDedupKey(remoteMessage);
 
@@ -395,6 +531,19 @@ class FirebaseNotificationService {
                 }
 
                 const data = normalizeData(remoteMessage?.data);
+
+                // ✅ Drop messages from a different login session (prevents stale after logout/login)
+                const incomingSessionId = String(data?.sessionId || "").trim();
+                if (incomingSessionId) {
+                    const { sessionId: currentSessionId } = await ensureSession();
+                    if (incomingSessionId !== currentSessionId) {
+                        console.log(
+                            "[FirebaseNotif] Dropping message from old session",
+                            { dedupKey },
+                        );
+                        return;
+                    }
+                }
 
                 // FIX: Drop stale reminders (device was offline, message is now irrelevant)
                 if (isStaleFcmMessage(data)) {
@@ -436,6 +585,93 @@ class FirebaseNotificationService {
 
         this._initialized = true;
         return true;
+    }
+
+    async syncAuthState({ forceRegister = false } = {}) {
+        const messaging = this._messaging;
+        if (!messaging) return { enabled: false, reason: "no-messaging" };
+
+        const authToken = await getAuthToken();
+        if (!authToken) {
+            // Logged out: best-effort unregister on server + delete local token
+            try {
+                await unregisterNotificationTokensWithServer();
+            } catch {
+                /* ignore */
+            }
+            try {
+                await messaging.deleteToken?.();
+            } catch {
+                /* ignore */
+            }
+
+            await AsyncStorage.multiRemove([
+                STORAGE_KEYS.lastFcmToken,
+                STORAGE_KEYS.lastProcessedNotifications,
+                STORAGE_KEYS.lastRegisteredSessionId,
+            ]).catch(() => {});
+            _recentNotificationIds.clear();
+            return { enabled: false, reason: "logged-out" };
+        }
+
+        const { sessionId } = await ensureSession();
+        const token = await messaging.getToken();
+        if (!token) return { enabled: false, reason: "no-token" };
+
+        const prevToken = await AsyncStorage.getItem(STORAGE_KEYS.lastFcmToken);
+        const prevSession = await AsyncStorage.getItem(
+            STORAGE_KEYS.lastRegisteredSessionId,
+        );
+
+        const shouldRegister =
+            forceRegister || prevToken !== token || prevSession !== sessionId;
+        if (!shouldRegister) return { enabled: true, registered: true };
+
+        await AsyncStorage.setItem(STORAGE_KEYS.lastFcmToken, token);
+        await AsyncStorage.setItem(
+            STORAGE_KEYS.lastRegisteredSessionId,
+            sessionId,
+        );
+
+        const ok = await registerFcmTokenWithServer(token, sessionId);
+        return { enabled: true, registered: ok };
+    }
+
+    async beginLoginSession() {
+        await ensureSession({ rotate: true });
+        await AsyncStorage.removeItem(STORAGE_KEYS.lastProcessedNotifications).catch(
+            () => {},
+        );
+        _recentNotificationIds.clear();
+        return this.syncAuthState({ forceRegister: true });
+    }
+
+    async endLogoutSession() {
+        try {
+            await unregisterNotificationTokensWithServer();
+        } catch {
+            /* ignore */
+        }
+        try {
+            await this._messaging?.deleteToken?.();
+        } catch {
+            /* ignore */
+        }
+        await AsyncStorage.multiRemove([
+            STORAGE_KEYS.lastFcmToken,
+            STORAGE_KEYS.lastProcessedNotifications,
+            STORAGE_KEYS.lastRegisteredSessionId,
+        ]).catch(() => {});
+        _recentNotificationIds.clear();
+        await clearSession().catch(() => {});
+        return true;
+    }
+
+    async resetLocalState() {
+        _recentNotificationIds.clear();
+        await AsyncStorage.removeItem(STORAGE_KEYS.lastProcessedNotifications).catch(
+            () => {},
+        );
     }
 
     cleanup() {

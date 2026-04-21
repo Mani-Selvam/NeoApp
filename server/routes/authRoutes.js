@@ -1703,6 +1703,15 @@ router.post("/logout", verifyToken, async (req, res) => {
     try {
         await User.findByIdAndUpdate(req.userId, {
             $set: { activeSessionId: "" },
+            // ✅ Requirement: no notifications while logged out
+            $unset: {
+                fcmToken: 1,
+                fcmTokenUpdatedAt: 1,
+                fcmSessionId: 1,
+                fcmSessionUpdatedAt: 1,
+                pushToken: 1,
+                lastTokenUpdate: 1,
+            },
         }).catch(() => {});
         clearUserCache(req.userId);
 
@@ -1733,7 +1742,7 @@ router.post("/logout", verifyToken, async (req, res) => {
 // Client sends this after getting FCM token from Firebase
 router.post("/register-fcm-token", verifyToken, async (req, res) => {
     try {
-        const { fcmToken } = req.body;
+        const { fcmToken, sessionId } = req.body;
         const userId = req.user?._id || req.user?.id;
 
         if (!fcmToken) {
@@ -1747,12 +1756,25 @@ router.post("/register-fcm-token", verifyToken, async (req, res) => {
             });
         }
 
+        const sessionIdValue = String(sessionId || "").trim();
+        if (sessionIdValue && (sessionIdValue.length < 6 || sessionIdValue.length > 200)) {
+            return res.status(400).json({
+                error: "Invalid sessionId format",
+            });
+        }
+
         // Update user with FCM token
         const updatedUser = await User.findByIdAndUpdate(
             userId,
             {
                 fcmToken,
                 fcmTokenUpdatedAt: new Date(),
+                ...(sessionIdValue
+                    ? {
+                          fcmSessionId: sessionIdValue,
+                          fcmSessionUpdatedAt: new Date(),
+                      }
+                    : {}),
             },
             { returnDocument: "after" },
         );
@@ -1779,6 +1801,32 @@ router.post("/register-fcm-token", verifyToken, async (req, res) => {
     } catch (error) {
         console.error("[FCM] Error registering FCM token:", error?.message);
         res.status(500).json({ error: "Failed to register FCM token" });
+    }
+});
+
+// Unregister notification tokens (FCM + Expo)
+// Endpoint: POST /api/auth/unregister-notification-tokens
+router.post("/unregister-notification-tokens", verifyToken, async (req, res) => {
+    try {
+        const userId = req.user?._id || req.user?.id || req.userId;
+        await User.findByIdAndUpdate(userId, {
+            $unset: {
+                fcmToken: 1,
+                fcmTokenUpdatedAt: 1,
+                fcmSessionId: 1,
+                fcmSessionUpdatedAt: 1,
+                pushToken: 1,
+                lastTokenUpdate: 1,
+            },
+        }).catch(() => {});
+        clearUserCache(userId);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(
+            "[Auth] Error unregistering notification tokens:",
+            error?.message,
+        );
+        res.status(500).json({ success: false });
     }
 });
 

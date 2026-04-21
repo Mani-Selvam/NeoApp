@@ -158,7 +158,7 @@ const sendActivityReminder = async (
 ) => {
     try {
         const user = await User.findById(userId)
-            .select("fcmToken notificationPreferences")
+            .select("fcmToken notificationPreferences fcmSessionId")
             .lean();
 
         const fcmToken = user?.fcmToken;
@@ -230,6 +230,9 @@ const sendActivityReminder = async (
                 minutesLeft: String(minutesLeft),
                 activityType: String(activityType || ""),
                 voiceLang: lang,
+                // Scope notifications to a login session to avoid stale delivery
+                sessionId: String(user?.fcmSessionId || ""),
+                sentAtMs: String(Date.now()),
                 // Tell the client which Android channel to use for local notifications
                 // (used by the foreground onMessage handler)
                 androidChannelId,
@@ -330,7 +333,9 @@ const sendActivityReminder = async (
  */
 const sendNotification = async (payload, userId, _options = {}) => {
     try {
-        const user = await User.findById(userId).select("fcmToken").lean();
+        const user = await User.findById(userId)
+            .select("fcmToken fcmSessionId")
+            .lean();
         const fcmToken = user?.fcmToken;
         if (!fcmToken) {
             return { success: false, error: "No FCM token" };
@@ -354,6 +359,13 @@ const sendNotification = async (payload, userId, _options = {}) => {
             apns: {
                 payload: { aps: { sound: "default" } },
             },
+        };
+
+        // Append session scoping info (must be strings)
+        message.data = {
+            ...(message.data || {}),
+            sessionId: String(user?.fcmSessionId || ""),
+            sentAtMs: String(Date.now()),
         };
 
         await admin.messaging().send(message);
