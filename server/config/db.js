@@ -7,9 +7,9 @@ const connectDB = async () => {
 
         const conn = await mongoose.connect(mongoURI, {
             serverSelectionTimeoutMS: 5000,
-            socketTimeoutMS: 30000,
-            maxPoolSize: 10, // Pre-establish 10 connections (avoids connection setup delay)
-            minPoolSize: 2, // Keep 2 connections always warm
+            socketTimeoutMS: 45000,
+            maxPoolSize: 100, // Allow 100 concurrent requests to prevent bottleneck
+            minPoolSize: 10, // Keep 10 connections always warm
             compressors: ["zlib"], // Compress data over network (huge for Atlas cloud)
         });
 

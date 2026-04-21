@@ -373,10 +373,11 @@ router.get("/", verifyToken, async (req, res) => {
         // ⚡ Short-lived cache (25s) — invalidated on create/update/delete
         // Skip cache for search queries so results are always fresh
         const cacheTtlMs = search ? 0 : 25000;
+        const roleStr = String(req.user?.role || "").trim().toLowerCase();
         const cacheKey = cache.key("enquiries", {
-            uid: String(req.userId || ""),
+            uid: roleStr === "staff" ? String(req.userId || "") : "company-wide",
             cid: String(req.user?.company_id || ""),
-            role: String(req.user?.role || ""),
+            role: roleStr,
             search: String(search || ""),
             status: String(status || ""),
             date: String(date || ""),

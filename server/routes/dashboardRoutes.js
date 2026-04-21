@@ -242,9 +242,11 @@ router.get("/summary", verifyToken, async (req, res) => {
             date: parsedRef,
         });
 
+        const roleStr = String(req.user?.role || "").trim().toLowerCase();
         const cacheKey = cache.key("dashboard", {
-            userId: req.userId,
-            role: req.user.role,
+            userId: roleStr === "staff" ? req.userId : "company-wide",
+            companyId: req.user?.company_id || "none",
+            role: roleStr,
             range,
             date: toLocalIsoDate(parsedRef),
             rangeFrom,
