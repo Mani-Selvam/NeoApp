@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Animated, Dimensions, Easing, StyleSheet, View } from "react-native";
 import { useAuth } from "../contexts/AuthContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { emitAppEvent, APP_EVENTS } from "../services/appEvents";
 
 const { width, height } = Dimensions.get("window");
 
@@ -127,6 +128,12 @@ export default function TrendingIntroScreen({ navigation }) {
 
     // --- E. Navigation ---
     const timer = setTimeout(() => {
+      // Signal that the intro animation is done so deferred startup tasks
+      // (notification permission, call-log permission, background sync) can
+      // run AFTER the animation — otherwise the system permission dialogs
+      // overlay the intro screen and hide it.
+      emitAppEvent(APP_EVENTS.INTRO_FINISHED);
+
       if (!onboardingCompleted) {
         navigation.replace("Onboarding");
       } else if (isLoggedIn) {

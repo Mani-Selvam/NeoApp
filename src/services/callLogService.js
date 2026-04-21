@@ -3,6 +3,7 @@
  * Frontend service for call log syncing and fetching.
  * Works with react-native-call-log on Android (enterprise builds only).
  */
+import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import getApiClient from "./apiClient";
 import { emitAppEvent } from "./appEvents";
@@ -13,57 +14,93 @@ const CACHE_KEY = "calllog_last_sync_time";
 
 /**
  * Map Android call log type values to CRM enum strings.
- * Android numeric types: 0 = INCOMING, 1 = OUTGOING, 2 = MISSED, 3 = VOICEMAIL, 4 = REJECTED, 5 = BLOCKED
+ *
+ * Android CallLog.Calls constants (canonical):
+ *   1 = INCOMING, 2 = OUTGOING, 3 = MISSED, 4 = VOICEMAIL,
+ *   5 = REJECTED, 6 = BLOCKED, 7 = ANSWERED_EXTERNALLY
+ *
+ * `react-native-call-log` normally returns the string label (e.g. "INCOMING"),
+ * but some forks / Android builds return the raw numeric constant. We accept
+ * both string labels and the Android numeric constants here.
  */
+const normalizeCallType = (typeRaw) => {
+    // Normalize to a comparable string token
+    const token = String(typeRaw ?? "").trim().toUpperCase();
+
+    // String labels from react-native-call-log
+    if (token === "INCOMING") return "incoming";
+    if (token === "OUTGOING") return "outgoing";
+    if (token === "MISSED") return "missed";
+    if (token === "REJECTED") return "rejected";
+    if (token === "BLOCKED") return "rejected";
+    if (token === "VOICEMAIL") return "incoming";
+    if (token === "ANSWERED_EXTERNALLY") return "incoming";
+
+    // Numeric Android constants (as number or numeric string)
+    switch (token) {
+        case "1": return "incoming";
+        case "2": return "outgoing";
+        case "3": return "missed";
+        case "4": return "incoming";  // VOICEMAIL — treat as incoming
+        case "5": return "rejected";
+        case "6": return "rejected";  // BLOCKED
+        case "7": return "incoming";  // ANSWERED_EXTERNALLY
+        default: return null;         // unknown — caller decides fallback
+    }
+};
+
+/**
+ * Returns true only when the raw device type string/number maps to the
+ * INCOMING constant (not MISSED, REJECTED, BLOCKED, VOICEMAIL, etc.).
+ * Used by the duration=0 heuristic so we never overwrite explicit types.
+ */
+const isRawIncoming = (typeRaw) => {
+    const token = String(typeRaw ?? "").trim().toUpperCase();
+    return (
+        token === "INCOMING" ||
+        token === "1" ||
+        token === "VOICEMAIL" ||
+        token === "4" ||
+        token === "ANSWERED_EXTERNALLY" ||
+        token === "7"
+    );
+};
+
 const transformCallData = (rawLogs) => {
     if (!Array.isArray(rawLogs)) return [];
 
     return rawLogs
         .filter((log) => log && log.phoneNumber) // skip logs with no number
         .map((log) => {
-            const typeRaw = log.type;
-
-            let callType = "incoming";
-            if (typeRaw === "OUTGOING" || typeRaw === 1 || typeRaw === "1") {
-                callType = "outgoing";
-            } else if (
-                typeRaw === "MISSED" ||
-                typeRaw === 2 ||
-                typeRaw === "2"
-            ) {
-                callType = "missed";
-            } else if (
-                typeRaw === "INCOMING" ||
-                typeRaw === 0 ||
-                typeRaw === "0"
-            ) {
-                callType = "incoming";
-            } else if (
-                typeRaw === "REJECTED" ||
-                typeRaw === 4 ||
-                typeRaw === "4" ||
-                typeRaw === "BLOCKED" ||
-                typeRaw === 5 ||
-                typeRaw === "5"
-            ) {
-                callType = "rejected";
-            }
+            const mapped = normalizeCallType(log.type);
+            let callType = mapped || "incoming";
 
             const durationSec = parseInt(log.duration || 0, 10);
 
-            // Zero-duration incoming → treat as rejected/missed-ring
-            if (durationSec === 0 && callType === "incoming") {
-                callType = "rejected";
+            // Heuristic: some Android OEMs report unanswered calls as INCOMING
+            // with duration 0 instead of MISSED. ONLY apply when the raw device
+            // type was truly INCOMING (numeric 1) — never override an explicit
+            // REJECTED (5), BLOCKED (6), MISSED (3), OUTGOING (2), etc.
+            // This prevents rejected calls from being incorrectly saved as missed.
+            if (durationSec === 0 && callType === "incoming" && isRawIncoming(log.type)) {
+                callType = "missed";
             }
 
             // Zero-duration outgoing → still counts as outgoing (rang, they didn't pick up)
 
-            // Parse callTime safely — handle invalid dates
+            // Parse callTime safely — handle both ms timestamps and ISO strings
             let callTime = new Date();
             if (log.dateTime) {
+                // react-native-call-log returns dateTime as a millisecond timestamp string
                 const parsed = parseInt(log.dateTime, 10);
                 if (!Number.isNaN(parsed) && parsed > 0) {
                     const dt = new Date(parsed);
+                    if (!Number.isNaN(dt.getTime())) {
+                        callTime = dt;
+                    }
+                } else {
+                    // Try ISO string fallback
+                    const dt = new Date(log.dateTime);
                     if (!Number.isNaN(dt.getTime())) {
                         callTime = dt;
                     }
@@ -215,10 +252,55 @@ export const syncDeviceCallLogs = async () => {
 
         return {
             success: false,
-            error: result?.error || result?.message || "Sync failed",
+            error: result?.error || "Sync failed on backend",
         };
     } catch (err) {
-        console.error("[CallLogService] Sync error:", err.message);
+        console.error("[CallLogService] Sync error:", err);
+        return { success: false, error: err.message };
+    }
+};
+
+/**
+ * Manually log an outgoing call.
+ * Useful for web/browser or when we want to ensure an app-initiated call is recorded
+ * even if the device sync hasn't run yet.
+ *
+ * @param {string} phoneNumber
+ * @param {object} contactInfo - { name, enquiryId, callType }
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+export const logManualCall = async (phoneNumber, { name, enquiryId, callType = "outgoing" } = {}) => {
+    try {
+        console.log(`[CallLogService] Logging manual ${callType}:`, phoneNumber);
+
+        const pseudoLog = {
+            phoneNumber: String(phoneNumber).replace(/\D/g, ""),
+            contactName: name || "Customer",
+            callType: callType,
+            callTime: new Date().toISOString(),
+            duration: 0,
+            uniqueKey: `manual_${Date.now()}_${phoneNumber}_${callType}`,
+            source: "manual",
+            metadata: {
+                isManual: true,
+                enquiryId,
+                clientPlatform: Platform.OS,
+            },
+        };
+
+        const client = await getApiClient();
+        const response = await client.post("/calllogs/sync", {
+            logs: [pseudoLog],
+        });
+
+        const result = response?.data ?? response;
+        if (result?.success !== false) {
+            emitAppEvent("CALL_LOG_SYNCED", { count: 1, timestamp: Date.now() });
+            return { success: true };
+        }
+        return { success: false, error: result?.error || "Logging failed" };
+    } catch (err) {
+        console.error("[CallLogService] Manual log error:", err);
         return { success: false, error: err.message };
     }
 };
@@ -329,7 +411,9 @@ export const formatDuration = (seconds) => {
 };
 
 /**
- * Format a callTime ISO string to {date: "Apr 18", time: "2:30 PM"}
+ * Format a callTime ISO string to {date: "21 Apr", time: "2:30 PM"}
+ * Uses explicit numeric formatting to avoid locale-dependent quirks
+ * (e.g. en-IN sometimes returns lowercase 'am/pm').
  */
 export const formatCallTime = (callTime) => {
     try {
@@ -337,15 +421,29 @@ export const formatCallTime = (callTime) => {
         const dt = new Date(callTime);
         if (Number.isNaN(dt.getTime())) return { date: "N/A", time: "N/A" };
 
-        const date = dt.toLocaleDateString("en-IN", {
-            month: "short",
-            day: "numeric",
-        });
-        const time = dt.toLocaleTimeString("en-IN", {
-            hour: "numeric",
-            minute: "2-digit",
-            hour12: true,
-        });
+        // Build date string manually for consistency across devices
+        const MONTHS = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        const day = dt.getDate();
+        const month = MONTHS[dt.getMonth()];
+        const year = dt.getFullYear();
+        const thisYear = new Date().getFullYear();
+        // Show year only if it's a different year
+        const date = year !== thisYear
+            ? `${day} ${month} ${year}`
+            : `${day} ${month}`;
+
+        // Build time string manually for consistent AM/PM display
+        let hours = dt.getHours();
+        const minutes = dt.getMinutes();
+        const ampm = hours >= 12 ? "PM" : "AM";
+        hours = hours % 12;
+        if (hours === 0) hours = 12;
+        const mm = String(minutes).padStart(2, "0");
+        const time = `${hours}:${mm} ${ampm}`;
+
         return { date, time };
     } catch {
         return { date: "N/A", time: "N/A" };
@@ -356,6 +454,7 @@ export const formatCallTime = (callTime) => {
 
 export default {
     syncDeviceCallLogs,
+    logManualCall,
     getCallLogsByPhone,
     getLastSyncTime,
     setLastSyncTime,

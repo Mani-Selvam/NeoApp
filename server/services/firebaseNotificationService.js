@@ -189,8 +189,8 @@ const sendActivityReminder = async (
             minutesLeft < 0
                 ? "followup-missed"
                 : minutesLeft === 0
-                  ? "followup-due"
-                  : "followup-soon";
+                    ? "followup-due"
+                    : "followup-soon";
 
         /**
          * FIX BUG 2: The FCM message MUST contain a `notification` field.
@@ -317,7 +317,7 @@ const sendActivityReminder = async (
             );
             await User.findByIdAndUpdate(userId, {
                 $unset: { fcmToken: 1 },
-            }).catch(() => {});
+            }).catch(() => { });
         }
 
         console.error(`[FCMService] ✗ Send failed for user ${userId}:`, msg);
@@ -349,11 +349,11 @@ const sendNotification = async (payload, userId, _options = {}) => {
             },
             data: payload.data
                 ? Object.fromEntries(
-                      Object.entries(payload.data).map(([k, v]) => [
-                          k,
-                          typeof v === "string" ? v : String(v),
-                      ]),
-                  )
+                    Object.entries(payload.data).map(([k, v]) => [
+                        k,
+                        typeof v === "string" ? v : String(v),
+                    ]),
+                )
                 : {},
             android: { priority: "high" },
             apns: {
@@ -401,11 +401,11 @@ const sendToUsers = async (userIds, payload, _options = {}) => {
             },
             data: payload.data
                 ? Object.fromEntries(
-                      Object.entries(payload.data).map(([k, v]) => [
-                          k,
-                          typeof v === "string" ? v : String(v),
-                      ]),
-                  )
+                    Object.entries(payload.data).map(([k, v]) => [
+                        k,
+                        typeof v === "string" ? v : String(v),
+                    ]),
+                )
                 : {},
             android: { priority: "high" },
             apns: {

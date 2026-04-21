@@ -458,7 +458,7 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
                     keyExtractor={(item, index) =>
                         String(
                             item?._id ||
-                                `${item?.phoneNumber || "call"}-${item?.callTime || index}`,
+                            `${item?.phoneNumber || "call"}-${item?.callTime || index}`,
                         )
                     }
                     refreshControl={
@@ -480,14 +480,14 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
                             type === "Missed"
                                 ? "close-circle-outline"
                                 : type === "Incoming"
-                                  ? "arrow-down-circle-outline"
-                                  : "arrow-up-circle-outline";
+                                    ? "arrow-down-circle-outline"
+                                    : "arrow-up-circle-outline";
                         const color =
                             type === "Missed"
                                 ? C.danger
                                 : type === "Incoming"
-                                  ? C.info
-                                  : C.success;
+                                    ? C.info
+                                    : C.success;
                         return (
                             <View style={DV.callRowCard}>
                                 <View
@@ -517,8 +517,8 @@ function FollowUpCallPanel({ enquiry, onCallPress, refreshKey = 0 }) {
                                             ? `Duration: ${formatCallDuration(item.callDuration)}`
                                             : item?.callType === "missed" ||
                                                 item?.callType === "rejected"
-                                              ? "Not answered"
-                                              : "0s"}
+                                                ? "Not answered"
+                                                : "0s"}
                                     </Text>
                                     {!!item?.note && (
                                         <Text
@@ -585,8 +585,8 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
                 const items = Array.isArray(result?.templates)
                     ? result.templates
                     : Array.isArray(result?.data)
-                      ? result.data
-                      : [];
+                        ? result.data
+                        : [];
                 setTemplates(items);
             } catch (_error) {
                 if (active) setTemplates([]);
@@ -623,8 +623,8 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
                 const items = Array.isArray(result?.logs)
                     ? result.logs
                     : Array.isArray(result?.data)
-                      ? result.data
-                      : [];
+                        ? result.data
+                        : [];
                 const filtered = items.filter((item) => {
                     const sameEnquiry =
                         enquiry?._id && item?.enquiryId
@@ -633,7 +633,7 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
                     const sameEmail =
                         enquiry?.email && item?.to
                             ? String(item.to).toLowerCase() ===
-                              String(enquiry.email).toLowerCase()
+                            String(enquiry.email).toLowerCase()
                             : false;
                     return sameEnquiry || sameEmail;
                 });
@@ -669,15 +669,15 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
             const items = Array.isArray(tmpl?.templates)
                 ? tmpl.templates
                 : Array.isArray(tmpl?.data)
-                  ? tmpl.data
-                  : [];
+                    ? tmpl.data
+                    : [];
             setTemplates(items);
 
             const logsItems = Array.isArray(result?.logs)
                 ? result.logs
                 : Array.isArray(result?.data)
-                  ? result.data
-                  : [];
+                    ? result.data
+                    : [];
             const filtered = logsItems.filter((item) => {
                 const sameEnquiry =
                     enquiry?._id && item?.enquiryId
@@ -686,7 +686,7 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
                 const sameEmail =
                     enquiry?.email && item?.to
                         ? String(item.to).toLowerCase() ===
-                          String(enquiry.email).toLowerCase()
+                        String(enquiry.email).toLowerCase()
                         : false;
                 return sameEnquiry || sameEmail;
             });
@@ -784,8 +784,8 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
             const items = Array.isArray(result?.logs)
                 ? result.logs
                 : Array.isArray(result?.data)
-                  ? result.data
-                  : [];
+                    ? result.data
+                    : [];
             const filtered = items.filter((item) => {
                 const sameEnquiry =
                     enquiry?._id && item?.enquiryId
@@ -794,7 +794,7 @@ function FollowUpEmailPanel({ enquiry, refreshKey = 0 }) {
                 const sameEmail =
                     enquiry?.email && item?.to
                         ? String(item.to).toLowerCase() ===
-                          String(enquiry.email).toLowerCase()
+                        String(enquiry.email).toLowerCase()
                         : false;
                 return sameEnquiry || sameEmail;
             });
@@ -1067,10 +1067,10 @@ const fmtDate = (v) => {
     return isNaN(d.getTime())
         ? v
         : d.toLocaleDateString(undefined, {
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-          });
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+        });
 };
 const fmtMonthYear = (v) => {
     if (!v) return "Select month";
@@ -1078,9 +1078,9 @@ const fmtMonthYear = (v) => {
     return isNaN(d.getTime())
         ? v
         : d.toLocaleDateString(undefined, {
-              month: "short",
-              year: "numeric",
-          });
+            month: "short",
+            year: "numeric",
+        });
 };
 const getInitials = (n = "") => n.substring(0, 2).toUpperCase() || "NA";
 const avatarGrad = (name = "") => {
@@ -1334,11 +1334,11 @@ const getHistoryEditStatus = (item = {}) => {
 const getHistorySortTs = (item = {}) =>
     toTs(
         item?.updatedAt ||
-            item?.createdAt ||
-            item?.nextFollowUpDate ||
-            item?.followUpDate ||
-            item?.date ||
-            item?.enquiryDateTime,
+        item?.createdAt ||
+        item?.nextFollowUpDate ||
+        item?.followUpDate ||
+        item?.date ||
+        item?.enquiryDateTime,
     );
 const getFallbackEnquiryStatusFromHistory = (items = []) => {
     if (!Array.isArray(items) || items.length === 0) return "Contacted";
@@ -1404,7 +1404,7 @@ const getCalendarSummaryBucket = (item = {}) => {
                 }
             }
         }
-    } catch {}
+    } catch { }
 
     if (status === "Missed") return "missed";
     if (["New", "Contacted", "Interested"].includes(status)) return "followup";
@@ -1482,8 +1482,8 @@ const getTabUniqueCount = async (
             const enquiryItems = Array.isArray(enquiryResponse?.data)
                 ? enquiryResponse.data
                 : Array.isArray(enquiryResponse)
-                  ? enquiryResponse
-                  : [];
+                    ? enquiryResponse
+                    : [];
             const allowedStatusSet = new Set(
                 allowedStatuses.map((status) => normalizeStatus(status)),
             );
@@ -1516,8 +1516,8 @@ const getTabUniqueCount = async (
         const rawItems = Array.isArray(response?.data)
             ? response.data
             : Array.isArray(response)
-              ? response
-              : [];
+                ? response
+                : [];
         // FIX #3: Just count without dedup for performance
         let count = rawItems.length;
 
@@ -1535,17 +1535,17 @@ const getTabUniqueCount = async (
                 const enquiryItems = Array.isArray(enquiryResponse?.data)
                     ? enquiryResponse.data
                     : Array.isArray(enquiryResponse)
-                      ? enquiryResponse
-                      : [];
+                        ? enquiryResponse
+                        : [];
                 const followupKeys = new Set(
                     rawItems
                         .map((item) =>
                             String(
                                 item?.enqId ||
-                                    item?.enquiryId ||
-                                    item?.enqNo ||
-                                    item?._id ||
-                                    "",
+                                item?.enquiryId ||
+                                item?.enqNo ||
+                                item?._id ||
+                                "",
                             ).trim(),
                         )
                         .filter(Boolean),
@@ -1661,8 +1661,8 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                     backgroundColor: missedAlert
                                         ? C.danger
                                         : overdueAlert
-                                          ? C.danger
-                                          : sCfg.color,
+                                            ? C.danger
+                                            : sCfg.color,
                                     borderTopLeftRadius: sc.cardR,
                                     borderBottomLeftRadius: sc.cardR,
                                 },
@@ -1830,14 +1830,14 @@ const FUCard = React.memo(function FUCard({ item, index, onSwipe, sc }) {
                                             (item.isVirtualNew
                                                 ? "No follow-up yet"
                                                 : safeDate(
-                                                      item.lastContactedAt ||
-                                                          item.enquiryDateTime ||
-                                                          item.createdAt,
-                                                      {
-                                                          month: "short",
-                                                          day: "numeric",
-                                                      },
-                                                  ))}
+                                                    item.lastContactedAt ||
+                                                    item.enquiryDateTime ||
+                                                    item.createdAt,
+                                                    {
+                                                        month: "short",
+                                                        day: "numeric",
+                                                    },
+                                                ))}
                                     </Text>
                                 </View>
                                 {(missedAlert || overdueAlert) && (
@@ -2492,7 +2492,7 @@ const DetailView = ({
                                         label: "Created",
                                         value: safeLocale(
                                             enquiry.enquiryDateTime ||
-                                                enquiry.createdAt,
+                                            enquiry.createdAt,
                                         ),
                                         icon: "calendar-outline",
                                     },
@@ -2792,15 +2792,15 @@ const DetailView = ({
                                                                         a;
                                                                     const icon =
                                                                         a ===
-                                                                        "Phone Call"
+                                                                            "Phone Call"
                                                                             ? "call-outline"
                                                                             : a ===
                                                                                 "WhatsApp"
-                                                                              ? "logo-whatsapp"
-                                                                              : a ===
-                                                                                  "Email"
-                                                                                ? "mail-outline"
-                                                                                : "people-outline";
+                                                                                ? "logo-whatsapp"
+                                                                                : a ===
+                                                                                    "Email"
+                                                                                    ? "mail-outline"
+                                                                                    : "people-outline";
                                                                     return (
                                                                         <TouchableOpacity
                                                                             key={
@@ -2972,129 +2972,129 @@ const DetailView = ({
                                                         ].includes(
                                                             editStatus,
                                                         ) && (
-                                                            <>
-                                                                <Text
-                                                                    style={
-                                                                        FU.label
-                                                                    }>
-                                                                    Next Follow
-                                                                    Up Date *
-                                                                </Text>
-                                                                <TouchableOpacity
-                                                                    style={
-                                                                        FU.datePicker
-                                                                    }
-                                                                    onPress={() =>
-                                                                        showDatePicker(
-                                                                            "add",
-                                                                        )
-                                                                    }>
-                                                                    <Ionicons
-                                                                        name="calendar-outline"
-                                                                        size={
-                                                                            18
-                                                                        }
-                                                                        color={
-                                                                            C.primary
-                                                                        }
-                                                                    />
+                                                                <>
                                                                     <Text
-                                                                        style={[
-                                                                            FU.dateText,
-                                                                            !editNextDate && {
-                                                                                color: C.textLight,
-                                                                            },
-                                                                        ]}>
-                                                                        {editNextDate ||
-                                                                            "Select date"}
+                                                                        style={
+                                                                            FU.label
+                                                                        }>
+                                                                        Next Follow
+                                                                        Up Date *
                                                                     </Text>
-                                                                </TouchableOpacity>
-                                                                {editNextDate && (
-                                                                    <>
+                                                                    <TouchableOpacity
+                                                                        style={
+                                                                            FU.datePicker
+                                                                        }
+                                                                        onPress={() =>
+                                                                            showDatePicker(
+                                                                                "add",
+                                                                            )
+                                                                        }>
+                                                                        <Ionicons
+                                                                            name="calendar-outline"
+                                                                            size={
+                                                                                18
+                                                                            }
+                                                                            color={
+                                                                                C.primary
+                                                                            }
+                                                                        />
                                                                         <Text
-                                                                            style={
-                                                                                FU.label
-                                                                            }>
-                                                                            Time
+                                                                            style={[
+                                                                                FU.dateText,
+                                                                                !editNextDate && {
+                                                                                    color: C.textLight,
+                                                                                },
+                                                                            ]}>
+                                                                            {editNextDate ||
+                                                                                "Select date"}
                                                                         </Text>
-                                                                        <View
-                                                                            style={
-                                                                                FU.datePicker
-                                                                            }>
-                                                                            <Ionicons
-                                                                                name="time-outline"
-                                                                                size={
-                                                                                    18
-                                                                                }
-                                                                                color={
-                                                                                    C.primary
-                                                                                }
-                                                                            />
+                                                                    </TouchableOpacity>
+                                                                    {editNextDate && (
+                                                                        <>
                                                                             <Text
-                                                                                style={[
-                                                                                    FU.dateText,
-                                                                                    !editNextTime && {
-                                                                                        color: C.textLight,
-                                                                                    },
-                                                                                ]}>
-                                                                                {editNextTime ||
-                                                                                    "Auto-selected"}
+                                                                                style={
+                                                                                    FU.label
+                                                                                }>
+                                                                                Time
                                                                             </Text>
-                                                                        </View>
-                                                                        {isTimePickerVisible &&
-                                                                            Platform.OS !==
-                                                                                "web" && (
-                                                                                <DateTimePicker
-                                                                                    value={
-                                                                                        timePickerValue
+                                                                            <View
+                                                                                style={
+                                                                                    FU.datePicker
+                                                                                }>
+                                                                                <Ionicons
+                                                                                    name="time-outline"
+                                                                                    size={
+                                                                                        18
                                                                                     }
-                                                                                    mode="time"
-                                                                                    is24Hour={
-                                                                                        false
-                                                                                    }
-                                                                                    display="default"
-                                                                                    onChange={
-                                                                                        handleConfirmTime
+                                                                                    color={
+                                                                                        C.primary
                                                                                     }
                                                                                 />
-                                                                            )}
-                                                                    </>
-                                                                )}
-                                                            </>
-                                                        )}
+                                                                                <Text
+                                                                                    style={[
+                                                                                        FU.dateText,
+                                                                                        !editNextTime && {
+                                                                                            color: C.textLight,
+                                                                                        },
+                                                                                    ]}>
+                                                                                    {editNextTime ||
+                                                                                        "Auto-selected"}
+                                                                                </Text>
+                                                                            </View>
+                                                                            {isTimePickerVisible &&
+                                                                                Platform.OS !==
+                                                                                "web" && (
+                                                                                    <DateTimePicker
+                                                                                        value={
+                                                                                            timePickerValue
+                                                                                        }
+                                                                                        mode="time"
+                                                                                        is24Hour={
+                                                                                            false
+                                                                                        }
+                                                                                        display="default"
+                                                                                        onChange={
+                                                                                            handleConfirmTime
+                                                                                        }
+                                                                                    />
+                                                                                )}
+                                                                        </>
+                                                                    )}
+                                                                </>
+                                                            )}
                                                     </View>
 
                                                     {editStatus ===
                                                         "Converted" && (
-                                                        <View
-                                                            style={
-                                                                FU.sectionCard
-                                                            }>
-                                                            <Text
+                                                            <View
                                                                 style={
-                                                                    FU.label
+                                                                    FU.sectionCard
                                                                 }>
-                                                                Amount (₹) *
-                                                            </Text>
-                                                            <FloatingInput
-                                                                label="Amount"
-                                                                value={
-                                                                    editAmount
-                                                                }
-                                                                onChangeText={
-                                                                    setEditAmount
-                                                                }
-                                                                placeholder="0.00"
-                                                                keyboardType="numeric"
-                                                                containerStyle={{
-                                                                    marginTop: 4,
-                                                                }}
-                                                                inputStyle={{
-                                                                    minHeight: 46,
-                                                                }}
-                                                            />
-                                                        </View>
-                                                    )}
+                                                                <Text
+                                                                    style={
+                                                                        FU.label
+                                                                    }>
+                                                                    Amount (₹) *
+                                                                </Text>
+                                                                <FloatingInput
+                                                                    label="Amount"
+                                                                    value={
+                                                                        editAmount
+                                                                    }
+                                                                    onChangeText={
+                                                                        setEditAmount
+                                                                    }
+                                                                    placeholder="0.00"
+                                                                    keyboardType="numeric"
+                                                                    containerStyle={{
+                                                                        marginTop: 4,
+                                                                    }}
+                                                                    inputStyle={{
+                                                                        minHeight: 46,
+                                                                    }}
+                                                                />
+                                                            </View>
+                                                        )}
 
                                                     <TouchableOpacity
                                                         onPress={onSaveFollowUp}
@@ -3106,9 +3106,9 @@ const DetailView = ({
                                                             colors={
                                                                 isSavingEdit
                                                                     ? [
-                                                                          "#ccc",
-                                                                          "#bbb",
-                                                                      ]
+                                                                        "#ccc",
+                                                                        "#bbb",
+                                                                    ]
                                                                     : GRAD.primary
                                                             }
                                                             style={
@@ -3124,8 +3124,8 @@ const DetailView = ({
                                                                 {isSavingEdit
                                                                     ? "Saving…"
                                                                     : editFollowUpId
-                                                                      ? "Update Scheduled Follow-up"
-                                                                      : "Create Follow-up"}
+                                                                        ? "Update Scheduled Follow-up"
+                                                                        : "Create Follow-up"}
                                                             </Text>
                                                         </LinearGradient>
                                                     </TouchableOpacity>
@@ -3185,7 +3185,7 @@ const DetailView = ({
                                                 timelineRows.map((h, i) => {
                                                     const tc = getTypeIcon(
                                                         h.type ||
-                                                            h.activityType,
+                                                        h.activityType,
                                                     );
                                                     const nextDate =
                                                         h.nextFollowUpDate ||
@@ -3245,12 +3245,12 @@ const DetailView = ({
                                                                         );
                                                                     const meridiem =
                                                                         hours24 >=
-                                                                        12
+                                                                            12
                                                                             ? "PM"
                                                                             : "AM";
                                                                     const displayHours =
                                                                         hours24 %
-                                                                            12 ||
+                                                                        12 ||
                                                                         12;
                                                                     time = `${displayHours}:${minutes} ${meridiem}`;
                                                                 } else {
@@ -3274,7 +3274,7 @@ const DetailView = ({
                                                                         : "AM";
                                                                 const displayHours =
                                                                     hours %
-                                                                        12 ||
+                                                                    12 ||
                                                                     12;
                                                                 time = `${displayHours}:${minutes} ${meridiem}`;
                                                             }
@@ -3396,24 +3396,24 @@ const DetailView = ({
                                                                                             ) {
                                                                                                 const nextAction =
                                                                                                     fallbackStatus ===
-                                                                                                    "Converted"
+                                                                                                        "Converted"
                                                                                                         ? "Sales"
                                                                                                         : [
-                                                                                                                "Not Interested",
-                                                                                                                "Closed",
-                                                                                                            ].includes(
-                                                                                                                fallbackStatus,
-                                                                                                            )
-                                                                                                          ? "Drop"
-                                                                                                          : "Followup";
+                                                                                                            "Not Interested",
+                                                                                                            "Closed",
+                                                                                                        ].includes(
+                                                                                                            fallbackStatus,
+                                                                                                        )
+                                                                                                            ? "Drop"
+                                                                                                            : "Followup";
                                                                                                 const restoredFollowUpStatus =
                                                                                                     nextAction ===
-                                                                                                    "Followup"
+                                                                                                        "Followup"
                                                                                                         ? "Scheduled"
                                                                                                         : nextAction ===
                                                                                                             "Drop"
-                                                                                                          ? "Drop"
-                                                                                                          : "Completed";
+                                                                                                            ? "Drop"
+                                                                                                            : "Completed";
                                                                                                 await followupService.updateFollowUp(
                                                                                                     fallbackFollowUpId,
                                                                                                     {
@@ -3481,9 +3481,9 @@ const DetailView = ({
                                                             style={[
                                                                 FU.timelineCard,
                                                                 i <
-                                                                    timelineRows.length -
-                                                                        1 &&
-                                                                    FU.timelineCardGap,
+                                                                timelineRows.length -
+                                                                1 &&
+                                                                FU.timelineCardGap,
                                                             ]}>
                                                             <View
                                                                 style={[
@@ -3573,9 +3573,9 @@ const DetailView = ({
                                                                             style={[
                                                                                 FU.timelineEditBtn,
                                                                                 deletingFollowUpId ===
-                                                                                    (h?.followupId ||
-                                                                                        h?.id ||
-                                                                                        h?._id) && {
+                                                                                (h?.followupId ||
+                                                                                    h?.id ||
+                                                                                    h?._id) && {
                                                                                     opacity: 0.5,
                                                                                 },
                                                                             ]}
@@ -3606,9 +3606,9 @@ const DetailView = ({
                                                                         style={[
                                                                             FU.timelineDeleteBtn,
                                                                             deletingFollowUpId ===
-                                                                                (h?.followupId ||
-                                                                                    h?.id ||
-                                                                                    h?._id) && {
+                                                                            (h?.followupId ||
+                                                                                h?.id ||
+                                                                                h?._id) && {
                                                                                 opacity: 0.5,
                                                                             },
                                                                         ]}
@@ -3616,9 +3616,9 @@ const DetailView = ({
                                                                             0.7
                                                                         }>
                                                                         {deletingFollowUpId ===
-                                                                        (h?.followupId ||
-                                                                            h?.id ||
-                                                                            h?._id) ? (
+                                                                            (h?.followupId ||
+                                                                                h?.id ||
+                                                                                h?._id) ? (
                                                                             <ActivityIndicator
                                                                                 size="small"
                                                                                 color={
@@ -4615,7 +4615,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 if (showMissedModal) {
                     await loadMissedModalItems(selectedDate);
                 }
-            } catch {}
+            } catch { }
         };
 
         tick();
@@ -4684,7 +4684,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 allowCache: false,
                 selectedDate: focusDate,
             });
-            fetchTabCounts(selectedDate).catch(() => {});
+            fetchTabCounts(selectedDate).catch(() => { });
             if (showMissedModal) loadMissedModalItems(selectedDate);
         };
 
@@ -4715,7 +4715,7 @@ export default function FollowUpScreen({ navigation, route }) {
         useCallback(() => {
             Promise.resolve(
                 notificationService.acknowledgeHourlyFollowUpReminders?.(),
-            ).catch(() => {});
+            ).catch(() => { });
             const fd = route.params?.focusDate
                 ? String(route.params.focusDate)
                 : "";
@@ -4745,7 +4745,7 @@ export default function FollowUpScreen({ navigation, route }) {
                             allowCache: true,
                         }),
                     )
-                    .catch(() => {});
+                    .catch(() => { });
             }
         }, [activeTab, route.params?.focusDate]),
     );
@@ -4871,8 +4871,8 @@ export default function FollowUpScreen({ navigation, route }) {
                                 if (!status?.enabled) return;
                                 await callLogService.syncDeviceCallLogs();
                             })
-                            .catch(() => {});
-                    } catch {}
+                            .catch(() => { });
+                    } catch { }
                 }
 
                 setCallEnquiry(null);
@@ -4902,9 +4902,9 @@ export default function FollowUpScreen({ navigation, route }) {
                         } = require("../utils/callLogPermissions");
                         const status = await requestAndCheckCallLog();
                         if (status?.enabled) {
-                            callLogService.syncDeviceCallLogs().catch(() => {});
+                            callLogService.syncDeviceCallLogs().catch(() => { });
                         }
-                    } catch {}
+                    } catch { }
                 }
                 setCallEnquiry(null);
                 setCallStarted(false);
@@ -4929,7 +4929,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 showIndicator: false,
                 allowCache: false,
             });
-            if (refreshCounts) fetchTabCounts(selectedDate).catch(() => {});
+            if (refreshCounts) fetchTabCounts(selectedDate).catch(() => { });
             if (refreshModals) {
                 if (showMissedModal) loadMissedModalItems(selectedDate);
                 if (showDroppedModal) loadDroppedModalItems();
@@ -4993,27 +4993,27 @@ export default function FollowUpScreen({ navigation, route }) {
                     ),
                     referenceDate === todayIso
                         ? followupService.getFollowUps(
-                              "Today",
-                              1,
-                              50,
-                              referenceDate,
-                          )
+                            "Today",
+                            1,
+                            50,
+                            referenceDate,
+                        )
                         : Promise.resolve(null),
                 ]);
 
                 const missedRaw = Array.isArray(missedRes?.data)
                     ? missedRes.data
                     : Array.isArray(missedRes)
-                      ? missedRes
-                      : [];
+                        ? missedRes
+                        : [];
 
                 if (referenceDate !== todayIso) return missedRaw.length;
 
                 const todayRaw = Array.isArray(todayRes?.data)
                     ? todayRes.data
                     : Array.isArray(todayRes)
-                      ? todayRes
-                      : [];
+                        ? todayRes
+                        : [];
 
                 const ids = new Set(
                     missedRaw
@@ -5074,36 +5074,36 @@ export default function FollowUpScreen({ navigation, route }) {
                 followupService.getFollowUps("Missed", 1, 50, referenceDate),
                 referenceDate === todayIso
                     ? followupService.getFollowUps(
-                          "Today",
-                          1,
-                          50,
-                          referenceDate,
-                      )
+                        "Today",
+                        1,
+                        50,
+                        referenceDate,
+                    )
                     : Promise.resolve(null),
             ]);
 
             const missedRawItems = Array.isArray(missedResponse?.data)
                 ? missedResponse.data
                 : Array.isArray(missedResponse)
-                  ? missedResponse
-                  : [];
+                    ? missedResponse
+                    : [];
 
             const todayRawItems =
                 referenceDate === todayIso
                     ? Array.isArray(todayResponse?.data)
                         ? todayResponse.data
                         : Array.isArray(todayResponse)
-                          ? todayResponse
-                          : []
+                            ? todayResponse
+                            : []
                     : [];
 
             const realtimeMissedItems =
                 referenceDate === todayIso
                     ? todayRawItems.filter(
-                          (item) =>
-                              getFollowUpCalendarDate(item) === referenceDate &&
-                              getCalendarSummaryBucket(item) === "missed",
-                      )
+                        (item) =>
+                            getFollowUpCalendarDate(item) === referenceDate &&
+                            getCalendarSummaryBucket(item) === "missed",
+                    )
                     : [];
 
             const rawItems = [...missedRawItems, ...realtimeMissedItems];
@@ -5127,8 +5127,8 @@ export default function FollowUpScreen({ navigation, route }) {
             const rawItems = Array.isArray(response?.data)
                 ? response.data
                 : Array.isArray(response)
-                  ? response
-                  : [];
+                    ? response
+                    : [];
             const items = dedupeByLatestActivity(
                 rawItems.map(mapFollowUpItemToEnquiryCard),
             );
@@ -5252,8 +5252,8 @@ export default function FollowUpScreen({ navigation, route }) {
                         const data = Array.isArray(enquiryRes?.data)
                             ? enquiryRes.data
                             : Array.isArray(enquiryRes)
-                              ? enquiryRes
-                              : [];
+                                ? enquiryRes
+                                : [];
                         const total = Array.isArray(enquiryRes)
                             ? 1
                             : Number(enquiryRes?.pagination?.pages || 1);
@@ -5273,8 +5273,8 @@ export default function FollowUpScreen({ navigation, route }) {
                         const data = Array.isArray(res?.data)
                             ? res.data
                             : Array.isArray(res)
-                              ? res
-                              : [];
+                                ? res
+                                : [];
                         const total = Array.isArray(res)
                             ? 1
                             : Number(res?.pagination?.pages || 1);
@@ -5299,8 +5299,8 @@ export default function FollowUpScreen({ navigation, route }) {
                                 )
                                     ? enquiryRes.data
                                     : Array.isArray(enquiryRes)
-                                      ? enquiryRes
-                                      : [];
+                                        ? enquiryRes
+                                        : [];
                                 const newOnlyItems = enquiryItems
                                     .filter((item) => !item?.latestFollowUpDate)
                                     .map(mapEnquiryToFollowUpCard);
@@ -5331,7 +5331,7 @@ export default function FollowUpScreen({ navigation, route }) {
                         cacheKey,
                         { items, hasMore, page: nextPage },
                         { tags: ["followups"] },
-                    ).catch(() => {});
+                    ).catch(() => { });
 
                     console.log(
                         `[FollowUpScreen] Prefetched ${tabName}: ${items.length} items`,
@@ -5436,19 +5436,19 @@ export default function FollowUpScreen({ navigation, route }) {
                         ),
                         loadMissedAlertForToday
                             ? followupService.getFollowUps(
-                                  "Today",
-                                  1,
-                                  300,
-                                  effectiveSelectedDate,
-                              )
+                                "Today",
+                                1,
+                                300,
+                                effectiveSelectedDate,
+                            )
                             : Promise.resolve(null),
                         loadMissedAlertForToday
                             ? followupService.getFollowUps(
-                                  "Missed",
-                                  1,
-                                  300,
-                                  effectiveSelectedDate,
-                              )
+                                "Missed",
+                                1,
+                                300,
+                                effectiveSelectedDate,
+                            )
                             : Promise.resolve(null),
                     ],
                 );
@@ -5474,8 +5474,8 @@ export default function FollowUpScreen({ navigation, route }) {
                         Array.isArray(res?.data)
                             ? res.data
                             : Array.isArray(res)
-                              ? res
-                              : [];
+                                ? res
+                                : [];
                     const fuItems = [...pick(todayFuRes), ...pick(missedFuRes)];
                     for (const fu of fuItems) {
                         try {
@@ -5536,7 +5536,7 @@ export default function FollowUpScreen({ navigation, route }) {
                         page: nextPage,
                     },
                     { tags: ["followups"] },
-                ).catch(() => {});
+                ).catch(() => { });
                 return;
             }
             const requestParams = tab === "All" ? monthRange : {};
@@ -5578,16 +5578,16 @@ export default function FollowUpScreen({ navigation, route }) {
                     const enquiryItems = Array.isArray(enquiryRes?.data)
                         ? enquiryRes.data
                         : Array.isArray(enquiryRes)
-                          ? enquiryRes
-                          : [];
+                            ? enquiryRes
+                            : [];
                     const existingKeys = new Set(
                         (data || [])
                             .map((item) =>
                                 String(
                                     item?.enqId ||
-                                        item?.enqNo ||
-                                        item?._id ||
-                                        "",
+                                    item?.enqNo ||
+                                    item?._id ||
+                                    "",
                                 ).trim(),
                             )
                             .filter(Boolean),
@@ -5652,7 +5652,7 @@ export default function FollowUpScreen({ navigation, route }) {
                     page: nextPage,
                 },
                 { tags: ["followups"] },
-            ).catch(() => {});
+            ).catch(() => { });
         } catch (e) {
             // FIX #5: Handle AbortError silently (expected when request cancelled)
             if (e?.name === "AbortError") {
@@ -5828,8 +5828,8 @@ export default function FollowUpScreen({ navigation, route }) {
             debounceByKey(
                 "followup-detail-refresh",
                 () => {
-                    Promise.resolve(refreshDetailEnquiry?.()).catch(() => {});
-                    Promise.resolve(refreshDetailHistory?.()).catch(() => {});
+                    Promise.resolve(refreshDetailEnquiry?.()).catch(() => { });
+                    Promise.resolve(refreshDetailHistory?.()).catch(() => { });
                 },
                 250,
             );
@@ -5898,8 +5898,8 @@ export default function FollowUpScreen({ navigation, route }) {
             const sourceFollowUpId = detailSourceFollowUpIdRef.current;
             const sourceHistoryRow = Array.isArray(detailHistory)
                 ? detailHistory.find(
-                      (row) => getFollowUpDocumentId(row) === sourceFollowUpId,
-                  )
+                    (row) => getFollowUpDocumentId(row) === sourceFollowUpId,
+                )
                 : null;
             const isRescheduleFromMissed =
                 !editFollowUpId &&
@@ -5931,14 +5931,14 @@ export default function FollowUpScreen({ navigation, route }) {
                 effectiveStatus === "Converted"
                     ? "Sales"
                     : ["Not Interested", "Closed"].includes(effectiveStatus)
-                      ? "Drop"
-                      : "Followup";
+                        ? "Drop"
+                        : "Followup";
             const fuState =
                 nextAction === "Sales"
                     ? "Completed"
                     : nextAction === "Drop"
-                      ? "Drop"
-                      : "Scheduled";
+                        ? "Drop"
+                        : "Scheduled";
             const payload = {
                 enqId: selectedEnquiry._id,
                 enqNo: selectedEnquiry.enqNo,
@@ -5960,11 +5960,11 @@ export default function FollowUpScreen({ navigation, route }) {
                 status: fuState,
                 ...(effectiveStatus === "Converted"
                     ? {
-                          amount:
-                              Number(
-                                  editAmount.toString().replace(/[^0-9.]/g, ""),
-                              ) || 0,
-                      }
+                        amount:
+                            Number(
+                                editAmount.toString().replace(/[^0-9.]/g, ""),
+                            ) || 0,
+                    }
                     : {}),
             };
             if (isRescheduleFromMissed) {
@@ -5996,14 +5996,14 @@ export default function FollowUpScreen({ navigation, route }) {
                     status: effectiveStatus,
                     ...(effectiveStatus === "Converted"
                         ? {
-                              cost:
-                                  Number(
-                                      editAmount
-                                          .toString()
-                                          .replace(/[^0-9.]/g, ""),
-                                  ) || 0,
-                              conversionDate: new Date(),
-                          }
+                            cost:
+                                Number(
+                                    editAmount
+                                        .toString()
+                                        .replace(/[^0-9.]/g, ""),
+                                ) || 0,
+                            conversionDate: new Date(),
+                        }
                         : {}),
                 },
             );
@@ -6013,7 +6013,7 @@ export default function FollowUpScreen({ navigation, route }) {
                     enqId: selectedEnquiry._id,
                     enqNo: selectedEnquiry.enqNo,
                 }),
-            ).catch(() => {});
+            ).catch(() => { });
             // FIX #15b: Emit event so listeners refresh the list
             emitEnquiryUpdated();
 
@@ -6023,8 +6023,8 @@ export default function FollowUpScreen({ navigation, route }) {
                 focusDate === today
                     ? "Today"
                     : tabUsesExactDateFilter(activeTab)
-                      ? activeTab
-                      : "All";
+                        ? activeTab
+                        : "All";
 
             if (isRescheduleFromMissed) {
                 setShowMissedModal(false);
@@ -6125,7 +6125,7 @@ export default function FollowUpScreen({ navigation, route }) {
                                 text: "Open dialer",
                                 onPress: () =>
                                     Linking.openURL(`tel:${digits}`).catch(
-                                        () => {},
+                                        () => { },
                                     ),
                             },
                         ],
@@ -6166,7 +6166,7 @@ export default function FollowUpScreen({ navigation, route }) {
                                 text: "Open dialer",
                                 onPress: () =>
                                     Linking.openURL(`tel:${digits}`).catch(
-                                        () => {},
+                                        () => { },
                                     ),
                             },
                         ],
@@ -6344,10 +6344,10 @@ export default function FollowUpScreen({ navigation, route }) {
         // (which can look like UI "blur" or broken separator lines on Android).
         return String(
             item?.listKey ||
-                item?.enqId ||
-                item?.enqNo ||
-                item?._id ||
-                `item-${i}`,
+            item?.enqId ||
+            item?.enqNo ||
+            item?._id ||
+            `item-${i}`,
         );
     }, []);
 
@@ -6568,8 +6568,8 @@ export default function FollowUpScreen({ navigation, route }) {
                             {activeTab === "All"
                                 ? fmtMonthYear(selectedDate)
                                 : tabUsesExactDateFilter(activeTab)
-                                  ? fmtDate(selectedDate)
-                                  : "All dates"}
+                                    ? fmtDate(selectedDate)
+                                    : "All dates"}
                         </Text>
                     </TouchableOpacity>
                 </View>
@@ -6974,8 +6974,8 @@ export default function FollowUpScreen({ navigation, route }) {
                                                 gap: 10,
                                             },
                                             i <
-                                                droppedModalItems.length -
-                                                    1 && {
+                                            droppedModalItems.length -
+                                            1 && {
                                                 borderBottomWidth: 1,
                                                 borderBottomColor: C.divider,
                                             },
@@ -7116,12 +7116,12 @@ export default function FollowUpScreen({ navigation, route }) {
                                             style={[
                                                 MS.calDayText,
                                                 isDisabled &&
-                                                    MS.calDayTextDisabled,
+                                                MS.calDayTextDisabled,
                                                 isToday &&
-                                                    !isSelected &&
-                                                    MS.calDayTextToday,
+                                                !isSelected &&
+                                                MS.calDayTextToday,
                                                 isSelected &&
-                                                    MS.calDayTextSelected,
+                                                MS.calDayTextSelected,
                                             ]}>
                                             {date?.day}
                                         </Text>
@@ -7148,13 +7148,13 @@ export default function FollowUpScreen({ navigation, route }) {
                                                     style={[
                                                         MS.calCountBadge,
                                                         isSelected &&
-                                                            MS.calCountBadgeSelected,
+                                                        MS.calCountBadgeSelected,
                                                     ]}>
                                                     <Text
                                                         style={[
                                                             MS.calCountBadgeText,
                                                             isSelected &&
-                                                                MS.calCountBadgeTextSelected,
+                                                            MS.calCountBadgeTextSelected,
                                                         ]}>
                                                         F+{summary.followup}
                                                     </Text>
@@ -7167,13 +7167,13 @@ export default function FollowUpScreen({ navigation, route }) {
                                                     style={[
                                                         MS.calSalesBadge,
                                                         isSelected &&
-                                                            MS.calStatusBadgeSelected,
+                                                        MS.calStatusBadgeSelected,
                                                     ]}>
                                                     <Text
                                                         style={[
                                                             MS.calSalesBadgeText,
                                                             isSelected &&
-                                                                MS.calStatusBadgeTextSelected,
+                                                            MS.calStatusBadgeTextSelected,
                                                         ]}>
                                                         S+{summary.sales}
                                                     </Text>
@@ -7182,12 +7182,12 @@ export default function FollowUpScreen({ navigation, route }) {
 
                                             {/* Show "+" indicator if there are hidden badges (Drop + Not Interested) */}
                                             {summary.drop > 0 ||
-                                            summary.notInterested > 0 ? (
+                                                summary.notInterested > 0 ? (
                                                 <View
                                                     style={[
                                                         MS.calCountBadge,
                                                         isSelected &&
-                                                            MS.calCountBadgeSelected,
+                                                        MS.calCountBadgeSelected,
                                                         {
                                                             minWidth: 16,
                                                             paddingHorizontal: 3,
@@ -7197,7 +7197,7 @@ export default function FollowUpScreen({ navigation, route }) {
                                                         style={[
                                                             MS.calCountBadgeText,
                                                             isSelected &&
-                                                                MS.calCountBadgeTextSelected,
+                                                            MS.calCountBadgeTextSelected,
                                                             {
                                                                 fontSize: 9,
                                                             },
@@ -7300,7 +7300,7 @@ export default function FollowUpScreen({ navigation, route }) {
                                 showIndicator: false,
                                 allowCache: false,
                             });
-                            fetchTabCounts(selectedDate).catch(() => {});
+                            fetchTabCounts(selectedDate).catch(() => { });
                         }}
                         refreshDetailHistory={refreshDetailHistory}
                         refreshDetailEnquiry={refreshDetailEnquiry}

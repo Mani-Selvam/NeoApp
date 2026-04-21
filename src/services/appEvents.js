@@ -8,6 +8,7 @@ export const APP_EVENTS = Object.freeze({
     INCOMING_CRM_MATCH: "INCOMING_CRM_MATCH",
     COUPON_SYNC: "COUPON_SYNC",
     COUPON_ANNOUNCEMENT: "COUPON_ANNOUNCEMENT",
+    INTRO_FINISHED: "INTRO_FINISHED",
 });
 
 export const emitAppEvent = (eventName, payload) => {

@@ -1011,6 +1011,11 @@ const NOTIFICATION_CHANNELS = {
 };
 
 // ─── Notification Handler ─────────────────────────────────────────────────────
+// NOTE: handleNotification is ONLY called when the app is in the FOREGROUND.
+// Background and closed-app notifications are delivered by the OS directly and
+// are NOT affected by this handler. Therefore, suppression logic here MUST NOT
+// be too aggressive — it must only deduplicate same-instant duplicates, not
+// silence legitimate alerts that arrive slightly late.
 if (Platform.OS !== "web") {
     Notifications.setNotificationHandler({
         handleNotification: async (notification) => {
@@ -1021,24 +1026,27 @@ if (Platform.OS !== "web") {
                 data.type === "followup-missed";
             const isForegroundFallbackVisual =
                 String(data?.foregroundFallbackVisual ?? "") === "1";
+            const isCorrected = String(data?.corrected ?? "") === "1";
             const nowMs = Date.now();
             const followupKey = isFollowup
                 ? getFollowupAudioDedupKey(data)
                 : "";
 
-            // Guard: suppress any duplicate visual follow-up notification (same key) within the window.
-            // This covers cases where the same reminder is emitted twice (e.g., reschedule glitches or
-            // foreground fallback + OS delivered arriving seconds apart).
+            // ── Production (native build / FCM) and Expo Go dedup logic below ────────────
+
+            // Guard: suppress duplicate visual (same key within dedup window),
+            // but NEVER suppress corrected reschedules — those are legit new fires.
             if (
                 isFollowup &&
                 followupKey &&
+                !isCorrected &&
+                !isForegroundFallbackVisual &&
                 wasRecentKey(
                     _recentFollowupVisualKeys,
                     followupKey,
                     nowMs,
                     FOLLOWUP_VISUAL_DEDUP_WINDOW_MS,
-                ) &&
-                !isForegroundFallbackVisual
+                )
             ) {
                 return {
                     shouldShowBanner: false,
@@ -1051,6 +1059,7 @@ if (Platform.OS !== "web") {
             if (isFollowup && !isForegroundFallbackVisual && followupKey) {
                 markRecentKey(_recentFollowupVisualKeys, followupKey, nowMs);
             }
+
             const expectedMs = getExpectedFollowupFireMs(data);
             const deltaMsFromExpected = Number.isFinite(expectedMs)
                 ? Date.now() - Number(expectedMs)
@@ -1059,6 +1068,9 @@ if (Platform.OS !== "web") {
                 isFollowup &&
                 Number.isFinite(expectedMs) &&
                 Number(expectedMs) - Date.now() > EARLY_FOLLOWUP_GUARD_MS;
+
+            // ── Late-arriving foreground FCM: show banner, just skip sound
+            // (audio handled by foreground listener with its own dedup)
             const isLateFollowupForeground =
                 isFollowup &&
                 !isForegroundFallbackVisual &&
@@ -1066,6 +1078,7 @@ if (Platform.OS !== "web") {
                 Number(deltaMsFromExpected) >
                     FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS;
 
+            // Foreground fallback already shown — skip entirely
             if (
                 isFollowup &&
                 isForegroundFallbackVisual &&
@@ -1085,9 +1098,11 @@ if (Platform.OS !== "web") {
                 };
             }
 
+            // OS-delivered notification after a foreground-fallback was already shown
             if (
                 isFollowup &&
                 !isForegroundFallbackVisual &&
+                !isCorrected &&
                 followupKey &&
                 wasRecentKey(
                     _recentFollowupFallbackVisualKeys,
@@ -1121,19 +1136,33 @@ if (Platform.OS !== "web") {
                     shouldSetBadge: false,
                 };
             }
+
             if (isLateFollowupForeground) {
+                // ✅ FIX: show the banner even when late — only skip OS sound
+                // (foreground audio listener already plays audio for on-time arrivals)
                 console.warn(
-                    `[NotifSvc] Late follow-up visual suppressed (${data?.type}, delta=${deltaMsFromExpected}ms)`,
+                    `[NotifSvc] Late follow-up — showing banner, skipping OS sound (${data?.type}, delta=${deltaMsFromExpected}ms)`,
                 );
                 return {
-                    shouldShowBanner: false,
-                    shouldShowList: false,
-                    shouldPlaySound: false,
-                    shouldSetBadge: false,
+                    shouldShowBanner: true,
+                    shouldShowList: true,
+                    shouldPlaySound: false,  // audio handled by foreground listener
+                    shouldSetBadge: true,
+                    priority:
+                        Notifications.AndroidNotificationPriority?.MAX ?? "max",
                 };
             }
+
             if (isForegroundFallbackVisual) {
+                if (isFollowup && followupKey) {
+                    markRecentKey(
+                        _recentFollowupFallbackVisualKeys,
+                        followupKey,
+                        nowMs,
+                    );
+                }
                 return {
+
                     shouldShowBanner: true,
                     shouldShowList: true,
                     shouldPlaySound: !(
@@ -1151,6 +1180,7 @@ if (Platform.OS !== "web") {
                         Notifications.AndroidNotificationPriority?.MAX ?? "max",
                 };
             }
+
             return {
                 shouldShowBanner: true,
                 shouldShowList: true,

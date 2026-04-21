@@ -14,6 +14,7 @@ import SuspensionModal from "./src/components/SuspensionModal";
 import backgroundSyncManager from "./src/services/backgroundSyncManager";
 import callLogPermissions from "./src/utils/callLogPermissions";
 import notificationService from "./src/services/notificationService";
+import { onAppEvent, APP_EVENTS } from "./src/services/appEvents";
 
 // ─── Firebase Background Message Handler ────────────────────────────────────
 // MUST be registered at module root level, BEFORE React mounts.
@@ -56,49 +57,36 @@ console.log("🛠️ App booting with API:", API_URL);
 
 export default function App() {
     useEffect(() => {
-        // Initialize notification system early (creates Android channels, sets up handlers)
-        // This happens before login so channels are ready for notifications
+        // ── Notification system init ──────────────────────────────────────
+        // NOTE: initializeNotifications() is already called by AppNavigator
+        // on first login (guarded by notificationsInitRef). Calling it here
+        // again causes duplicate channel-creation logs on every app launch.
+        // The App.js startup only validates audio assets (light check).
         const initNotifications = async () => {
             try {
-                console.log(
-                    "[App] Initializing notification system on startup...",
-                );
-                const result =
-                    await notificationService.initializeNotifications();
-                if (result) {
-                    console.log("[App] ✅ Notification system initialized");
-
-                    // Validate audio assets are loaded
-                    const audioCheck =
-                        notificationService.validateAudioAssets();
-                    if (!audioCheck.success) {
-                        console.warn(
-                            "[App] ⚠️  Some audio assets missing:",
-                            audioCheck.missingAssets,
-                        );
-                    } else {
-                        console.log(
-                            `[App] ✅ Audio assets validated: ${audioCheck.loadedAssets}/${audioCheck.totalAssets}`,
-                        );
-                    }
-                } else {
+                const audioCheck = notificationService.validateAudioAssets?.();
+                if (audioCheck && !audioCheck.success) {
                     console.warn(
-                        "[App] ⚠️  Notification initialization incomplete",
+                        "[App] ⚠️  Some audio assets missing:",
+                        audioCheck.missingAssets,
+                    );
+                } else if (audioCheck) {
+                    console.log(
+                        `[App] ✅ Audio assets validated: ${audioCheck.loadedAssets}/${audioCheck.totalAssets}`,
                     );
                 }
             } catch (err) {
-                console.error("[App] Notification init error:", err?.message);
+                console.warn("[App] Audio asset check error:", err?.message);
             }
         };
 
-        // Initialize on mount
-        initNotifications();
-    }, []);
-    useEffect(() => {
-        // Initialize call log background sync (enterprise mode only)
+        // ── Call log permission + background sync ─────────────────────────
+        // Triggers the call-log permission dialog on first launch. Also
+        // deferred until after the intro animation, and queued AFTER the
+        // notification prompt so the two system dialogs never stack on top
+        // of each other and obscure the intro.
         const initializeCallLogSync = async () => {
             try {
-                // Check if enterprise mode is enabled
                 if (!callLogPermissions.isEnterpriseMode()) {
                     console.log(
                         "[CallLog] Enterprise mode disabled, skipping sync setup",
@@ -106,11 +94,9 @@ export default function App() {
                     return;
                 }
 
-                // Check if permissions are granted
                 const hasPermission =
                     await callLogPermissions.hasCallLogPermission();
                 if (!hasPermission) {
-                    // Request permission if not already granted
                     const result =
                         await callLogPermissions.requestCallLogPermission();
                     if (!result.granted) {
@@ -122,7 +108,6 @@ export default function App() {
                     }
                 }
 
-                // Setup background sync
                 const success =
                     await backgroundSyncManager.setupBackgroundSync();
                 if (success) {
@@ -137,12 +122,35 @@ export default function App() {
             }
         };
 
-        // Delay initialization slightly to ensure app is fully loaded
-        const timer = setTimeout(() => {
-            initializeCallLogSync();
-        }, 1500);
+        // ── Run startup tasks AFTER the intro animation ───────────────────
+        // Run notifications first; once that prompt is dismissed, run the
+        // call-log permission flow. This avoids two stacked system dialogs
+        // covering the intro screen.
+        let didRun = false;
+        const runStartupTasks = async () => {
+            if (didRun) return;
+            didRun = true;
 
-        return () => clearTimeout(timer);
+            // Small grace period so the intro screen has fully unmounted
+            // before the OS dialog appears.
+            await new Promise((r) => setTimeout(r, 250));
+            await initNotifications();
+            await initializeCallLogSync();
+        };
+
+        const unsubscribe = onAppEvent(
+            APP_EVENTS.INTRO_FINISHED,
+            runStartupTasks,
+        );
+
+        // Safety fallback: if for some reason the intro screen never emits
+        // the event (e.g. deep-link skips it), still run startup after 4s.
+        const fallback = setTimeout(runStartupTasks, 4000);
+
+        return () => {
+            if (typeof unsubscribe === "function") unsubscribe();
+            clearTimeout(fallback);
+        };
     }, []);
 
     return (

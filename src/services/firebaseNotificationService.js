@@ -1,42 +1,24 @@
-/**
- * firebaseNotificationService.js  (CLIENT SIDE)
- *
- * FIX SUMMARY:
- *
- * BUG 3 (client half) — "multiple sounds when device reconnects"
- *   ROOT CAUSE 1: Dedup window was 3 seconds. When a device comes online
- *   after being offline, FCM delivers all queued messages nearly
- *   simultaneously. onMessage fires for each → 5 local notifications
- *   created → 5 sounds play at once.
- *   FIX: Dedup window raised to 90 seconds.
- *
- *   ROOT CAUSE 2: The dedup key was `remoteMessage.messageId` which can be
- *   null/undefined for some FCM implementations, making every message
- *   appear unique and bypassing dedup entirely.
- *   FIX: Key is now `followUpId + minutesLeft` (from the data payload)
- *   as primary, with messageId as fallback.
- *
- *   ROOT CAUSE 3: No staleness check. If a 5min reminder arrives on the
- *   device when it's already 8 minutes past the due time, showing "5
- *   minutes" would be confusing and wrong. Such messages are now silently
- *   dropped.
- *   FIX: Added isStaleFcmMessage() — if the expected fire time for this
- *   notification is more than STALE_MESSAGE_SKIP_MS in the past, skip it.
- *
- * BUG 2 (client half) — "background/killed: no sound"
- *   This is primarily a SERVER-SIDE fix (FCM payload must include a
- *   `notification` object). See firebaseNotificationService.server.js.
- *   On the client, we now also guard against creating duplicate local
- *   notifications when the OS has already shown the FCM notification
- *   natively (i.e. app was in background, OS showed it, then user opens
- *   app and onMessage would fire again for any still-queued messages).
- */
-
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { API_URL } from "./apiConfig";
 import { getAuthToken } from "./secureTokenStorage";
+import {
+    getFollowUpDueTexts,
+    getFollowUpMissedTexts,
+    getFollowUpSoonTexts,
+} from "../constants/notificationPhrases";
+
+// ─── Dev / prod mode flag ─────────────────────────────────────────────────────
+const _isDevMode = () => {
+    const flag = String(
+        process.env.EXPO_PUBLIC_USE_SERVER_FOLLOWUP_REMINDERS || "",
+    )
+        .trim()
+        .toLowerCase();
+    // In dev mode (flag=false), we still process FCM but skip stale-drop
+    return flag === "false";
+};
 
 const STORAGE_KEYS = {
     lastFcmToken: "fcmToken_v1",
@@ -49,17 +31,7 @@ const STORAGE_KEYS = {
     lastRegisteredSessionId: "fcmRegisteredSessionId_v1",
 };
 
-// ─── Deduplication ───────────────────────────────────────────────────────────
 
-/**
- * FIX: Raised from 3 000 ms (3 s) to 90 000 ms (90 s).
- *
- * Why 90s? FCM can queue up to ~4-5 minutes of reminders when the device is
- * offline, and delivers them all within a few hundred milliseconds on
- * reconnect. A 3-second window only catches messages that literally arrive
- * within the same TCP burst. 90 seconds ensures that even if FCM spaces the
- * deliveries a few seconds apart, we still deduplicate the whole batch.
- */
 const NOTIFICATION_DEDUP_WINDOW_MS = 90 * 1000; // 90 seconds
 
 const _recentNotificationIds = new Map();
@@ -159,14 +131,8 @@ const persistDedupMap = () => {
     }
 };
 
-/**
- * FIX: Messages that arrive too far past their expected fire time are stale.
- * Drop them silently. This prevents confusing notifications like
- * "5 minutes" appearing when the follow-up is already overdue.
- *
- * Threshold: 2 minutes past expected fire time.
- */
-const STALE_MESSAGE_SKIP_MS = 2 * 60 * 1000; // 2 minutes
+// Production FCM can be delayed up to ~5 min on some networks; use a generous window.
+const STALE_MESSAGE_SKIP_MS = 5 * 60 * 1000; // 5 minutes
 
 const getMessagingFactory = () => {
     if (Platform.OS === "web") return null;
@@ -203,27 +169,39 @@ const normalizeData = (value) => {
     }
 };
 
-/**
- * FIX: Build a stable dedup key from the follow-up payload fields.
- *
- * The old code relied on remoteMessage.messageId which can be null or
- * undefined in some FCM implementations (especially when using the v1 API
- * without explicit messageId). This caused every message to appear unique.
- *
- * New priority order:
- *   1. followUpId + minutesLeft  — unique per (followup, window)
- *   2. messageId from data        — fallback if followUpId absent
- *   3. remoteMessage.messageId    — final fallback
- */
+
 const buildDedupKey = (remoteMessage) => {
     const data = remoteMessage?.data || {};
 
     const followUpId = String(data?.followUpId || "").trim();
-    const minutesLeft = String(data?.minutesLeft ?? "").trim();
+    const type = String(data?.type || "").trim().toLowerCase();
+    const when = String(data?.when || "").trim();
 
-    if (followUpId && minutesLeft !== "") {
-        // Primary: stable key based on payload content
-        return `fu_${followUpId}_${minutesLeft}`;
+    // For followup-soon: key on followUpId + type + minutesLeft (each slot is unique)
+    if (
+        followUpId &&
+        type === "followup-soon" &&
+        String(data?.minutesLeft ?? "").trim() !== ""
+    ) {
+        const minutesLeft = String(data.minutesLeft).trim();
+        return `fu_${followUpId}_soon_${minutesLeft}`;
+    }
+
+    // For followup-due and followup-missed: key on followUpId + type + when
+    if (
+        followUpId &&
+        (type === "followup-due" || type === "followup-missed") &&
+        when
+    ) {
+        return `fu_${followUpId}_${type}_${when}`;
+    }
+
+    // Generic followup key (legacy / unknown type)
+    if (followUpId && type) {
+        const minutesLeft = String(data?.minutesLeft ?? "").trim();
+        return minutesLeft
+            ? `fu_${followUpId}_${type}_${minutesLeft}`
+            : `fu_${followUpId}_${type}`;
     }
 
     const dataMessageId = String(data?.messageId || "").trim();
@@ -275,6 +253,9 @@ const isRecentNotification = (dedupKey) => {
  */
 const isStaleFcmMessage = (data) => {
     try {
+        // In development mode (local scheduling), be lenient — don't drop FCM messages
+        if (_isDevMode()) return false;
+
         const type = String(data?.type || "")
             .trim()
             .toLowerCase();
@@ -292,15 +273,26 @@ const isStaleFcmMessage = (data) => {
         const dueMs = new Date(String(rawWhen)).getTime();
         if (!Number.isFinite(dueMs) || dueMs <= 0) return false;
 
-        const minutesLeft = Math.round(Number(data?.minutesLeft ?? 0));
-        // Expected fire time: (due time) - (minutesLeft minutes)
-        const expectedFireMs = dueMs - minutesLeft * 60 * 1000;
+        let expectedFireMs;
+        if (type === "followup-soon") {
+            // Expected fire: dueMs - minutesLeft minutes
+            const minutesLeft = Math.max(0, Math.round(Number(data?.minutesLeft ?? 0)));
+            expectedFireMs = dueMs - minutesLeft * 60 * 1000;
+        } else if (type === "followup-due") {
+            // Expected fire: exactly at dueMs
+            expectedFireMs = dueMs;
+        } else {
+            // followup-missed: expected fire = dueMs + missedDelayMinutes
+            // If device was off and receives this late, it's still valid within the stale window
+            const delayMins = Math.max(1, Math.round(Number(data?.missedDelayMinutes ?? 1)));
+            expectedFireMs = dueMs + delayMins * 60 * 1000;
+        }
 
         const staleness = Date.now() - expectedFireMs;
         if (staleness > STALE_MESSAGE_SKIP_MS) {
             console.log(
                 `[FirebaseNotif] Dropping stale message: expected ${Math.round(staleness / 1000)}s ago`,
-                { type, minutesLeft, when: rawWhen },
+                { type, when: rawWhen, expectedFireMs: new Date(expectedFireMs).toISOString() },
             );
             return true;
         }
@@ -412,6 +404,156 @@ const validateFcmTokenWithServer = async () => {
     }
 };
 
+// ─── Channel/Sound resolution (mirrors notificationService.js) ────────────────
+const _FOLLOWUP_CHANNEL_MAP = {
+    phone:    { soon: "phone_soon_en",    due: "phone_due_en",    missed: "phone_missed_en" },
+    whatsapp: { soon: "whatsapp_soon_en", due: "whatsapp_due_en", missed: "whatsapp_missed_en" },
+    email:    { soon: "email_soon_en",    due: "email_due_en",    missed: "email_missed_en" },
+    meeting:  { soon: "meeting_soon_en",  due: "meeting_due_en",  missed: "meeting_missed_en" },
+};
+const _FOLLOWUP_CHANNEL_MAP_TA = {
+    phone:    { soon: "phone_soon_ta",    due: "phone_due_ta",    missed: "phone_missed_ta" },
+    whatsapp: { soon: "whatsapp_soon_ta", due: "whatsapp_due_ta", missed: "whatsapp_missed_ta" },
+    email:    { soon: "email_soon_ta",    due: "email_due_ta",    missed: "email_missed_ta" },
+    meeting:  { soon: "meeting_soon_ta",  due: "meeting_due_ta",  missed: "meeting_missed_ta" },
+};
+
+const _normalizeActivityKey = (activityType) => {
+    const raw = String(activityType ?? "").trim().toLowerCase();
+    if (raw === "phone call" || raw === "call" || raw === "phone") return "phone";
+    if (raw === "whatsapp" || raw === "wa") return "whatsapp";
+    if (raw === "email" || raw === "mail") return "email";
+    if (raw === "meeting" || raw === "online meeting") return "meeting";
+    return null; // use followup generic
+};
+
+const _resolveFollowupChannel = (activityType, statusKey, lang = "en") => {
+    const actKey = _normalizeActivityKey(activityType);
+    const channelMap = lang === "ta" ? _FOLLOWUP_CHANNEL_MAP_TA : _FOLLOWUP_CHANNEL_MAP;
+    if (actKey && channelMap[actKey]) {
+        return channelMap[actKey][statusKey] ?? `followups_${statusKey}_${lang === "ta" ? "ta" : "en"}`;
+    }
+    return `followups_${statusKey}_${lang === "ta" ? "ta" : "en"}`;
+};
+
+const _formatHHmm = (date) => {
+    const h = String(date.getHours()).padStart(2, "0");
+    const m = String(date.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+};
+
+/**
+ * Build and schedule a rich local notification for a FCM followup message received
+ * in the foreground. Reconstructs title/body/channel from the data payload so that
+ * even if the server omits notification.title/body, the alert still shows correct content.
+ */
+const _scheduleRichFollowupNotification = async (data, dedupKey) => {
+    try {
+        const type = String(data?.type || "").trim().toLowerCase();
+        const name = String(data?.name || "Client").trim();
+        const actorName = String(data?.actorName || "").trim();
+        const activityType = String(data?.activityType || "Follow-up").trim();
+        const lang = "en"; // Channel/phrase language — matches device setting; default en
+
+        const whenRaw = String(data?.when || "").trim();
+        const when = whenRaw ? new Date(whenRaw) : null;
+        const timeLabel = when && !Number.isNaN(when.getTime()) ? _formatHHmm(when) : "";
+
+        let title = "Follow-up reminder";
+        let body = "";
+        let channelKey = "followups";
+
+        if (type === "followup-soon") {
+            const minutesLeft = Math.max(1, Math.round(Number(data?.minutesLeft ?? 0)));
+            const texts = getFollowUpSoonTexts({
+                lang,
+                name,
+                actorName,
+                activityType,
+                minutesLeft,
+            });
+            title = texts.title;
+            body = texts.body;
+            // getFollowUpSoonTexts / channel uses numeric or "soon"
+            channelKey = _resolveFollowupChannel(
+                activityType,
+                minutesLeft <= 5 && minutesLeft >= 1 ? `${minutesLeft}min` : "soon",
+                lang,
+            );
+        } else if (type === "followup-due") {
+            const texts = getFollowUpDueTexts({
+                lang,
+                name,
+                actorName,
+                activityType,
+                timeLabel,
+            });
+            title = texts.title;
+            body = texts.body;
+            channelKey = _resolveFollowupChannel(activityType, "due", lang);
+        } else if (type === "followup-missed") {
+            const texts = getFollowUpMissedTexts({
+                lang,
+                name,
+                actorName,
+                activityType,
+                timeLabel: timeLabel ? `at ${timeLabel}` : "",
+            });
+            title = texts.title;
+            body = texts.body;
+            channelKey = _resolveFollowupChannel(activityType, "missed", lang);
+        }
+
+        // channelKey already resolved above; map to channel ID (same pattern as notificationService)
+        const androidChannelId =
+            typeof data?.androidChannelId === "string" && data.androidChannelId
+                ? data.androidChannelId
+                : typeof data?.channelId === "string" && data.channelId
+                  ? data.channelId
+                  : channelKey;
+
+        const accentColor = type === "followup-missed" ? "#FF3B5C" : "#0EA5E9";
+
+        await Notifications.scheduleNotificationAsync({
+            content: {
+                title,
+                body,
+                subtitle: "Tap to open Follow-ups",
+                data: {
+                    ...data,
+                    _fcmDedupKey: dedupKey,
+                    // Mark as foreground-fallback so notifHandler allows it through
+                    foregroundFallbackVisual: "1",
+                },
+                sound: "default",
+                vibrate: [0, 250, 250, 250],
+                priority: "max",
+                ...(Platform.OS === "android"
+                    ? {
+                          android: {
+                              channelId: androidChannelId,
+                              color: accentColor,
+                              priority: "max",
+                              vibrationPattern: [0, 250, 250, 250],
+                          },
+                      }
+                    : {}),
+                ...(Platform.OS === "ios"
+                    ? { ios: { sound: true, interruptionLevel: "timeSensitive" } }
+                    : {}),
+            },
+            trigger: null,
+        });
+
+        console.log(
+            `[FirebaseNotif] Rich followup notification scheduled: ${type} | ch:${androidChannelId}`,
+            { name, activityType, title },
+        );
+    } catch (err) {
+        console.warn("[FirebaseNotif] _scheduleRichFollowupNotification error:", err?.message);
+    }
+};
+
 class FirebaseNotificationService {
     _initialized = false;
     _unsubOnMessage = null;
@@ -508,10 +650,13 @@ class FirebaseNotificationService {
          * those are handled by the OS using the `notification` field in the
          * FCM payload (see server-side fix in firebaseNotificationService.server.js).
          *
-         * FIX: Three checks before creating a local notification:
-         *   1. Dedup key check (90s window, keyed by followUpId+minutesLeft)
-         *   2. Staleness check (skip if message is >2 minutes late)
-         *   3. Android channel routing (uses data.androidChannelId or data.channelId)
+         * Checks before creating a local notification:
+         *   1. Auth check      — skip if logged out
+         *   2. Dedup key check — 90s window, keyed by followUpId+type+when/minutesLeft
+         *   3. Session check   — drop messages from old login sessions
+         *   4. Staleness check — skip if >5 min late (prod FCM delivery tolerance)
+         *   5. Rich routing    — followup types get title/body rebuilt from data fields
+         *                        (fixes "alert content has miss" when server omits notification field)
          */
         this._unsubOnMessage = messaging.onMessage?.(async (remoteMessage) => {
             try {
@@ -531,6 +676,11 @@ class FirebaseNotificationService {
                 }
 
                 const data = normalizeData(remoteMessage?.data);
+                const type = String(data?.type || "").trim().toLowerCase();
+                const isFollowupType =
+                    type === "followup-soon" ||
+                    type === "followup-due" ||
+                    type === "followup-missed";
 
                 // ✅ Drop messages from a different login session (prevents stale after logout/login)
                 const incomingSessionId = String(data?.sessionId || "").trim();
@@ -550,34 +700,43 @@ class FirebaseNotificationService {
                     return;
                 }
 
-                const { title, body } = pickTitleBody(remoteMessage);
-                const androidChannelId =
-                    typeof data?.androidChannelId === "string" &&
-                    data.androidChannelId
-                        ? data.androidChannelId
-                        : typeof data?.channelId === "string" && data.channelId
-                          ? data.channelId
-                          : null;
-
                 console.log(
                     "[FirebaseNotif] Creating foreground local notification:",
                     dedupKey,
+                    { type, isFollowupType },
                 );
 
-                await Notifications.scheduleNotificationAsync({
-                    content: {
-                        title,
-                        body,
-                        data: {
-                            ...data,
-                            _fcmDedupKey: dedupKey,
+                if (isFollowupType) {
+                    // ✅ FIX: Build rich title/body for followup notifications from data fields.
+                    // The server FCM payload may not include notification.title/body, or they may
+                    // be empty strings. Always reconstruct from the data payload for consistency.
+                    await _scheduleRichFollowupNotification(data, dedupKey);
+                } else {
+                    // For non-followup types, fall back to notification field or data fields
+                    const { title, body } = pickTitleBody(remoteMessage);
+                    const androidChannelId =
+                        typeof data?.androidChannelId === "string" &&
+                        data.androidChannelId
+                            ? data.androidChannelId
+                            : typeof data?.channelId === "string" && data.channelId
+                              ? data.channelId
+                              : null;
+
+                    await Notifications.scheduleNotificationAsync({
+                        content: {
+                            title,
+                            body,
+                            data: {
+                                ...data,
+                                _fcmDedupKey: dedupKey,
+                            },
+                            ...(Platform.OS === "android" && androidChannelId
+                                ? { android: { channelId: androidChannelId } }
+                                : {}),
                         },
-                        ...(Platform.OS === "android" && androidChannelId
-                            ? { android: { channelId: androidChannelId } }
-                            : {}),
-                    },
-                    trigger: null,
-                });
+                        trigger: null,
+                    });
+                }
             } catch (err) {
                 console.error("[FirebaseNotif] onMessage error:", err?.message);
             }

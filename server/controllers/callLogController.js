@@ -21,6 +21,12 @@ const normalizePhone = (value) =>
         .slice(-10);
 
 /**
+ * Escape a string for safe use inside a RegExp constructor.
+ */
+const escapeRegex = (str) =>
+    str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
  * Build uniqueKey for duplicate prevention
  */
 const buildUniqueKey = (phoneNumber, callTime, callDuration) => {
@@ -57,7 +63,7 @@ const buildEnquiryPhoneSuffixSet = async (companyId, phoneSuffixes) => {
         let enquiries = [];
         try {
             enquiries = await Enquiry.find({
-                company_id: companyId,
+                companyId: companyId,
                 $or: [
                     { mobile: { $regex: pattern } },
                     { phoneNumber: { $regex: pattern } },
@@ -188,6 +194,7 @@ exports.syncDeviceLogs = async (req, res) => {
                         log.callDuration ?? log.duration ?? 0,
                     );
                     const phoneNumber = String(log.phoneNumber || "").trim();
+                    const normalizedPhone = normalizePhone(phoneNumber);
                     const uniqueKey = buildUniqueKey(
                         phoneNumber,
                         callTime,
@@ -198,11 +205,12 @@ exports.syncDeviceLogs = async (req, res) => {
                         companyId,
                         userId,
                         phoneNumber,
+                        normalizedPhone,
                         callType: log.callType || "incoming",
                         callDuration,
                         callTime,
                         contactName: String(log.contactName || "").trim(),
-                        source: "device",
+                        source: log.source || "device",
                         uniqueKey,
                         syncedAt: new Date(),
                     };
@@ -324,43 +332,17 @@ exports.getCallLogsByPhone = async (req, res) => {
         const pg = Math.max(1, Number(page) || 1);
         const lim = Math.min(200, Math.max(1, Number(limit) || 50));
 
-        // Build query: match last 10 digits of stored phone
+        // Optimized query using normalizedPhone index
+        const escaped = escapeRegex(normalizedPhone);
+        const suffixRegex = new RegExp(escaped + "$");
         const query = {
             companyId,
-            // Match stored phones whose last 10 digits equal the normalized query
-            $expr: {
-                $eq: [
-                    {
-                        $substr: [
-                            {
-                                $replaceAll: {
-                                    input: "$phoneNumber",
-                                    find: /\D/,
-                                    replacement: "",
-                                },
-                            },
-                            -10,
-                            10,
-                        ],
-                    },
-                    normalizedPhone,
-                ],
-            },
+            $or: [
+                { normalizedPhone: normalizedPhone },
+                { phoneNumber: normalizedPhone },
+                { phoneNumber: suffixRegex },
+            ],
         };
-
-        // Fallback: simpler $regex match (works when phone is stored as plain number string)
-        // We'll use a regex approach that matches the last 10 digits
-        delete query.$expr;
-        query.$or = [
-            {
-                phoneNumber: {
-                    $regex: normalizedPhone.replace(/(\d)/g, "$1") + "$",
-                    $options: "",
-                },
-            },
-            { phoneNumber: normalizedPhone },
-            { phoneNumber: new RegExp(normalizedPhone + "$") },
-        ];
 
         if (
             callType &&
@@ -423,9 +405,10 @@ exports.getCallStats = async (req, res) => {
 
         if (phone) {
             const normalizedPhone = normalizePhone(phone);
+            const escaped = escapeRegex(normalizedPhone);
             matchStage.$or = [
                 { phoneNumber: normalizedPhone },
-                { phoneNumber: new RegExp(normalizedPhone + "$") },
+                { phoneNumber: new RegExp(escaped + "$") },
             ];
         }
 

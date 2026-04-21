@@ -574,7 +574,7 @@ module.exports = ({ config }) => {
                 {
                     id: "meeting_missed_en",
                     name: "Meeting - Missed",
-                    sound: "mmissed",
+                    sound: "emissed",
                     vibrationPattern: [0, 250, 250, 250],
                     enableVibrate: true,
                     importance: 5,

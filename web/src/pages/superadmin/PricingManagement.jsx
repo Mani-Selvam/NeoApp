@@ -159,11 +159,20 @@ export default function PricingManagement() {
     if (!current?._id || !form) return;
 
     try {
-      await api.updatePlan(current._id, toPayload(form));
+      setError("");
+      // updatePlan returns the updated plan — use it immediately to avoid
+      // stale-cache round-trip on the subsequent getPlans call.
+      const updated = await api.updatePlan(current._id, toPayload(form));
+      if (updated && updated._id) {
+        setPlans((prev) =>
+          prev.map((p) => (String(p._id) === String(updated._id) ? updated : p)),
+        );
+      }
       cancelEdit();
-      await load();
-    } catch (e) {
-      setError(e.message || "Failed to save plan");
+      // Also re-fetch in the background so page is fully in sync
+      load();
+    } catch (err) {
+      setError(err.message || "Failed to save plan");
     }
   };
 

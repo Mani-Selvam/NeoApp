@@ -48,7 +48,9 @@ const ensureSocketListeners = () => {
             `| base=${SOCKET_URL}`,
         );
 
+        const isSessionRevoked = /session\s*(revoked|expired)/i.test(msg);
         if (
+            isSessionRevoked ||
             /authentication|required|token|jwt|unauthorized|invalid/i.test(msg)
         ) {
             try {
@@ -59,6 +61,21 @@ const ensureSocketListeners = () => {
             socket = null;
             listenersAttached = false;
             lastSocketAuthToken = "";
+
+            // If the server rejected the handshake because another device
+            // logged in (single-device login enforcement), trigger the same
+            // FORCE_LOGOUT flow that AuthContext uses — otherwise the old
+            // device would keep retrying forever without logging the user out.
+            if (isSessionRevoked) {
+                try {
+                    DeviceEventEmitter.emit("FORCE_LOGOUT", {
+                        code: "SESSION_REVOKED",
+                        reason: "Logged in on another device",
+                    });
+                } catch (_emitErr) {
+                    // ignore
+                }
+            }
         }
     });
 };
@@ -155,7 +172,7 @@ export const initSocket = async () => {
                 "followups",
                 "reports",
             ]),
-        ).catch(() => {});
+        ).catch(() => { });
         emitAppEvent(APP_EVENTS.ENQUIRY_CREATED, payload);
     });
 
@@ -168,7 +185,7 @@ export const initSocket = async () => {
                 "followups",
                 "reports",
             ]),
-        ).catch(() => {});
+        ).catch(() => { });
         emitAppEvent(APP_EVENTS.ENQUIRY_UPDATED, payload);
     });
 
@@ -181,7 +198,7 @@ export const initSocket = async () => {
                 "enquiries",
                 "reports",
             ]),
-        ).catch(() => {});
+        ).catch(() => { });
         emitAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, payload);
     });
 
@@ -189,7 +206,7 @@ export const initSocket = async () => {
         console.log("Coupon announcement via socket:", payload);
         emitAppEvent(APP_EVENTS.COUPON_ANNOUNCEMENT, payload);
 
-        Promise.resolve(showCouponOfferNotification(payload)).catch(() => {});
+        Promise.resolve(showCouponOfferNotification(payload)).catch(() => { });
 
         if (Platform.OS === "android") {
             const code = String(payload?.code || "").trim();
@@ -225,7 +242,7 @@ export const initSocket = async () => {
             return;
         }
 
-        Promise.resolve(showTeamChatNotification(payload)).catch(() => {});
+        Promise.resolve(showTeamChatNotification(payload)).catch(() => { });
 
         if (Platform.OS === "android") {
             const senderName = String(

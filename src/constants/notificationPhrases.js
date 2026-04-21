@@ -252,15 +252,21 @@ export const getFollowUpMissedTexts = ({
                 ? key === "phone"
                     ? "நீங்கள் அழைப்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்."
                     : key === "whatsapp"
-                      ? "நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது செய்தி அனுப்பவும்."
-                      : key === "email"
-                        ? "நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்."
-                        : key === "meeting"
-                          ? "நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக."
-                          : "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்."
+                        ? "நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது செய்தி அனுப்பவும்."
+                        : key === "email"
+                            ? "நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்."
+                            : key === "meeting"
+                                ? "நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக."
+                                : "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்."
                 : key === "phone"
-                  ? `You might have missed this. Your customer is waiting. Please call ${who} now.`
-                  : "You might have missed this. Please follow up now.",
+                    ? `You might have missed this. Your customer is waiting. Please call ${who} now.`
+                    : key === "whatsapp"
+                        ? `You might have missed this. Please send WhatsApp to ${who} now.`
+                        : key === "email"
+                            ? `You might have missed this. Please send email to ${who} now.`
+                            : key === "meeting"
+                                ? `You might have missed this. Please connect for the meeting with ${who} now.`
+                                : `You might have missed this. Please follow up with ${who} now.`,
     };
 };
 

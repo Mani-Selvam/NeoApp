@@ -14,6 +14,7 @@ import notificationService, {
     initializeNotifications,
     beginNotificationSessionForLogin,
 } from "../services/notificationService";
+import firebaseNotificationService from "../services/firebaseNotificationService";
 import { API_URL } from "../services/apiConfig";
 import { clearApiClient } from "../services/apiClient";
 import {
@@ -411,7 +412,7 @@ export const AuthProvider = ({ children }) => {
             "SUBSCRIPTION_UPDATED",
             () => {
                 if (!isLoggedIn) return;
-                refreshBillingPlan().catch(() => {});
+                refreshBillingPlan().catch(() => { });
             },
         );
 
@@ -476,7 +477,7 @@ export const AuthProvider = ({ children }) => {
                 code === "NO_ACTIVE_PLAN" ||
                 code === "FEATURE_DISABLED"
             ) {
-                await refreshBillingPlan().catch(() => {});
+                await refreshBillingPlan().catch(() => { });
                 setBillingPrompt({
                     visible: true,
                     title:
@@ -489,6 +490,14 @@ export const AuthProvider = ({ children }) => {
                             ? "This feature is not available in your current plan."
                             : "Your current plan has expired. Please upgrade to continue."),
                 });
+                return;
+            }
+            if (
+                code === "SESSION_REVOKED" ||
+                text.toLowerCase().includes("session expired") ||
+                text.toLowerCase().includes("session revoked")
+            ) {
+                await doLogout();
                 return;
             }
             if (
@@ -535,7 +544,7 @@ export const AuthProvider = ({ children }) => {
 
     useEffect(() => {
         if (isLoggedIn) {
-            refreshBillingPlan().catch(() => {});
+            refreshBillingPlan().catch(() => { });
         }
     }, [isLoggedIn, refreshBillingPlan]);
 
@@ -544,12 +553,12 @@ export const AuthProvider = ({ children }) => {
 
         const appStateSub = AppState.addEventListener("change", (state) => {
             if (state === "active") {
-                refreshBillingPlan().catch(() => {});
+                refreshBillingPlan().catch(() => { });
             }
         });
 
         const intervalId = setInterval(() => {
-            refreshBillingPlan().catch(() => {});
+            refreshBillingPlan().catch(() => { });
         }, 60000);
 
         return () => {
@@ -618,7 +627,7 @@ export const AuthProvider = ({ children }) => {
             // keep login resilient even if profile refresh fails
         }
         setIsLoggedIn(true);
-        refreshBillingPlan().catch(() => {});
+        refreshBillingPlan().catch(() => { });
 
         // Rotate notification session boundary for this login (prevents stale notifications)
         try {
@@ -656,37 +665,51 @@ export const AuthProvider = ({ children }) => {
             // Not critical - socket will be initialized when needed
         }
 
-        // Register push token for closed-app notifications
+        // Register Expo push token (fallback for development / Expo Go)
         try {
-            console.log(
-                "[Auth] Registering FCM push token for closed-app notifications...",
-            );
             const pushToken = await getDevicePushToken();
             if (pushToken) {
                 console.log(
-                    `[Auth] Got FCM token: ${pushToken.substring(0, 20)}...`,
+                    `[Auth] Got Expo push token: ${pushToken.substring(0, 20)}...`,
                 );
-                const registered = await registerPushTokenWithServer(pushToken);
-                if (registered) {
-                    console.log(
-                        "[Auth] ✓ FCM token registered with server - closed-app notifications enabled",
-                    );
-                } else {
-                    console.warn(
-                        "[Auth] ⚠ FCM token registration with server failed - check user.fcmToken in DB",
-                    );
-                }
-            } else {
-                console.warn("[Auth] ⚠ Could not obtain FCM token from device");
+                await registerPushTokenWithServer(pushToken);
             }
         } catch (error) {
-            // Don't let push token registration failure block login
-            console.error(
-                "[Auth] ✗ Error during FCM token registration:",
+            console.warn(
+                "[Auth] Expo push token registration failed:",
                 error?.message,
             );
         }
+
+        // Register Firebase FCM token (production — used by reminder scheduler)
+        // This is the REAL FCM token that /register-fcm-token saves as user.fcmToken.
+        // The production ReminderScheduler looks for fcmToken, NOT pushToken.
+        try {
+            console.log("[Auth] Registering Firebase FCM token with server...");
+            const fcmResult = await firebaseNotificationService.beginLoginSession();
+            if (fcmResult?.registered) {
+                console.log(
+                    "[Auth] ✓ Firebase FCM token registered — production push enabled",
+                );
+            } else if (fcmResult?.enabled === false) {
+                console.log(
+                    "[Auth] Firebase messaging not available (Expo Go or web) — using Expo push fallback",
+                );
+            } else {
+                console.warn(
+                    "[Auth] ⚠ Firebase FCM token registration incomplete:",
+                    fcmResult,
+                );
+            }
+        } catch (fcmError) {
+            // Never block login — FCM registration failure is non-fatal
+            console.warn(
+                "[Auth] Firebase FCM token registration error:",
+                fcmError?.message,
+            );
+        }
     };
+
 
     const updateUser = async (updatedObj) => {
         if (!user || !updatedObj) return;
@@ -795,8 +818,8 @@ export const AuthProvider = ({ children }) => {
                 }
                 throw new Error(
                     data.message ||
-                        data.error ||
-                        `Failed to submit report (HTTP ${res.status})`,
+                    data.error ||
+                    `Failed to submit report (HTTP ${res.status})`,
                 );
             }
 

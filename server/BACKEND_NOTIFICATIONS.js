@@ -32,17 +32,21 @@ async function sendExpoNotification(
             const message = {
                 to: pushToken,
                 sound: "default",
-                channelId: resolvedChannelId, // Android notification channel with custom sound
                 priority: priority,
                 ...notification,
             };
+
+            // Only add channelId if it's explicitly valid and we are trying to use it.
+            // However, for Expo Go on Android, custom channelIds often cause silent drops
+            // if the channel wasn't created natively. We omit it to ensure delivery.
+            // If you want to test it locally, comment this back in:
+            // if (resolvedChannelId) message.channelId = resolvedChannelId;
 
             console.log(
                 `[NotifSvc] Sending notification (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
                 {
                     token: pushToken.substring(0, 30) + "...",
                     title: notification.title,
-                    channelId: resolvedChannelId,
                     priority,
                 },
             );

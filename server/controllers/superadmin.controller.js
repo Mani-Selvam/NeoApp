@@ -1,4 +1,4 @@
-﻿const bcrypt = require("bcryptjs");
+const bcrypt = require("bcryptjs");
 const Company = require("../models/Company");
 const User = require("../models/User");
 const Enquiry = require("../models/Enquiry");
@@ -61,13 +61,17 @@ const logAction = async (
     metadata = {},
     category = "admin_action",
 ) => {
-    await SystemLog.create({
-        userId: req.userId,
-        action,
-        ip: req.ip,
-        category,
-        metadata,
-    });
+    try {
+        await SystemLog.create({
+            userId: req.userId || null,
+            action,
+            ip: req.ip,
+            category,
+            metadata,
+        });
+    } catch (logErr) {
+        console.warn("[SuperAdmin] logAction failed:", logErr?.message);
+    }
 };
 
 const parseDate = (d, fallback = null) => {
@@ -251,7 +255,6 @@ exports.getDashboard = async (req, res) => {
             totalUsers,
             activeSubscriptions,
             totalEnquiries,
-            totalCallsLogged,
             totalRevenueAgg,
             monthlyRevenueAgg,
             revenueTrendAgg,
@@ -322,6 +325,15 @@ exports.getDashboard = async (req, res) => {
             ]),
         ]);
 
+        // Attempt to count call logs if the model is available
+        let totalCallsLogged = 0;
+        try {
+            const CallLog = require("../models/CallLog");
+            totalCallsLogged = await CallLog.countDocuments();
+        } catch (_e) {
+            // CallLog model not available — skip
+        }
+
         const labels = getMonthLabels(6);
 
         res.json({
@@ -351,6 +363,7 @@ exports.getDashboard = async (req, res) => {
         });
     }
 };
+
 
 exports.getCompanies = async (_req, res) => {
     try {
@@ -805,6 +818,8 @@ exports.resetUserPassword = async (req, res) => {
 
 exports.getPlans = async (_req, res) => {
     try {
+        // Always invalidate before fetching so an update is immediately visible
+        invalidatePlanSyncCache();
         const syncResult = await ensureFixedPlansSynced();
         syncResult.impactedCompanyIds.forEach((companyId) =>
             clearCompanyPlanCache(companyId),

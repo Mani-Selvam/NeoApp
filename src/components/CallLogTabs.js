@@ -14,9 +14,9 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import { isEnterpriseMode } from "../utils/callLogPermissions";
+import { isEnterpriseMode, requestAndCheckCallLog } from "../utils/callLogPermissions";
 import { ensurePhoneCallPermission } from "../utils/phoneCallPermissions";
-import callLogService from "../services/callLogService";
+import callLogService, { syncDeviceCallLogs } from "../services/callLogService";
 import { onAppEvent } from "../services/appEvents";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -75,7 +75,46 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
     const [selectedTab, setSelectedTab] = useState("incoming");
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [syncing, setSyncing] = useState(false);
+    const [syncStatus, setSyncStatus] = useState("");
     const [error, setError] = useState(null);
+    const hasSyncedRef = useRef(false);
+
+    // ── Sync device logs to server ────────────────────────────────────────────
+    const syncLogs = useCallback(async ({ silent = false } = {}) => {
+        if (!enterpriseRef.current) return;
+
+        // Web browser cannot access device call logs (native Android only)
+        if (Platform.OS === "web") {
+            if (!silent) setSyncStatus("Web: sync not available — use native app to sync");
+            return;
+        }
+
+        // Request permission if not yet granted
+        const { enabled, reason } = await requestAndCheckCallLog();
+        if (!enabled) {
+            if (!silent) setSyncStatus(`Permission: ${reason}`);
+            return;
+        }
+
+        setSyncing(true);
+        setSyncStatus("Syncing device call logs\u2026");
+        try {
+            const result = await syncDeviceCallLogs();
+            if (result.success) {
+                const msg = result.inserted > 0
+                    ? `Synced ${result.inserted} new call${result.inserted !== 1 ? "s" : ""}`
+                    : "Up to date";
+                setSyncStatus(msg);
+            } else {
+                setSyncStatus(result.error || "Sync failed");
+            }
+        } catch (err) {
+            setSyncStatus("Sync error: " + err.message);
+        } finally {
+            setSyncing(false);
+        }
+    }, []);
 
     // ── Fetch call logs ───────────────────────────────────────────────────────
     const fetchLogs = useCallback(async () => {
@@ -128,6 +167,13 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
         fetchLogs();
     }, [fetchLogs]);
 
+    // Auto-sync device logs once on mount, then fetch
+    useEffect(() => {
+        if (hasSyncedRef.current) return;
+        hasSyncedRef.current = true;
+        syncLogs({ silent: true }).then(() => fetchLogs());
+    }, [syncLogs, fetchLogs]);
+
     // Re-fetch when screen comes into focus
     useFocusEffect(
         useCallback(() => {
@@ -155,6 +201,7 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
         }
 
         try {
+            // Initiate the call
             if (Platform.OS === "android") {
                 const { granted } = await ensurePhoneCallPermission();
                 if (!granted) {
@@ -165,10 +212,15 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                             { text: "Cancel", style: "cancel" },
                             {
                                 text: "Open dialer",
-                                onPress: () =>
-                                    Linking.openURL(`tel:${digits}`).catch(
-                                        () => {},
-                                    ),
+                                onPress: async () => {
+                                    // Log it even if using dialer
+                                    await callLogService.logManualCall(digits, {
+                                        name: enquiry?.name,
+                                        enquiryId: enquiry?._id,
+                                    });
+                                    Linking.openURL(`tel:${digits}`).catch(() => {});
+                                    fetchLogs();
+                                },
                             },
                         ],
                     );
@@ -181,6 +233,13 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                         "android.intent.action.CALL",
                         { data: `tel:${digits}` },
                     );
+
+                    // Successfully pushed intent, log it manually since it's an app-driven call
+                    await callLogService.logManualCall(digits, {
+                        name: enquiry?.name,
+                        enquiryId: enquiry?._id,
+                    });
+                    fetchLogs();
                     return;
                 } catch (intentErr) {
                     console.warn(
@@ -190,24 +249,47 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                     // fall through to tel: scheme
                 }
             }
-            // iOS or fallback on Android → opens dialer pre-filled
+
+            // iOS or Web/fallback on Android → opens dialer pre-filled
             await Linking.openURL(`tel:${digits}`);
+
+            // Log it manually for web and non-intent Android
+            await callLogService.logManualCall(digits, {
+                name: enquiry?.name,
+                enquiryId: enquiry?._id,
+            });
+            fetchLogs();
         } catch (err) {
             Alert.alert(
                 "Call Error",
                 "Could not initiate call: " + err.message,
             );
         }
-    }, [phoneNumber]);
+    }, [phoneNumber, enquiry, fetchLogs]);
+
+    // ── Simulate a call (Web Test Mode only) ──────────────────────────────────
+    const handleSimulateCall = useCallback(async () => {
+        setSyncing(true);
+        setSyncStatus(`Simulating test ${selectedTab}\u2026`);
+        try {
+            await callLogService.logManualCall(phoneNumber, {
+                name: enquiry?.name,
+                enquiryId: enquiry?._id,
+                callType: selectedTab,
+            });
+            setSyncStatus(`Test ${selectedTab} recorded!`);
+            fetchLogs();
+        } catch (err) {
+            setSyncStatus("Simulation failed");
+        } finally {
+            setSyncing(false);
+        }
+    }, [phoneNumber, enquiry, selectedTab, fetchLogs]);
 
     // ── Renderers ─────────────────────────────────────────────────────────────
     const renderLogItem = ({ item }) => {
         const { date, time } = callLogService.formatCallTime(
             item.callTime || item.createdAt,
-        );
-        // backend field is callDuration (seconds)
-        const duration = callLogService.formatDuration(
-            item.callDuration ?? item.duration ?? 0,
         );
         const callTypeObj =
             CALL_TYPES.find((ct) => ct.key === item.callType) || CALL_TYPES[0];
@@ -232,7 +314,7 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
 
                 <View style={styles.logDetails}>
                     <Text style={styles.logDate}>{date}</Text>
-                    <Text style={styles.logTime}>{time}</Text>
+                    <Text style={styles.logTime}>⏰ {time}</Text>
                     {!!item.contactName && (
                         <Text style={styles.logContact} numberOfLines={1}>
                             {item.contactName}
@@ -241,13 +323,19 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                 </View>
 
                 <View style={styles.logRight}>
-                    <Text
-                        style={[styles.duration, { color: callTypeObj.color }]}>
-                        {duration}
-                    </Text>
-                    <Text style={styles.callTypeBadge}>
-                        {callTypeObj.label}
-                    </Text>
+                    <View
+                        style={[
+                            styles.callTypePill,
+                            { backgroundColor: callTypeObj.color + "1A" },
+                        ]}>
+                        <Text
+                            style={[
+                                styles.callTypeBadge,
+                                { color: callTypeObj.color },
+                            ]}>
+                            {callTypeObj.label}
+                        </Text>
+                    </View>
                 </View>
             </View>
         );
@@ -258,8 +346,20 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
             <Ionicons name="call-outline" size={48} color={C.gray300} />
             <Text style={styles.emptyText}>No {selectedTab} calls found</Text>
             <Text style={styles.emptyHint}>
-                Make sure call logs are synced from your device
+                {Platform.OS === "web"
+                    ? "Open the NeoGroww native app to sync device logs. Note: Only calls from registered enquiries are tracked."
+                    : "Tap \"Sync\" to pull your logs. Only calls from your Enquiry list will be shown."}
             </Text>
+            {Platform.OS === "web" && (
+                <TouchableOpacity
+                    onPress={handleSimulateCall}
+                    style={styles.simulateButton}
+                    disabled={syncing}>
+                    <Text style={styles.simulateButtonText}>
+                        {syncing ? "Simulating..." : `Simulate ${selectedTab} for testing`}
+                    </Text>
+                </TouchableOpacity>
+            )}
         </View>
     );
 
@@ -304,6 +404,16 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
 
     return (
         <View style={styles.container}>
+            {/* ── Web info banner ── */}
+            {Platform.OS === "web" && enterpriseRef.current && (
+                <View style={styles.webBanner}>
+                    <Ionicons name="information-circle-outline" size={14} color={C.primary} />
+                    <Text style={styles.webBannerText}>
+                        Call log sync requires the native app. Showing server-synced calls below.
+                    </Text>
+                </View>
+            )}
+
             {/* ── Header ── */}
             <View style={styles.headerSection}>
                 <View style={styles.headerContent}>
@@ -315,7 +425,28 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                             {enquiry?.name || "Contact"}
                         </Text>
                         <Text style={styles.headerSubtitle}>{phoneNumber}</Text>
+                        {!!syncStatus && (
+                            <Text style={styles.syncStatus} numberOfLines={1}>
+                                {syncStatus}
+                            </Text>
+                        )}
                     </View>
+                    {/* Sync button — shown on native only (web cannot access device logs) */}
+                    {Platform.OS !== "web" && enterpriseRef.current && (
+                        <TouchableOpacity
+                            onPress={() => syncLogs().then(() => fetchLogs())}
+                            style={[styles.syncButton, syncing && { opacity: 0.5 }]}
+                            activeOpacity={0.8}
+                            disabled={syncing}
+                        >
+                            {syncing
+                                ? <ActivityIndicator size="small" color={C.primary} />
+                                : <Ionicons name="sync-outline" size={16} color={C.primary} />}
+                            <Text style={styles.syncButtonText}>
+                                {syncing ? "Syncing…" : "Sync"}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                         onPress={handleMakeCall}
                         style={styles.callButton}
@@ -333,7 +464,12 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                     return (
                         <Pressable
                             key={tab.key}
-                            onPress={() => setSelectedTab(tab.key)}
+                            onPress={() => {
+                                if (selectedTab !== tab.key) {
+                                    setLogs([]);
+                                    setSelectedTab(tab.key);
+                                }
+                            }}
                             style={[
                                 styles.tab,
                                 active && {
@@ -359,7 +495,7 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                                 numberOfLines={1}>
                                 {tab.label}
                             </Text>
-                            {active && logs.length > 0 && (
+                            {active && !loading && logs.length > 0 && (
                                 <View
                                     style={[
                                         styles.badge,
@@ -411,8 +547,12 @@ const CallLogTabs = ({ phoneNumber, enquiry }) => {
                         String(item._id || item.uniqueKey || index)
                     }
                     ListEmptyComponent={renderEmpty}
-                    scrollEnabled={false}
-                    contentContainerStyle={styles.listContent}
+                    contentContainerStyle={[
+                        styles.listContent,
+                        logs.length === 0 && { flexGrow: 1 },
+                    ]}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
                 />
             )}
         </View>
@@ -466,6 +606,42 @@ const styles = StyleSheet.create({
         color: "#FFFFFF",
         fontSize: 13,
         fontWeight: "700",
+    },
+    syncButton: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        paddingHorizontal: 10,
+        paddingVertical: 10,
+        backgroundColor: C.primary + "18",
+        borderRadius: 10,
+        marginRight: 6,
+    },
+    syncButtonText: {
+        color: C.primary,
+        fontSize: 12,
+        fontWeight: "600",
+    },
+    syncStatus: {
+        fontSize: 10,
+        color: C.success,
+        marginTop: 2,
+    },
+    webBanner: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        backgroundColor: C.primary + "12",
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: C.primary + "30",
+    },
+    webBannerText: {
+        flex: 1,
+        fontSize: 11,
+        color: C.primary,
+        fontWeight: "500",
     },
 
     // Tabs
@@ -599,10 +775,15 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: "700",
     },
+    callTypePill: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 6,
+        marginTop: 2,
+    },
     callTypeBadge: {
         fontSize: 10,
-        color: C.gray500,
-        fontWeight: "600",
+        fontWeight: "700",
     },
 
     // Empty
@@ -622,6 +803,20 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: C.gray300,
         textAlign: "center",
+    },
+    simulateButton: {
+        marginTop: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: C.primary + "12",
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: C.primary + "30",
+    },
+    simulateButtonText: {
+        color: C.primary,
+        fontSize: 12,
+        fontWeight: "700",
     },
 });
 

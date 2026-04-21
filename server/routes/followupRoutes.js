@@ -773,16 +773,11 @@ router.post("/", verifyToken, async (req, res) => {
             req.body.remarks || req.body.note || "",
         ).trim();
 
-        let staffName = String(req.user?.name || "Staff").trim();
-        if (assignedToId && assignedToId.toString() !== req.userId.toString()) {
-            const assignedUser = await User.findById(assignedToId)
-                .select("name")
-                .lean();
-            if (assignedUser?.name) {
-                staffName =
-                    String(assignedUser.name || staffName).trim() || staffName;
-            }
-        }
+        // staffName = the person who CREATED this follow-up (shown in the notification
+        // as the actorName prefix: "AdminName • You might have missed this").
+        // It is always the logged-in creator, regardless of who it is assigned to.
+        // (assignedTo's name is used for routing the notification, not for display.)
+        const staffName = String(req.user?.name || "Staff").trim();
 
         if (!enqNo || !safeRemarks)
             return res
@@ -813,7 +808,7 @@ router.post("/", verifyToken, async (req, res) => {
             userId: ownerId,
             createdBy: req.userId,
             assignedTo: assignedToId,
-            staffName: req.user?.name || "Staff",
+            staffName,   // = creator's name (always req.user.name)
             activityType: req.body.activityType || req.body.type || "WhatsApp",
             note: safeRemarks,
             remarks: safeRemarks,

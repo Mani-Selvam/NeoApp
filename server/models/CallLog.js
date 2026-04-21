@@ -28,6 +28,14 @@ const CallLogSchema = new mongoose.Schema(
             required: true,
             trim: true,
         },
+        /**
+         * Normalized version (last 10 digits only) for reliable querying.
+         */
+        normalizedPhone: {
+            type: String,
+            index: true,
+            trim: true,
+        },
         callType: {
             type: String,
             enum: ["incoming", "outgoing", "missed", "rejected"],

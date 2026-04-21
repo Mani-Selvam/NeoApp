@@ -69,27 +69,108 @@ const resolveChannelKey = (activityType, minutesLeft, voiceLang) => {
     return `${typeKey}_${m}min_${lang}`;
 };
 
-const buildExpoMessage = (followUp, minutesLeft) => {
-    const who = String(followUp?.name || "").trim() || "customer";
-    const enq = String(followUp?.enqNo || "").trim();
+
+// ─── Rich notification content builders ──────────────────────────────────────
+// These mirror the logic in src/constants/notificationPhrases.js so that
+// background/closed-app Expo notifications have the SAME content as foreground.
+
+const _normalizeActivityKey = (activityType) => {
+    const raw = String(activityType || "").trim().toLowerCase();
+    if (raw === "phone call" || raw === "phone" || raw === "call") return "phone";
+    if (raw === "whatsapp" || raw === "wa") return "whatsapp";
+    if (raw === "email" || raw === "mail") return "email";
+    if (raw === "meeting" || raw === "online meeting") return "meeting";
+    return "followup";
+};
+
+const _prefix = (name, actorName) => {
+    const customer = String(name || "Client").trim();
+    const actor = String(actorName || "").trim();
+    if (!actor || actor === customer) return customer;
+    return `${actor} • ${customer}`;
+};
+
+const _formatHHmm = (date) => {
+    if (!date) return "";
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) return "";
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+};
+
+const _buildRichTitle = (activityKey, minutesLeft, actorName, lang = "en") => {
+    let base;
+    if (minutesLeft > 0) {
+        const minTxt = minutesLeft === 1 ? "1 minute" : `${minutesLeft} minutes`;
+        if (activityKey === "phone") base = `Call in ${minTxt}`;
+        else if (activityKey === "whatsapp") base = `WhatsApp in ${minTxt}`;
+        else if (activityKey === "email") base = `Email in ${minTxt}`;
+        else if (activityKey === "meeting") base = `Meeting in ${minTxt}`;
+        else base = `Follow-up in ${minTxt}`;
+    } else if (minutesLeft === 0) {
+        if (activityKey === "meeting") base = "Meeting reminder";
+        else if (activityKey === "email") base = "Email follow-up";
+        else if (activityKey === "whatsapp") base = "WhatsApp follow-up";
+        else if (activityKey === "phone") base = "Call reminder";
+        else base = "Follow-up reminder";
+    } else {
+        // missed
+        base = "You might have missed this";
+    }
+    const actor = String(actorName || "").trim();
+    return actor ? `${actor} • ${base}` : base;
+};
+
+const _buildRichBody = (followUp, minutesLeft, lang = "en") => {
+    const name = String(followUp?.name || "your client").trim();
+    const actorName = String(followUp?.staffName || "").trim();
+    const activityType = String(followUp?.activityType || "Follow-up").trim();
+    const activityKey = _normalizeActivityKey(activityType);
+    const timeLabel = _formatHHmm(followUp?.dueAt);
+    const timeBit = timeLabel ? `at ${timeLabel}` : "";
+    const prefix = _prefix(name, actorName);
+
+    if (minutesLeft > 0) {
+        const mins = minutesLeft;
+        const minTxt = mins === 1 ? "1 minute" : `${mins} minutes`;
+        const waitingHint = mins <= 3 ? " Your customer is waiting." : "";
+        return `${prefix} • ${activityType} in ${minTxt}.${waitingHint}`;
+    }
 
     if (minutesLeft === 0) {
-        return {
-            title: enq ? `Follow-up Due: ${enq}` : "Follow-up Due",
-            body: `Follow-up with ${who} is due now.`,
-        };
+        if (activityKey === "phone")
+            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}Your customer is waiting. Please call ${name} now.`;
+        if (activityKey === "whatsapp")
+            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}WhatsApp follow-up due now. Please send the message.`;
+        if (activityKey === "email")
+            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}Email follow-up due now. Please send the email.`;
+        if (activityKey === "meeting")
+            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}Meeting due now. Please connect.`;
+        return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}${activityType} due now.`;
     }
-    if (minutesLeft < 0) {
-        return {
-            title: enq ? `Follow-up Missed: ${enq}` : "Follow-up Missed",
-            body: `Follow-up with ${who} was missed.`,
-        };
-    }
-    return {
-        title: enq ? `Follow-up: ${enq}` : "Follow-up Reminder",
-        body: `Follow-up with ${who} in ${minutesLeft} minute(s).`,
-    };
+
+    // missed (minutesLeft < 0)
+    const tl = timeBit ? ` ${timeBit}` : "";
+    if (activityKey === "phone")
+        return `${prefix} • ${activityType}${tl}. You might have missed this. Your customer is waiting. Please call ${name} now.`;
+    if (activityKey === "whatsapp")
+        return `${prefix} • ${activityType}${tl}. You might have missed this. Please send WhatsApp now.`;
+    if (activityKey === "email")
+        return `${prefix} • ${activityType}${tl}. You might have missed this. Please send the email now.`;
+    if (activityKey === "meeting")
+        return `${prefix} • ${activityType}${tl}. You might have missed this. Please confirm and connect now.`;
+    return `${prefix} • ${activityType}${tl}. You might have missed this. Please follow up now.`;
 };
+
+const buildExpoMessage = (followUp, minutesLeft) => {
+    const activityKey = _normalizeActivityKey(followUp?.activityType);
+    const actorName = String(followUp?.staffName || "").trim();
+    const title = _buildRichTitle(activityKey, minutesLeft, actorName);
+    const body = _buildRichBody(followUp, minutesLeft);
+    return { title, body };
+};
+
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -292,9 +373,23 @@ exports.sendDueFollowUpReminders = async () => {
                     const activityType = followUp.activityType || "followup";
                     const voiceLang =
                         user.notificationPreferences?.voiceLang || "en";
+                    const staffName = String(followUp?.staffName || "").trim();
+
+                    // actorName = who created this followup (shown as prefix in the alert).
+                    // If staffName equals the recipient's own name, omit it — no point
+                    // showing "Staff B • You might have missed this" TO Staff B.
+                    const recipientName = String(user?.name || "").trim();
+                    const actorName =
+                        staffName && staffName !== recipientName
+                            ? staffName
+                            : "";
 
                     const followUpData = {
                         name: followUp?.name || "customer",
+                        actorName,
+                        activityType,
+                        enqNo: followUp?.enqNo || "",
+                        enqId: followUp?.enqId || String(followUp?.enqId || ""),
                         _id: followUp._id,
                         followUpId: String(followUp._id),
                         when: followUp?.dueAt
@@ -303,6 +398,7 @@ exports.sendDueFollowUpReminders = async () => {
                         enquiryNumber: followUp?.enqNo,
                         phoneNumber: followUp?.mobile,
                     };
+
 
                     let result = null;
                     if (hasFcm) {
@@ -321,8 +417,8 @@ exports.sendDueFollowUpReminders = async () => {
                             minutesLeft < 0
                                 ? "followup-missed"
                                 : minutesLeft === 0
-                                  ? "followup-due"
-                                  : "followup-soon";
+                                    ? "followup-due"
+                                    : "followup-soon";
                         const channelKey = resolveChannelKey(
                             activityType,
                             minutesLeft,
@@ -437,7 +533,7 @@ exports.initializeReminderScheduler = () => {
         };
     } catch (err) {
         console.error("[ReminderScheduler] Initialization error:", err.message);
-        return () => {};
+        return () => { };
     }
 };
 

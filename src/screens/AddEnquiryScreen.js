@@ -860,9 +860,9 @@ export default function AddEnquiryScreen({ route, navigation }) {
                 assignedTo: isStaffUser
                     ? ""
                     : editingEnquiry.assignedTo?._id ||
-                      editingEnquiry.assignedTo?.id ||
-                      editingEnquiry.assignedTo ||
-                      "",
+                    editingEnquiry.assignedTo?.id ||
+                    editingEnquiry.assignedTo ||
+                    "",
             }));
             setPickedImageFile(null);
         }
@@ -1173,7 +1173,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
                     const errData = await fetchResp.json().catch(() => ({}));
                     throw new Error(
                         errData?.message ||
-                            `Upload failed: ${fetchResp.status}`,
+                        `Upload failed: ${fetchResp.status}`,
                     );
                 }
                 data = await fetchResp.json();
@@ -1191,7 +1191,6 @@ export default function AddEnquiryScreen({ route, navigation }) {
                 ) {
                     delete payload.image;
                 }
-                // ✅ Use fetch for mobile FormData — axios fails with ERR_NETWORK
                 const token = await getAuthToken();
                 const uploadUrl = isEditMode
                     ? `${API_URL}/enquiries/${editingEnquiry._id}`
@@ -1199,16 +1198,16 @@ export default function AddEnquiryScreen({ route, navigation }) {
                 const fetchResp = await fetch(uploadUrl, {
                     method: isEditMode ? "PUT" : "POST",
                     headers: {
-                        // ✅ No Content-Type — let fetch set boundary automatically
+                        "Content-Type": "application/json",
                         ...(token ? { Authorization: `Bearer ${token}` } : {}),
                     },
-                    body: fd,
+                    body: JSON.stringify(payload),
                 });
                 if (!fetchResp.ok) {
                     const errData = await fetchResp.json().catch(() => ({}));
                     throw new Error(
                         errData?.message ||
-                            `Upload failed: ${fetchResp.status}`,
+                        `Upload failed: ${fetchResp.status}`,
                     );
                 }
                 data = await fetchResp.json();
@@ -1486,8 +1485,8 @@ export default function AddEnquiryScreen({ route, navigation }) {
                                                     p === "High"
                                                         ? C.danger
                                                         : p === "Medium"
-                                                          ? C.warning
-                                                          : C.primary;
+                                                            ? C.warning
+                                                            : C.primary;
                                                 return (
                                                     <TouchableOpacity
                                                         key={p}
@@ -1560,10 +1559,10 @@ export default function AddEnquiryScreen({ route, navigation }) {
                                         value={
                                             form.assignedTo
                                                 ? assignableTeam.find(
-                                                      (s) =>
-                                                          s._id ===
-                                                          form.assignedTo,
-                                                  )?.name || "Unknown"
+                                                    (s) =>
+                                                        s._id ===
+                                                        form.assignedTo,
+                                                )?.name || "Unknown"
                                                 : ""
                                         }
                                         placeholder="Me (Auto-assign)"
@@ -1578,7 +1577,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
                                         value={user?.name || "You"}
                                         placeholder="Assigned to you"
                                         icon="person-add-outline"
-                                        onPress={() => {}}
+                                        onPress={() => { }}
                                         sc={sc}
                                     />
                                 )}
@@ -1820,7 +1819,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
                                                                     sc.sp.sm,
                                                                 borderBottomWidth:
                                                                     i <
-                                                                    addressPredictions.length -
+                                                                        addressPredictions.length -
                                                                         1
                                                                         ? 1
                                                                         : 0,
