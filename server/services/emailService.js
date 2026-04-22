@@ -226,10 +226,6 @@ const sendEmail = async ({ settings, to, subject, text, html, attachments }) => 
         const fromEmail = normalizeEmail(senderConfig.fromEmail || settings.smtpUser || "");
         const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
         const recipientEmail = normalizeEmail(to);
-        const smtpUserEmail = normalizeEmail(settings.smtpUser || "");
-        const shouldBccSender =
-            isValidEmail(smtpUserEmail) &&
-            smtpUserEmail.toLowerCase() !== recipientEmail.toLowerCase();
         const mailOptions = {
             from,
             to: recipientEmail,
@@ -237,15 +233,6 @@ const sendEmail = async ({ settings, to, subject, text, html, attachments }) => 
             text: String(text || "").trim(),
             html: html || undefined,
             replyTo: senderConfig.replyTo || undefined,
-            bcc: shouldBccSender ? smtpUserEmail : undefined,
-            envelope: isValidEmail(settings.smtpUser)
-                ? {
-                      from: normalizeEmail(settings.smtpUser),
-                      to: shouldBccSender
-                          ? [recipientEmail, smtpUserEmail]
-                          : recipientEmail,
-                  }
-                : undefined,
             attachments: Array.isArray(attachments) ? attachments : [],
         };
         const rawMessage = await new MailComposer(mailOptions).compile().build();
