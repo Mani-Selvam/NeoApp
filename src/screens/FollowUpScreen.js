@@ -72,6 +72,7 @@ import {
 import { getImageUrl } from "../utils/imageHelper";
 import ChatScreen from "./ChatScreen";
 import CallLogTabs from "../components/CallLogTabs";
+import { useSilentRefresh } from "../hooks/useSilentRefresh";
 
 const AUTO_SAVE_CALL_LOGS =
     String(process.env.EXPO_PUBLIC_CALL_AUTO_SAVE ?? "false")
@@ -4711,6 +4712,12 @@ export default function FollowUpScreen({ navigation, route }) {
     ]);
 
     // ── Focus ────────────────────────────────────────────────────────────────
+    // Auto-refresh every 5 seconds while active
+    useSilentRefresh(
+        () => fetchFollowUps(activeTab, true, { showIndicator: false, force: true }),
+        5000,
+    );
+
     useFocusEffect(
         useCallback(() => {
             Promise.resolve(

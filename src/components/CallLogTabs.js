@@ -35,30 +35,30 @@ const C = {
 };
 
 const CALL_TYPES = [
-    {
-        key: "incoming",
-        label: "Incoming",
-        icon: "arrow-down-circle-outline",
-        color: C.info,
-    },
+    // {
+    //     key: "incoming",
+    //     label: "Incoming",
+    //     icon: "arrow-down-circle-outline",
+    //     color: C.info,
+    // },
     {
         key: "outgoing",
         label: "Outgoing",
         icon: "arrow-up-circle-outline",
         color: C.success,
     },
-    {
-        key: "missed",
-        label: "Missed",
-        icon: "close-circle-outline",
-        color: C.danger,
-    },
-    {
-        key: "rejected",
-        label: "Rejected",
-        icon: "ban-outline",
-        color: C.warning,
-    },
+    // {
+    //     key: "missed",
+    //     label: "Missed",
+    //     icon: "close-circle-outline",
+    //     color: C.danger,
+    // },
+    // {
+    //     key: "rejected",
+    //     label: "Rejected",
+    //     icon: "ban-outline",
+    //     color: C.warning,
+    // },
 ];
 
 /**

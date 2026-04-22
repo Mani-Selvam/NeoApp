@@ -55,20 +55,25 @@ const isExpoPushToken = (value) =>
     typeof value === "string" && value.startsWith("ExponentPushToken[");
 
 const sendNotificationToUser = async (
-    user,
+    userOrToken,
     message,
     { priority = "high", channelId = "default", sound = "default" } = {},
 ) => {
-    if (!user || !message?.title || !message?.body) return false;
+    if (!userOrToken || !message?.title || !message?.body) return false;
 
-    if (user.fcmToken) {
+    const fcmToken = typeof userOrToken === "string" ? userOrToken : userOrToken.fcmToken;
+    const userId = typeof userOrToken === "object" ? userOrToken._id : null;
+
+    if (fcmToken) {
         const fcmResult = await firebaseNotificationService.sendNotification(
-            user.fcmToken,
+            userId || fcmToken,
             {
                 title: message.title,
                 body: message.body,
                 type: message?.data?.type || "general",
                 data: message.data || {},
+            },
+            {
                 priority,
                 channelId,
                 sound,
@@ -81,9 +86,10 @@ const sendNotificationToUser = async (
         );
     }
 
-    if (isExpoPushToken(user.pushToken)) {
+    const pushToken = typeof userOrToken === "string" ? userOrToken : userOrToken.pushToken;
+    if (isExpoPushToken(pushToken)) {
         await sendExpoNotification(
-            user.pushToken,
+            pushToken,
             message,
             priority,
             3,

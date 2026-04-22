@@ -443,6 +443,57 @@ const _formatHHmm = (date) => {
 };
 
 /**
+ * Maps a channel key to the actual audio filename bundled in the app.
+ */
+const _resolveSoundFilename = (channelKey) => {
+    const k = String(channelKey || "").toLowerCase();
+
+    // Phone / Generic Follow-ups
+    if (k.includes("phone_5min_en") || k.includes("followups_5min_en")) return "n5pmin";
+    if (k.includes("phone_4min_en") || k.includes("followups_4min_en")) return "n4pmin";
+    if (k.includes("phone_3min_en") || k.includes("followups_3min_en")) return "n3pmin";
+    if (k.includes("phone_2min_en") || k.includes("followups_2min_en")) return "n2pmin";
+    if (k.includes("phone_1min_en") || k.includes("followups_1min_en")) return "n1pmin";
+    if (k.includes("phone_due_en") || k.includes("followups_due_en")) return "pdue";
+    if (k.includes("phone_missed_en") || k.includes("followups_missed_en")) return "pmissed";
+
+    // Tamil (Phone / Generic)
+    if (k.includes("phone_5min_ta") || k.includes("followups_5min_ta")) return "t5min";
+    if (k.includes("phone_4min_ta") || k.includes("followups_4min_ta")) return "t4min";
+    if (k.includes("phone_3min_ta") || k.includes("followups_3min_ta")) return "t3min";
+    if (k.includes("phone_2min_ta") || k.includes("followups_2min_ta")) return "t2min";
+    if (k.includes("phone_1min_ta") || k.includes("followups_1min_ta")) return "t1min";
+    if (k.includes("phone_due_ta") || k.includes("followups_due_ta")) return "tdue";
+    if (k.includes("phone_missed_ta") || k.includes("followups_missed_ta")) return "tmissed";
+
+    // Meeting
+    if (k.includes("meeting_soon_en")) return "m5min";
+    if (k.includes("meeting_due_en")) return "mdue";
+    if (k.includes("meeting_missed_en")) return "emissed";
+    if (k.includes("meeting_soon_ta")) return "mt5min";
+    if (k.includes("meeting_due_ta")) return "mtdue";
+    if (k.includes("meeting_missed_ta")) return "mtmissed";
+
+    // Email
+    if (k.includes("email_soon_en")) return "e5min";
+    if (k.includes("email_due_en")) return "edue";
+    if (k.includes("email_missed_en")) return "emissed";
+    if (k.includes("email_soon_ta")) return "et5min";
+    if (k.includes("email_due_ta")) return "etdue";
+    if (k.includes("email_missed_ta")) return "etmissed";
+
+    // WhatsApp
+    if (k.includes("whatsapp_soon_en")) return "w5min";
+    if (k.includes("whatsapp_due_en")) return "wdue";
+    if (k.includes("whatsapp_missed_en")) return "wmissed";
+    if (k.includes("whatsapp_soon_ta")) return "wt5min";
+    if (k.includes("whatsapp_due_ta")) return "wtdue";
+    if (k.includes("whatsapp_missed_ta")) return "wtmissed";
+
+    return "default";
+};
+
+/**
  * Build and schedule a rich local notification for a FCM followup message received
  * in the foreground. Reconstructs title/body/channel from the data payload so that
  * even if the server omits notification.title/body, the alert still shows correct content.
@@ -525,21 +576,29 @@ const _scheduleRichFollowupNotification = async (data, dedupKey) => {
                     // Mark as foreground-fallback so notifHandler allows it through
                     foregroundFallbackVisual: "1",
                 },
-                sound: "default",
+                // Use explicit sound filename for foreground alerts to match channel setting.
+                // Note: On Android, even if channel has a sound, scheduleNotificationAsync
+                // may need it here specifically if custom sounds are desired.
+                sound: _resolveSoundFilename(channelKey),
                 vibrate: [0, 250, 250, 250],
-                priority: "max",
+                priority: Notifications.AndroidImportance.MAX,
                 ...(Platform.OS === "android"
                     ? {
                           android: {
                               channelId: androidChannelId,
                               color: accentColor,
-                              priority: "max",
+                              importance: Notifications.AndroidImportance.MAX,
                               vibrationPattern: [0, 250, 250, 250],
                           },
                       }
                     : {}),
                 ...(Platform.OS === "ios"
-                    ? { ios: { sound: true, interruptionLevel: "timeSensitive" } }
+                    ? {
+                          ios: {
+                              sound: `${_resolveSoundFilename(channelKey)}${_resolveSoundFilename(channelKey) === "default" ? "" : ".wav"}`,
+                              interruptionLevel: "timeSensitive",
+                          },
+                      }
                     : {}),
             },
             trigger: null,

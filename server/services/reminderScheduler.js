@@ -99,77 +99,7 @@ const _formatHHmm = (date) => {
     return `${h}:${m}`;
 };
 
-const _buildRichTitle = (activityKey, minutesLeft, actorName, lang = "en") => {
-    let base;
-    if (minutesLeft > 0) {
-        const minTxt = minutesLeft === 1 ? "1 minute" : `${minutesLeft} minutes`;
-        if (activityKey === "phone") base = `Call in ${minTxt}`;
-        else if (activityKey === "whatsapp") base = `WhatsApp in ${minTxt}`;
-        else if (activityKey === "email") base = `Email in ${minTxt}`;
-        else if (activityKey === "meeting") base = `Meeting in ${minTxt}`;
-        else base = `Follow-up in ${minTxt}`;
-    } else if (minutesLeft === 0) {
-        if (activityKey === "meeting") base = "Meeting reminder";
-        else if (activityKey === "email") base = "Email follow-up";
-        else if (activityKey === "whatsapp") base = "WhatsApp follow-up";
-        else if (activityKey === "phone") base = "Call reminder";
-        else base = "Follow-up reminder";
-    } else {
-        // missed
-        base = "You might have missed this";
-    }
-    const actor = String(actorName || "").trim();
-    return actor ? `${actor} • ${base}` : base;
-};
-
-const _buildRichBody = (followUp, minutesLeft, lang = "en") => {
-    const name = String(followUp?.name || "your client").trim();
-    const actorName = String(followUp?.staffName || "").trim();
-    const activityType = String(followUp?.activityType || "Follow-up").trim();
-    const activityKey = _normalizeActivityKey(activityType);
-    const timeLabel = _formatHHmm(followUp?.dueAt);
-    const timeBit = timeLabel ? `at ${timeLabel}` : "";
-    const prefix = _prefix(name, actorName);
-
-    if (minutesLeft > 0) {
-        const mins = minutesLeft;
-        const minTxt = mins === 1 ? "1 minute" : `${mins} minutes`;
-        const waitingHint = mins <= 3 ? " Your customer is waiting." : "";
-        return `${prefix} • ${activityType} in ${minTxt}.${waitingHint}`;
-    }
-
-    if (minutesLeft === 0) {
-        if (activityKey === "phone")
-            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}Your customer is waiting. Please call ${name} now.`;
-        if (activityKey === "whatsapp")
-            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}WhatsApp follow-up due now. Please send the message.`;
-        if (activityKey === "email")
-            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}Email follow-up due now. Please send the email.`;
-        if (activityKey === "meeting")
-            return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}Meeting due now. Please connect.`;
-        return `${prefix} • ${timeLabel ? `${activityType} ${timeBit}. ` : ""}${activityType} due now.`;
-    }
-
-    // missed (minutesLeft < 0)
-    const tl = timeBit ? ` ${timeBit}` : "";
-    if (activityKey === "phone")
-        return `${prefix} • ${activityType}${tl}. You might have missed this. Your customer is waiting. Please call ${name} now.`;
-    if (activityKey === "whatsapp")
-        return `${prefix} • ${activityType}${tl}. You might have missed this. Please send WhatsApp now.`;
-    if (activityKey === "email")
-        return `${prefix} • ${activityType}${tl}. You might have missed this. Please send the email now.`;
-    if (activityKey === "meeting")
-        return `${prefix} • ${activityType}${tl}. You might have missed this. Please confirm and connect now.`;
-    return `${prefix} • ${activityType}${tl}. You might have missed this. Please follow up now.`;
-};
-
-const buildExpoMessage = (followUp, minutesLeft) => {
-    const activityKey = _normalizeActivityKey(followUp?.activityType);
-    const actorName = String(followUp?.staffName || "").trim();
-    const title = _buildRichTitle(activityKey, minutesLeft, actorName);
-    const body = _buildRichBody(followUp, minutesLeft);
-    return { title, body };
-};
+// Notification building is now handled by firebaseNotificationService.buildTexts for consistency across FCM and Expo fallback.
 
 
 // ─── Configuration ────────────────────────────────────────────────────────────
@@ -320,12 +250,13 @@ exports.sendDueFollowUpReminders = async () => {
             })
                 .populate(
                     "userId",
-                    "fcmToken pushToken notificationPreferences company_id",
+                    "name fcmToken pushToken notificationPreferences company_id",
                 )
                 .populate(
                     "assignedTo",
-                    "fcmToken pushToken notificationPreferences company_id",
+                    "name fcmToken pushToken notificationPreferences company_id",
                 )
+                .populate("createdBy", "name")
                 .lean()
                 .limit(100);
 
@@ -373,14 +304,21 @@ exports.sendDueFollowUpReminders = async () => {
                     const activityType = followUp.activityType || "followup";
                     const voiceLang =
                         user.notificationPreferences?.voiceLang || "en";
-                    const staffName = String(followUp?.staffName || "").trim();
+                    const staffName = String(
+                        followUp?.staffName || 
+                        followUp?.createdBy?.name || 
+                        followUp?.createdBy || 
+                        ""
+                    ).trim();
 
                     // actorName = who created this followup (shown as prefix in the alert).
-                    // If staffName equals the recipient's own name, omit it — no point
-                    // showing "Staff B • You might have missed this" TO Staff B.
+                    // If it's the same as the recipient, we don't need the prefix.
                     const recipientName = String(user?.name || "").trim();
                     const actorName =
-                        staffName && staffName !== recipientName
+                        staffName &&
+                        staffName.toLowerCase() !== "null" &&
+                        staffName.toLowerCase() !== "undefined" &&
+                        staffName !== recipientName
                             ? staffName
                             : "";
 
@@ -399,6 +337,12 @@ exports.sendDueFollowUpReminders = async () => {
                         phoneNumber: followUp?.mobile,
                     };
 
+                    const channelKey = resolveChannelKey(
+                        activityType,
+                        minutesLeft,
+                        voiceLang,
+                    );
+                    const sound = firebaseNotificationService.resolveSoundFilename(channelKey);
 
                     let result = null;
                     if (hasFcm) {
@@ -419,21 +363,20 @@ exports.sendDueFollowUpReminders = async () => {
                                 : minutesLeft === 0
                                     ? "followup-due"
                                     : "followup-soon";
-                        const channelKey = resolveChannelKey(
+
+                        // ⚡ FIX: Use the SAME building logic as FCM for consistency
+                        const richTexts = await firebaseNotificationService.buildTexts({
                             activityType,
+                            followUpData,
                             minutesLeft,
-                            voiceLang,
-                        );
-                        const expoMessage = buildExpoMessage(
-                            followUp,
-                            minutesLeft,
-                        );
+                            lang: voiceLang,
+                        });
 
                         const expoResult = await sendExpoNotification(
                             user.pushToken,
                             {
-                                title: expoMessage.title,
-                                body: expoMessage.body,
+                                title: richTexts.title,
+                                body: richTexts.body,
                                 data: {
                                     ...followUpData,
                                     minutesLeft: String(minutesLeft),
@@ -445,6 +388,7 @@ exports.sendDueFollowUpReminders = async () => {
                             "high",
                             3,
                             channelKey,
+                            sound,
                         );
 
                         result = expoResult

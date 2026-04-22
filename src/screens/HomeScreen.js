@@ -1,4 +1,4 @@
-﻿import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import * as Clipboard from "expo-clipboard";
@@ -47,6 +47,7 @@ import AppSideMenu from "../components/AppSideMenu";
 import { HomeSkeleton } from "../components/skeleton/screens";
 import { useAuth } from "../contexts/AuthContext";
 import { useSwipeNavigation } from "../hooks/useSwipeNavigation";
+import { useSilentRefresh } from "../hooks/useSilentRefresh";
 import { useResponsiveTokens } from "../components/Responsiveutils";
 import { getImageUrl } from "../services/apiConfig";
 import {
@@ -1201,26 +1202,11 @@ export default function HomeScreen({ navigation }) {
         useCallback(() => {
             // ⚡ Always fetch fresh data in background, but show cache instantly
             fetchData({ force: false, showLoading: false });
-
-            // Auto refresh (minute-aligned) so due/missed counts update even without manual refresh.
-            // This complements socket updates (for create/edit) by handling time-based transitions.
-            let intervalId = null;
-            let timeoutId = null;
-
-            const refreshNow = () => fetchData({ force: true, showLoading: false });
-            const now = Date.now();
-            const msToNextMinute = 60000 - (now % 60000);
-            timeoutId = setTimeout(() => {
-                refreshNow();
-                intervalId = setInterval(refreshNow, 60000);
-            }, Math.max(1000, msToNextMinute + 250));
-
-            return () => {
-                if (timeoutId) clearTimeout(timeoutId);
-                if (intervalId) clearInterval(intervalId);
-            };
         }, [fetchData]),
     );
+
+    // Auto-refresh every 5 seconds while active
+    useSilentRefresh(() => fetchData({ force: true, showLoading: false }), 5000);
 
     useEffect(() => {
         // Refresh when app returns to foreground while staying on Home screen.

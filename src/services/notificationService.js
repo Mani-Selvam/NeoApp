@@ -99,7 +99,7 @@ const releaseSchedulingLock = () => {
     _schedulingLockTs = 0;
 };
 
-const EARLY_FOLLOWUP_GUARD_MS = 20 * 1000;
+const EARLY_FOLLOWUP_GUARD_MS = 60 * 1000;
 const _followupCorrectionKeys = new Set();
 const FOLLOWUP_AUDIO_DUPLICATE_WINDOW_MS = 20 * 1000;
 const FOLLOWUP_SOON_DUPLICATE_WINDOW_MS = 90 * 1000;
@@ -107,8 +107,8 @@ const FOLLOWUP_DUE_DUPLICATE_WINDOW_MS = 90 * 1000;
 const FOLLOWUP_MISSED_DUPLICATE_WINDOW_MS = 90 * 1000;
 const _recentFollowupAudioKeys = new Map();
 const FOLLOWUP_SOON_COALESCE_WINDOW_MS = 1200;
-const FOLLOWUP_SOON_STALE_AUDIO_MS = 45 * 1000;
-const FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS = 10 * 1000;
+const FOLLOWUP_SOON_STALE_AUDIO_MS = 120 * 1000;
+const FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS = 120 * 1000; // Allow 2 mins of delay in production
 const _pendingSoonAudioByKey = new Map();
 const _foregroundFollowupAudioTimers = new Map();
 const FOREGROUND_FALLBACK_GRACE_MS = 650;

@@ -51,30 +51,43 @@ const { resolveAndroidChannelId } = require("../utils/notificationChannels");
 // Try to load notificationPhrases with fallback for different deployment structures
 let getFollowUpSoonTexts, getFollowUpDueTexts, getFollowUpMissedTexts;
 try {
-    const phrases = require("../../src/constants/notificationPhrases");
+    // ⚡ Primary: Server-optimized version (CommonJS)
+    const phrases = require("../utils/notificationPhrasesServer");
     getFollowUpSoonTexts = phrases.getFollowUpSoonTexts;
     getFollowUpDueTexts = phrases.getFollowUpDueTexts;
     getFollowUpMissedTexts = phrases.getFollowUpMissedTexts;
-} catch (err) {
-    console.warn(
-        "[WARNING] notificationPhrases module not found - using fallback stubs",
-    );
-    // Fallback stubs when module is not available
-    getFollowUpSoonTexts = ({ lang, minutesLeft, name, activityType }) => ({
-        title: `${minutesLeft}min reminder`,
-        body: `${name || "Activity"} reminder in ${minutesLeft} minutes`,
-        voice: `${name || "Activity"} reminder in ${minutesLeft} minutes`,
-    });
-    getFollowUpDueTexts = ({ lang, name, activityType }) => ({
-        title: "Activity due now",
-        body: `${name || "Activity"} is due now`,
-        voice: `${name || "Activity"} is due now`,
-    });
-    getFollowUpMissedTexts = ({ lang, name, activityType }) => ({
-        title: "Activity missed",
-        body: `${name || "Activity"} was missed`,
-        voice: `${name || "Activity"} was missed`,
-    });
+} catch (e1) {
+    console.error(`[FCMService] Failed to load server phrases: ${e1.message}`);
+    try {
+        // Fallback to shared constants if available
+        const phrases = require("../../src/constants/notificationPhrases");
+        getFollowUpSoonTexts = phrases.getFollowUpSoonTexts;
+        getFollowUpDueTexts = phrases.getFollowUpDueTexts;
+        getFollowUpMissedTexts = phrases.getFollowUpMissedTexts;
+    } catch (e2) {
+        console.error(`[FCMService] Failed to load secondary phrases: ${e2.message}`);
+        console.warn(
+            "[WARNING] notificationPhrases module not found - using basic fallback stubs",
+        );
+        const _prefix = (actor, name) => {
+            const a = String(actor || "").trim();
+            const n = String(name || "Client").trim();
+            return a && a !== n ? `${a} • ${n}` : n;
+        };
+
+        getFollowUpSoonTexts = ({ lang, minutesLeft, name, actorName, activityType }) => ({
+            title: `${actorName ? actorName + " • " : ""}${minutesLeft}min reminder`,
+            body: `${_prefix(actorName, name)} • ${activityType || "Follow-up"} in ${minutesLeft} minutes.`,
+        });
+        getFollowUpDueTexts = ({ lang, name, actorName, activityType }) => ({
+            title: `${actorName ? actorName + " • " : ""}Reminder`,
+            body: `${_prefix(actorName, name)} • ${activityType || "Follow-up"} is due now.`,
+        });
+        getFollowUpMissedTexts = ({ lang, name, actorName, activityType }) => ({
+            title: `${actorName ? actorName + " • " : ""}Missed`,
+            body: `${_prefix(actorName, name)} • You might have missed this ${activityType || "activity"}.`,
+        });
+    }
 }
 
 // ─── TTL per reminder window (seconds) ───────────────────────────────────────
@@ -124,17 +137,78 @@ const buildTexts = ({ activityType, followUpData, minutesLeft, lang }) => {
     const shared = {
         lang,
         name: followUpData?.name,
+        actorName: followUpData?.actorName,
         activityType,
     };
 
     if (minutesLeft > 0) {
         return getFollowUpSoonTexts({ ...shared, minutesLeft });
     }
+    
+    // For due and missed, we want to include the time label (e.g. "at 14:30")
+    const timeLabel = followUpData?.when ? new Date(followUpData.when).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : "";
+    
     if (minutesLeft === 0) {
-        return getFollowUpDueTexts({ ...shared });
+        return getFollowUpDueTexts({ ...shared, timeLabel });
     }
     // missed
-    return getFollowUpMissedTexts({ ...shared });
+    return getFollowUpMissedTexts({ ...shared, timeLabel });
+};
+
+// ─── Sound Filename Mapping ──────────────────────────────────────────────────
+
+/**
+ * Maps a channel key to the actual audio filename bundled in the app.
+ * This ensures the OS (Android/iOS) plays the custom sound in background/closed states.
+ */
+const resolveSoundFilename = (channelKey) => {
+    const k = String(channelKey || "").toLowerCase();
+
+    // 1. Phone / Generic Follow-ups
+    if (k.includes("phone_") || k.includes("followups_")) {
+        if (k.includes("5min")) return "n5pmin";
+        if (k.includes("4min")) return "n4pmin";
+        if (k.includes("3min")) return "n3pmin";
+        if (k.includes("2min")) return "n2pmin";
+        if (k.includes("1min")) return "n1pmin";
+        if (k.includes("due")) return k.includes("_ta") ? "tdue" : "pdue";
+        if (k.includes("missed")) return k.includes("_ta") ? "tmissed" : "pmissed";
+        
+        // Tamil patterns
+        if (k.includes("_ta")) {
+            if (k.includes("5min")) return "t5min";
+            if (k.includes("4min")) return "t4min";
+            if (k.includes("3min")) return "t3min";
+            if (k.includes("2min")) return "t2min";
+            if (k.includes("1min")) return "t1min";
+        }
+    }
+
+    // 2. Meeting
+    if (k.includes("meeting_")) {
+        const isTa = k.includes("_ta");
+        if (k.includes("min")) return isTa ? "mt5min" : "m5min";
+        if (k.includes("due")) return isTa ? "mtdue" : "mdue";
+        if (k.includes("missed")) return isTa ? "mtmissed" : "emissed";
+    }
+
+    // 3. Email
+    if (k.includes("email_")) {
+        const isTa = k.includes("_ta");
+        if (k.includes("min")) return isTa ? "et5min" : "e5min";
+        if (k.includes("due")) return isTa ? "etdue" : "edue";
+        if (k.includes("missed")) return isTa ? "etmissed" : "emissed";
+    }
+
+    // 4. WhatsApp
+    if (k.includes("whatsapp_")) {
+        const isTa = k.includes("_ta");
+        if (k.includes("min")) return isTa ? "wt5min" : "w5min";
+        if (k.includes("due")) return isTa ? "wtdue" : "wdue";
+        if (k.includes("missed")) return isTa ? "wtmissed" : "wmissed";
+    }
+
+    return "default";
 };
 
 // ─── Core send function ───────────────────────────────────────────────────────
@@ -258,8 +332,9 @@ const sendActivityReminder = async (
                     // has no sound, Android will silently use the default channel.
                     channelId: androidChannelId,
 
-                    // Use the channel's configured sound (set in app.config.js)
-                    sound: "default",
+                    // Use the specific custom sound filename (without extension).
+                    // FCM needs the exact resource name to play it in background/killed.
+                    sound: resolveSoundFilename(channelKey),
 
                     // Show notification immediately, even in Doze mode
                     priority: "high",
@@ -285,8 +360,9 @@ const sendActivityReminder = async (
                 },
                 payload: {
                     aps: {
-                        // FIX BUG 2: iOS requires sound here for background delivery
-                        sound: "default",
+                        // FIX BUG 2: iOS requires the custom sound filename here.
+                        // (iOS usually needs the extension, e.g. pdue.wav)
+                        sound: `${resolveSoundFilename(channelKey)}${resolveSoundFilename(channelKey) === "default" ? "" : ".wav"}`,
                         badge: 1,
                         // Allow iOS to modify notification content
                         "mutable-content": 1,
@@ -328,18 +404,33 @@ const sendActivityReminder = async (
 // ─── Generic notification send (used by notificationRouter) ──────────────────
 
 /**
- * Send a generic notification to a single user by userId.
- * Fetches the FCM token from DB, then sends.
+ * Send a generic notification to a single user.
+ *
+ * @param {string} identifier - Either a userId (string) or an fcmToken (string)
+ * @param {object} payload    - { title, body, data }
+ * @param {object} options    - { priority, channelId, sound }
  */
-const sendNotification = async (payload, userId, _options = {}) => {
+const sendNotification = async (identifier, payload, options = {}) => {
     try {
-        const user = await User.findById(userId)
-            .select("fcmToken fcmSessionId")
-            .lean();
-        const fcmToken = user?.fcmToken;
+        let fcmToken = null;
+        let sessionId = "";
+
+        // If identifier looks like a MongoDB ID, fetch the user
+        if (typeof identifier === "string" && identifier.length === 24 && /^[0-9a-fA-F]+$/.test(identifier)) {
+            const user = await User.findById(identifier).select("fcmToken fcmSessionId").lean();
+            fcmToken = user?.fcmToken;
+            sessionId = user?.fcmSessionId || "";
+        } else {
+            // Treat as direct token
+            fcmToken = identifier;
+        }
+
         if (!fcmToken) {
             return { success: false, error: "No FCM token" };
         }
+
+        const channelId = options.channelId || "default_v5";
+        const sound = options.sound || "default";
 
         const message = {
             token: fcmToken,
@@ -355,16 +446,26 @@ const sendNotification = async (payload, userId, _options = {}) => {
                     ]),
                 )
                 : {},
-            android: { priority: "high" },
+            android: {
+                priority: options.priority || "high",
+                notification: {
+                    channelId,
+                    sound,
+                }
+            },
             apns: {
-                payload: { aps: { sound: "default" } },
+                payload: {
+                    aps: {
+                        sound: sound === "default" ? "default" : `${sound}.wav`,
+                    }
+                },
             },
         };
 
-        // Append session scoping info (must be strings)
+        // Append session scoping info
         message.data = {
             ...(message.data || {}),
-            sessionId: String(user?.fcmSessionId || ""),
+            sessionId: String(sessionId || ""),
             sentAtMs: String(Date.now()),
         };
 
@@ -433,4 +534,6 @@ module.exports = {
     sendActivityReminder,
     sendNotification,
     sendToUsers,
+    buildTexts,
+    resolveSoundFilename,
 };

@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
+import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSilentRefresh } from "../hooks/useSilentRefresh";
 import {
     ActivityIndicator,
     Alert,
@@ -853,6 +855,9 @@ export default function CommunicationScreen({ navigation }) {
         },
         [loadOlder],
     );
+
+    // Auto-refresh communication overview every 5 seconds while active
+    useSilentRefresh(() => loadOverview(), 5000);
 
     useEffect(() => {
         loadOverview();

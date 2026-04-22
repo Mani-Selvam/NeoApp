@@ -1,187 +1,65 @@
-/**
- * notificationPhrasesServer.js  (SERVER — CommonJS)
- *
- * Pure CommonJS copy of src/constants/notificationPhrases.js.
- * Required because the client file uses ES-module `export const` syntax
- * which Node.js CommonJS runtime cannot `require()`.
- *
- * Keep in sync with src/constants/notificationPhrases.js.
- */
-
-const normalizeActivityKey = (activityType) => {
-    const raw = String(activityType || "").trim().toLowerCase();
-    if (raw === "phone call" || raw === "call" || raw === "phone") return "phone";
-    if (raw === "whatsapp" || raw === "wa") return "whatsapp";
-    if (raw === "email" || raw === "mail") return "email";
-    if (raw === "meeting" || raw === "online meeting") return "meeting";
-    return "followup";
-};
-
-const formatPrefix = ({ lang, actorName, name }) => {
-    const customer = String(name || (lang === "ta" ? "வாடிக்கையாளர்" : "Client")).trim();
-    const actor = String(actorName || "").trim();
-    if (!actor || actor === customer) return customer;
-    return `${actor} • ${customer}`;
-};
-
-const minutesLabel = (lang, minutes) => {
-    const mins = Math.max(1, Math.round(Number(minutes || 0)));
-    if (lang === "ta") return mins === 1 ? "1 நிமிடம்" : `${mins} நிமிடங்கள்`;
-    return mins === 1 ? "1 minute" : `${mins} minutes`;
-};
-
-const minutesInLabel = (lang, minutes) => {
-    const mins = Math.max(1, Math.round(Number(minutes || 0)));
-    if (lang === "ta") return mins === 1 ? "1 நிமிடத்தில்" : `${mins} நிமிடங்களில்`;
-    return mins === 1 ? "in 1 minute" : `in ${mins} minutes`;
-};
-
-const soonTitle = (lang, activityKey, minutes) => {
-    const mins = Math.max(1, Math.round(Number(minutes || 0)));
-    if (lang === "ta") {
-        const minTxt = mins === 1 ? "1 நிமிடம்" : `${mins} நிமிடம்`;
-        if (activityKey === "phone") return `அழைப்பு (${minTxt})`;
-        if (activityKey === "whatsapp") return `வாட்ஸ்அப் (${minTxt})`;
-        if (activityKey === "email") return `மின்னஞ்சல் (${minTxt})`;
-        if (activityKey === "meeting") return `சந்திப்பு (${minTxt})`;
-        return `பின்தொடர்பு (${minTxt})`;
-    }
-    const minTxt = mins === 1 ? "1 minute" : `${mins} minutes`;
-    if (activityKey === "phone") return `Call in ${minTxt}`;
-    if (activityKey === "whatsapp") return `WhatsApp in ${minTxt}`;
-    if (activityKey === "email") return `Email in ${minTxt}`;
-    if (activityKey === "meeting") return `Meeting in ${minTxt}`;
-    return `Follow-up in ${minTxt}`;
-};
-
-const dueTitle = (lang, activityKey) => {
-    if (lang === "ta") {
-        if (activityKey === "phone") return "அழைப்பு நினைவூட்டு";
-        if (activityKey === "whatsapp") return "வாட்ஸ்அப் நினைவூட்டு";
-        if (activityKey === "email") return "மின்னஞ்சல் நினைவூட்டு";
-        if (activityKey === "meeting") return "சந்திப்பு நினைவூட்டு";
-        return "பின்தொடர்பு நினைவூட்டு";
-    }
-    if (activityKey === "meeting") return "Meeting reminder";
-    if (activityKey === "email") return "Email follow-up";
-    if (activityKey === "whatsapp") return "WhatsApp follow-up";
-    if (activityKey === "phone") return "Call reminder";
-    return "Follow-up reminder";
-};
-
-const missedTitle = (lang) =>
-    lang === "ta" ? "நீங்கள் இதை தவறவிட்டிருக்கலாம்" : "You might have missed this";
-
-const soonBody = ({ lang, name, actorName, activityType, minutesLeft }) => {
-    const mins = Math.max(1, Math.round(Number(minutesLeft || 0)));
-    const waitingHint = mins <= 3
-        ? (lang === "ta" ? "உங்கள் வாடிக்கையாளர் காத்திருக்கிறார்." : "Your customer is waiting.")
-        : "";
-    const activity = String(activityType || (lang === "ta" ? "பின்தொடர்பு" : "Follow-up")).trim();
-    const prefix = formatPrefix({ lang, actorName, name });
-    const base = lang === "ta"
-        ? `${prefix} • ${activity} இன்னும் ${minutesLabel(lang, mins)} உள்ளது.`
-        : `${prefix} • ${activity} in ${minutesLabel(lang, mins)}.`;
-    return waitingHint ? `${base} ${waitingHint}` : base;
-};
-
-const dueBody = ({ lang, name, actorName, activityType, timeLabel }) => {
-    const activityKey = normalizeActivityKey(activityType);
-    const prefix = formatPrefix({ lang, actorName, name });
-    const timeBit = timeLabel ? `${timeLabel}. ` : "";
-    if (lang === "ta") {
-        if (activityKey === "phone") return `${prefix} • ${timeBit}வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.`;
-        if (activityKey === "whatsapp") return `${prefix} • ${timeBit}இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம். தயவு செய்து செய்தி அனுப்பவும்.`;
-        if (activityKey === "email") return `${prefix} • ${timeBit}இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம். தயவு செய்து மின்னஞ்சல் அனுப்பவும்.`;
-        if (activityKey === "meeting") return `${prefix} • ${timeBit}இப்போது ஆன்லைன் சந்திப்பு நேரம். தயவு செய்து இணைக.`;
-        return `${prefix} • ${timeBit}இப்போது பின்தொடர்பு நேரம். தயவு செய்து தொடரவும்.`;
-    }
-    if (activityKey === "phone") return `${prefix} • ${timeBit}Your customer is waiting. Please call ${name} now.`;
-    if (activityKey === "whatsapp") return `${prefix} • ${timeBit}WhatsApp follow-up due now. Please send the message.`;
-    if (activityKey === "email") return `${prefix} • ${timeBit}Email follow-up due now. Please send the email.`;
-    if (activityKey === "meeting") return `${prefix} • ${timeBit}Meeting due now. Please connect.`;
-    return `${prefix} • ${timeBit}${String(activityType || "Follow-up").trim()} due now.`;
-};
-
-const missedBody = ({ lang, name, actorName, activityType, timeLabel }) => {
-    const activityKey = normalizeActivityKey(activityType);
-    const prefix = formatPrefix({ lang, actorName, name });
-    const timeBit = timeLabel ? ` ${timeLabel}` : "";
-    if (lang === "ta") {
-        if (activityKey === "phone") return `${prefix} • ${String(activityType || "அழைப்பு").trim()}${timeBit}. நீங்கள் அழைப்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்.`;
-        if (activityKey === "whatsapp") return `${prefix} • வாட்ஸ்அப்${timeBit}. நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது செய்தி அனுப்பவும்.`;
-        if (activityKey === "email") return `${prefix} • மின்னஞ்சல்${timeBit}. நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்.`;
-        if (activityKey === "meeting") return `${prefix} • சந்திப்பு${timeBit}. நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக.`;
-        return `${prefix} • பின்தொடர்பு${timeBit}. நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்.`;
-    }
-    const activity = String(activityType || "Follow-up").trim();
-    if (activityKey === "phone") return `${prefix} • ${activity}${timeBit}. You might have missed this. Your customer is waiting. Please call ${name} now.`;
-    if (activityKey === "whatsapp") return `${prefix} • ${activity}${timeBit}. You might have missed this. Please send WhatsApp now.`;
-    if (activityKey === "email") return `${prefix} • ${activity}${timeBit}. You might have missed this. Please send the email now.`;
-    if (activityKey === "meeting") return `${prefix} • ${activity}${timeBit}. You might have missed this. Please confirm and connect now.`;
-    return `${prefix} • ${activity}${timeBit}. You might have missed this. Please follow up now.`;
-};
-
-const buildTitle = (title, actorName) => {
+const buildNotificationTitle = (title, actorName) => {
     const actor = String(actorName || "").trim();
     return actor ? `${actor} • ${title}` : title;
 };
 
-// ─── Exports ──────────────────────────────────────────────────────────────────
-
-const getFollowUpSoonTexts = ({ lang = "en", name, actorName, activityType, minutesLeft }) => {
-    const key = normalizeActivityKey(activityType);
-    const who = String(name || "").trim() || (lang === "ta" ? "வாடிக்கையாளர்" : "your client");
-    return {
-        title: buildTitle(soonTitle(lang, key, minutesLeft), actorName),
-        body: soonBody({ lang, name, actorName, activityType, minutesLeft }),
-        voice: key === "phone"
-            ? (lang === "ta"
-                ? `உங்கள் வாடிக்கையாளர் காத்திருக்கிறார். ${minutesInLabel(lang, minutesLeft)} அழைக்கவும்.`
-                : `Your customer is waiting. Call ${who} ${minutesInLabel(lang, minutesLeft)}.`)
-            : (lang === "ta"
-                ? `${String(activityType || "பின்தொடர்பு").trim()} ${minutesInLabel(lang, minutesLeft)}. தயார் நிலையில் இருங்கள்.`
-                : `${String(activityType || "Follow-up").trim()} ${minutesInLabel(lang, minutesLeft)}. Please be ready.`),
-    };
+const _prefix = (name, actorName) => {
+    const n = String(name || "Client").trim();
+    const a = String(actorName || "").trim();
+    // If we have an actor (Admin/Staff), show "Actor • Client"
+    if (a) return `${a} • ${n}`;
+    return n;
 };
 
-const getFollowUpDueTexts = ({ lang = "en", name, actorName, activityType, timeLabel = "" }) => {
-    const key = normalizeActivityKey(activityType);
-    const who = String(name || "").trim() || (lang === "ta" ? "வாடிக்கையாளர்" : "your client");
-    return {
-        title: buildTitle(dueTitle(lang, key), actorName),
-        body: dueBody({ lang, name: who, actorName, activityType, timeLabel }),
-        voice: lang === "ta"
-            ? (key === "phone" ? "வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்."
-                : key === "whatsapp" ? "இப்போது வாட்ஸ்அப் பின்தொடர்பு நேரம். தயவு செய்து செய்தி அனுப்பவும்."
-                : key === "email" ? "இப்போது மின்னஞ்சல் பின்தொடர்பு நேரம். தயவு செய்து மின்னஞ்சல் அனுப்பவும்."
-                : key === "meeting" ? "இப்போது ஆன்லைன் சந்திப்பு நேரம். தயவு செய்து இணைக."
-                : "இப்போது பின்தொடர்பு நேரம். தயவு செய்து தொடரவும்.")
-            : (key === "phone" ? `Your customer is waiting. Please call ${who} now.`
-                : `${String(activityType || "Follow-up").trim()} due now.`),
-    };
+const soonTitle = (lang) => (lang === "ta" ? "விரைவில் பின்தொடரவும்" : "Follow-up soon");
+const dueTitle = (lang) => (lang === "ta" ? "பின்தொடர்தல் நேரம்" : "Follow-up reminder");
+const missedTitle = (lang) => (lang === "ta" ? "தவறிய பின்தொடர்தல்" : "Missed follow-up");
+
+const soonBody = ({ lang, name, actorName, activityType, minutesLeft }) => {
+    const prefix = _prefix(name, actorName);
+    const activity = String(activityType || "Follow-up").trim();
+    const minTxt = minutesLeft === 1 ? (lang === "ta" ? "1 நிமிடம்" : "1 minute") : (lang === "ta" ? `${minutesLeft} நிமிடங்கள்` : `${minutesLeft} minutes`);
+    
+    if (lang === "ta") {
+        return `${prefix} • ${activity} இன்னும் ${minTxt}ல். உங்கள் வாடிக்கையாளர் காத்திருக்கிறார். தயவுசெய்து அழைக்கவும்.`;
+    }
+    const waitingHint = minutesLeft <= 3 ? " Your customer is waiting. Please call now." : "";
+    return `${prefix} • ${activity} in ${minTxt}.${waitingHint}`;
 };
 
-const getFollowUpMissedTexts = ({ lang = "en", name, actorName, activityType, timeLabel = "" }) => {
-    const key = normalizeActivityKey(activityType);
-    const who = String(name || "").trim() || (lang === "ta" ? "வாடிக்கையாளர்" : "your client");
-    return {
-        title: buildTitle(missedTitle(lang), actorName),
-        body: missedBody({ lang, name: who, actorName, activityType, timeLabel }),
-        voice: lang === "ta"
-            ? (key === "phone" ? "நீங்கள் அழைப்பை தவறவிட்டீர்கள். வாடிக்கையாளர் காத்திருக்கிறார். தயவு செய்து இப்போது அழைக்கவும்."
-                : key === "whatsapp" ? "நீங்கள் வாட்ஸ்அப் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது செய்தி அனுப்பவும்."
-                : key === "email" ? "நீங்கள் மின்னஞ்சல் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது மின்னஞ்சல் அனுப்பவும்."
-                : key === "meeting" ? "நீங்கள் ஆன்லைன் சந்திப்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது இணைக."
-                : "நீங்கள் பின்தொடர்பை தவறவிட்டீர்கள். தயவு செய்து இப்போது தொடரவும்.")
-            : (key === "phone"
-                ? `You might have missed this. Your customer is waiting. Please call ${who} now.`
-                : "You might have missed this. Please follow up now."),
-    };
+const dueBody = ({ lang, name, actorName, activityType, timeLabel }) => {
+    const prefix = _prefix(name, actorName);
+    const activity = String(activityType || "Follow-up").trim();
+    const timeBit = timeLabel ? (lang === "ta" ? `${timeLabel} மணிக்கு` : `at ${timeLabel}`) : "";
+    
+    if (lang === "ta") {
+        return `${prefix} • ${activity} ${timeBit} இப்போது செய்யப்பட வேண்டும். உங்கள் வாடிக்கையாளர் காத்திருக்கிறார்.`;
+    }
+    return `${prefix} • ${activity} ${timeBit} is due now. Your customer is waiting. Please call ${name} now.`;
+};
+
+const missedBody = ({ lang, name, actorName, activityType, timeLabel }) => {
+    const prefix = _prefix(name, actorName);
+    const activity = String(activityType || "Follow-up").trim();
+    const timeBit = timeLabel ? (lang === "ta" ? `${timeLabel} மணிக்கு` : `at ${timeLabel}`) : "";
+    
+    if (lang === "ta") {
+        return `${prefix} • ${activity} ${timeBit} தவறிவிட்டது. உங்கள் வாடிக்கையாளர் காத்திருக்கிறார். தயவுசெய்து இப்போது அழைக்கவும்.`;
+    }
+    return `${prefix} • ${activity} ${timeBit} was missed. You might have missed this. Your customer is waiting. Please call ${name} now.`;
 };
 
 module.exports = {
-    getFollowUpSoonTexts,
-    getFollowUpDueTexts,
-    getFollowUpMissedTexts,
+    getFollowUpSoonTexts: ({ lang, minutesLeft, name, actorName, activityType }) => ({
+        title: buildNotificationTitle(soonTitle(lang), actorName),
+        body: soonBody({ lang, name, actorName, activityType, minutesLeft }),
+    }),
+    getFollowUpDueTexts: ({ lang, name, actorName, activityType, timeLabel }) => ({
+        title: buildNotificationTitle(dueTitle(lang), actorName),
+        body: dueBody({ lang, name, actorName, activityType, timeLabel }),
+    }),
+    getFollowUpMissedTexts: ({ lang, name, actorName, activityType, timeLabel }) => ({
+        title: buildNotificationTitle(missedTitle(lang), actorName),
+        body: missedBody({ lang, name, actorName, activityType, timeLabel }),
+    })
 };

@@ -11,6 +11,7 @@ async function sendExpoNotification(
     priority = "default",
     maxRetries = 3,
     channelId = "followups_soon_en",
+    sound = "default",
 ) {
     const { resolveAndroidChannelId } = require("./utils/notificationChannels");
     const resolvedChannelId = resolveAndroidChannelId(channelId);
@@ -31,16 +32,11 @@ async function sendExpoNotification(
         try {
             const message = {
                 to: pushToken,
-                sound: "default",
+                sound: sound === "default" ? "default" : `${sound}.wav`,
                 priority: priority,
                 ...notification,
+                channelId: resolvedChannelId || undefined,
             };
-
-            // Only add channelId if it's explicitly valid and we are trying to use it.
-            // However, for Expo Go on Android, custom channelIds often cause silent drops
-            // if the channel wasn't created natively. We omit it to ensure delivery.
-            // If you want to test it locally, comment this back in:
-            // if (resolvedChannelId) message.channelId = resolvedChannelId;
 
             console.log(
                 `[NotifSvc] Sending notification (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,

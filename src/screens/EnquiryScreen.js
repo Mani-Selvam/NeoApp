@@ -68,6 +68,7 @@ import {
     buildFeatureUpgradeMessage,
     hasPlanFeature,
 } from "../utils/planFeatures";
+import { useSilentRefresh } from "../hooks/useSilentRefresh";
 
 const API_URL = `${GLOBAL_API_URL}/enquiries`;
 const { width: SW, height: SH } = Dimensions.get("window");
@@ -1167,6 +1168,12 @@ export default function EnquiryListScreen({ navigation, route }) {
     useEffect(() => {
         fetchRef.current = fetchEnquiries;
     }, [fetchEnquiries]);
+
+    // Auto-refresh enquiries every 5 seconds while active
+    useSilentRefresh(
+        () => fetchEnquiries(true, { showIndicator: false, force: true }),
+        5000,
+    );
     useEffect(() => {
         fetchEnquiries(true, {
             showIndicator: false,

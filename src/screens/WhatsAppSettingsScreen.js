@@ -423,7 +423,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       loadConfig();
-      return () => {};
+      return () => { };
     }, [loadConfig]),
   );
 
@@ -996,7 +996,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                           label="Endpoint / Base URL"
                           value={form.neoBaseUrl}
                           onChange={(v) => updateField("neoBaseUrl", v)}
-                          placeholder="/v1/message/send-message"
+                          placeholder="https://aiwhatsappapi......"
                         />
                         <FloatingInput
                           label="Account Name"
@@ -1011,13 +1011,7 @@ export default function WhatsAppSettingsScreen({ navigation }) {
                           placeholder="Enter API key"
                           multiline
                         />
-                        <FloatingInput
-                          label="Bearer Token"
-                          value={form.neoBearerToken}
-                          onChange={(v) => updateField("neoBearerToken", v)}
-                          placeholder="Bearer token"
-                          multiline
-                        />
+
                         <FloatingInput
                           label="Phone Number"
                           value={form.neoPhoneNumber}

@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useSilentRefresh } from "../hooks/useSilentRefresh";
 import * as FileSystem from "expo-file-system/legacy";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Sharing from "expo-sharing";
@@ -901,6 +902,12 @@ export default function ReportScreen({ navigation }) {
             user?.name,
             billingInfo?.plan,
         ],
+    );
+
+    // Auto-refresh reports every 5 seconds while active
+    useSilentRefresh(
+        () => loadReportData({ force: true, showLoading: false }),
+        5000,
     );
 
     useFocusEffect(
