@@ -1,0 +1,34 @@
+{
+    "project_info": {
+        "project_number": "953843416185",
+        "project_id": "neogroww-ef576",
+        "storage_bucket": "neogroww-ef576.firebasestorage.app"
+    },
+    "client": [
+        {
+            "client_info": {
+                "mobilesdk_app_id": "1:953843416185:android:e6b5aafff50e1493c468a8",
+                "android_client_info": {
+                    "package_name": "com.neogroww.crm"
+                }
+            },
+            "oauth_client": [],
+            "api_key": [
+                {
+                    "current_key": "AIzaSyBk3idO5U8HmU4q7SvyM2SsVuqZ3xmkzRE"
+                }
+            ],
+            "services": {
+                "appinvite_service": {
+                    "other_platform_oauth_client": [
+                        {
+                            "client_id": "953843416185-sihgmeq3lcv7ppt73b5ddkvni2d0cjio.apps.googleusercontent.com",
+                            "client_type": 3
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "configuration_version": "1"
+}

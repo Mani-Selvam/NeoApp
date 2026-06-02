@@ -1,0 +1,99 @@
+{
+  "expo": {
+    "name": "NeoGroww",
+    "slug": "neoapp-manibro27",
+    "owner": "manibro27",
+    "version": "1.0.1",
+    "icon": "./src/assets/app-icon.png",
+    "orientation": "portrait",
+    "scheme": [
+      "myapp",
+      "com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h"
+    ],
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.neogroww.crm",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "web": {
+      "output": "single",
+      "bundler": "metro"
+    },
+    "splash": {
+      "image": "./src/assets/app-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "android": {
+      "package": "com.neogroww.crm",
+      "versionCode": 8,
+      "googleServicesFile": "./google-services.json",
+      "blockedPermissions": [],
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./src/assets/sounds/general_followup_60min.wav",
+            "./src/assets/sounds/tamil_general_followup_60min.wav"
+          ]
+        }
+      ],
+      "expo-image-picker",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "The app needs access to your microphone to record voice notes."
+        }
+      ],
+      "expo-video",
+      "expo-font",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "The app needs access to your contacts to link call logs."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "ndkVersion": "26.1.10909125",
+            "enableProguardModuleExtension": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "playStoreSafeMode": false,
+      "privacyPolicyUrl": "https://6z7.714.mytemp.website/app_privacy/",
+      "accountDeletionUrl": "https://6z7.714.mytemp.website/app_privacy/delete-account.html",
+      "firebase": {
+        "apiKey": "AIzaSyBk3idO5U8HmU4q7SvyM2SsVuqZ3xmkzRE",
+        "authDomain": "neogroww-ef576.firebaseapp.com",
+        "projectId": "neogroww-ef576",
+        "storageBucket": "neogroww-ef576.firebasestorage.app",
+        "messagingSenderId": "953843416185",
+        "appId": "1:953843416185:android:e6b5aafff50e1493c468a8"
+      },
+      "eas": {
+        "projectId": "5ad19584-07fb-4123-bddc-5ce14abb1f6c"
+      }
+    }
+  }
+}

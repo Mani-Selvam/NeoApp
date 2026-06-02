@@ -1,0 +1,10 @@
+RewriteEngine On
+RewriteBase /neoappwebdash/
+
+# Serve existing files and directories directly.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Send all app routes to the SPA entry point.
+RewriteRule ^ index.html [L]
