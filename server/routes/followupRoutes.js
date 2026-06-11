@@ -550,7 +550,7 @@ router.get("/dashboard", verifyToken, async (req, res) => {
             }),
             FollowUp.find({ ...baseFilter, ...CURRENT_FOLLOWUP_CLAUSE })
                 .select(
-                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo createdAt activityTime",
+                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo createdAt activityTime voiceNote",
                 )
                 .limit(parseInt(pageSize))
                 .sort({ date: -1, createdAt: -1 })
@@ -561,7 +561,7 @@ router.get("/dashboard", verifyToken, async (req, res) => {
                 status: "Missed",
             })
                 .select(
-                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo staffName createdAt activityTime",
+                    "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo staffName createdAt activityTime voiceNote",
                 )
                 .limit(50)
                 .sort({ date: -1 })
@@ -764,7 +764,7 @@ router.get("/", verifyToken, async (req, res) => {
             async () => {
                 const followUps = await FollowUp.find(query)
                     .select(
-                        "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo staffName createdAt activityTime",
+                        "enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction assignedTo staffName createdAt activityTime voiceNote",
                     )
                     .populate("assignedTo", "name")
                     .sort(sort)
@@ -1037,7 +1037,7 @@ router.post("/call-record", verifyToken, async (req, res) => {
 });
 
 // UPDATE Follow-up
-router.put("/:id", verifyToken, async (req, res) => {
+router.put("/:id", verifyToken, upload.single("voiceNote"), async (req, res) => {
     try {
         if (!mongoose.Types.ObjectId.isValid(req.params.id))
             return res.status(400).json({ message: "Invalid ID" });
@@ -1061,6 +1061,10 @@ router.put("/:id", verifyToken, async (req, res) => {
 
         const tzOffsetMinutes = updateData?.tzOffsetMinutes ?? null;
         delete updateData.tzOffsetMinutes;
+
+        if (req.file) {
+            updateData.voiceNote = `/uploads/voice_notes/${req.file.filename}`;
+        }
 
         const toObjectId = (value) => {
             if (!value) return undefined;
@@ -1245,7 +1249,7 @@ router.get("/history/:enqNoOrId", verifyToken, async (req, res) => {
                 note: { $not: /^Call:/i },
             })
             .select(
-                "staffName assignedTo enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction createdAt activityTime",
+                "staffName assignedTo enqId enqNo name mobile image product date time dueAt followUpDate nextFollowUpDate type activityType remarks note status nextAction createdAt activityTime voiceNote",
             )
             .populate("assignedTo", "name")
             .sort({ activityTime: 1, createdAt: 1 })

@@ -1,4 +1,8 @@
+import { Platform } from "react-native";
+import axios from "axios";
 import getApiClient from "./apiClient";
+import { API_URL } from "./apiConfig";
+import { getAuthToken } from "./secureTokenStorage";
 import { buildCacheKey, getCacheEntry, invalidateCacheTags, isFresh, setCacheEntry } from "./appCache";
 import { emitFollowupChanged } from "./appEvents";
 
@@ -49,10 +53,13 @@ export const getFollowUps = async (
         });
         return response.data; // Now returns { data: [], pagination: {} }
     } catch (error) {
-        console.error(
-            "Get followups error:",
-            error.response?.data || error.message,
-        );
+        const isExpired = error.response?.status === 402 || error.response?.data?.code === 'NO_ACTIVE_PLAN';
+        if (!isExpired) {
+            console.error(
+                "Get followups error:",
+                error.response?.data || error.message,
+            );
+        }
         throw error;
     }
 };
@@ -75,19 +82,30 @@ export const createFollowUp = async (followUpData) => {
                     formData.append(key, String(payload[key]));
                 }
             });
-            const uriParts = payload.voiceNoteUri.split('.');
-            const fileType = uriParts[uriParts.length - 1];
-            formData.append('voiceNote', {
-                uri: payload.voiceNoteUri,
-                name: `voiceNote.${fileType}`,
-                type: `audio/${fileType === 'm4a' ? 'mp4' : 'mpeg'}`
-            });
+            if (Platform.OS === "web" && payload.voiceNoteUri.startsWith("blob:")) {
+                try {
+                    const res = await fetch(payload.voiceNoteUri);
+                    const blob = await res.blob();
+                    formData.append('voiceNote', blob, 'voiceNote.m4a');
+                } catch (e) {
+                    // Ignore
+                }
+            } else {
+                formData.append('voiceNote', {
+                    uri: payload.voiceNoteUri,
+                    type: "audio/mp4",
+                    name: `voiceNote.m4a`,
+                });
+            }
             
-            response = await client.post("/followups", formData, {
+            const token = await getAuthToken();
+            const fetchResponse = await axios.post(`${API_URL}/followups`, formData, {
                 headers: {
+                    Authorization: `Bearer ${token}`,
                     "Content-Type": "multipart/form-data",
                 },
             });
+            response = { data: fetchResponse.data };
         } else {
             response = await client.post("/followups", payload);
         }
@@ -144,7 +162,43 @@ export const updateFollowUp = async (id, followUpData) => {
         if (payload.tzOffsetMinutes == null) {
             payload.tzOffsetMinutes = new Date().getTimezoneOffset();
         }
-        const response = await client.put(`/followups/${id}`, payload);
+
+        let response;
+        if (payload.voiceNoteUri && payload.voiceNoteUri.startsWith("file://")) {
+            const formData = new FormData();
+            Object.keys(payload).forEach(key => {
+                if (key !== "voiceNoteUri" && payload[key] !== undefined && payload[key] !== null) {
+                    formData.append(key, String(payload[key]));
+                }
+            });
+            if (Platform.OS === "web" && payload.voiceNoteUri.startsWith("blob:")) {
+                try {
+                    const res = await fetch(payload.voiceNoteUri);
+                    const blob = await res.blob();
+                    formData.append('voiceNote', blob, 'voiceNote.m4a');
+                } catch (e) {
+                    // Ignore
+                }
+            } else {
+                formData.append('voiceNote', {
+                    uri: payload.voiceNoteUri,
+                    type: "audio/mp4",
+                    name: `voiceNote.m4a`,
+                });
+            }
+            
+            const token = await getAuthToken();
+            const fetchResponse = await axios.put(`${API_URL}/followups/${id}`, formData, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "multipart/form-data",
+                },
+            });
+            response = { data: fetchResponse.data };
+        } else {
+            response = await client.put(`/followups/${id}`, payload);
+        }
+
         Promise.resolve(
             invalidateCacheTags(["dashboard", "followups", "enquiries", "reports"]),
         ).catch(() => { });

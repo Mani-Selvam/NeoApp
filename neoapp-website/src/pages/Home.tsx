@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Navbar } from "@/components/Navbar";
 import { HeroSection } from "@/components/HeroSection";
 import { FeaturesSection } from "@/components/FeaturesSection";
@@ -10,23 +10,27 @@ import { SecuritySection } from "@/components/SecuritySection";
 import { TestimonialsSection } from "@/components/TestimonialsSection";
 import { CtaSection } from "@/components/CtaSection";
 import { Footer } from "@/components/Footer";
+import { GetStartedModal } from "@/components/GetStartedModal";
 
 export default function Home() {
+  const [modalOpen, setModalOpen] = useState(false);
+
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/30 selection:text-primary">
-      <Navbar />
+      <Navbar onOpenModal={() => setModalOpen(true)} />
       <main>
-        <HeroSection />
+        <HeroSection onOpenModal={() => setModalOpen(true)} />
         <StatsSection />
         <FeaturesSection />
         <CommunicationSection />
         <AiVoiceSection />
-        <PricingSection />
+        <PricingSection onOpenModal={() => setModalOpen(true)} />
         <SecuritySection />
         <TestimonialsSection />
-        <CtaSection />
+        <CtaSection onOpenModal={() => setModalOpen(true)} />
       </main>
       <Footer />
+      <GetStartedModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>
   );
 }

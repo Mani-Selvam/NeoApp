@@ -422,6 +422,13 @@ router.get("/summary", verifyToken, async (req, res) => {
                 ...missedFollowUpStatusFilter,
             };
 
+            const upcomingFollowUpQuery = {
+                ...query,
+                date: { $gt: today },
+                ...CURRENT_FOLLOWUP_CLAUSE,
+                ...openFollowUpStatusFilter,
+            };
+
             // Run all queries in parallel
             const [
                 countsResult,
@@ -432,9 +439,11 @@ router.get("/summary", verifyToken, async (req, res) => {
                 weekSalesByDate,
                 todayFollowUpsCount,
                 missedFollowUpsCount,
+                upcomingFollowUpsCount,
                 recentEnquiries,
                 todayList,
                 missedList,
+                upcomingList,
             ] = await Promise.all([
                 Enquiry.aggregate([
                     { $match: andMatch(query, dateFilter) },
@@ -487,6 +496,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                 ]),
                 FollowUp.countDocuments(todayOpenFollowUpQuery),
                 FollowUp.countDocuments(missedFollowUpQuery),
+                FollowUp.countDocuments(upcomingFollowUpQuery),
                 Enquiry.find(andMatch(query, dateFilter))
                     .select('name enqNo date status mobile product cost')
                     .sort({ createdAt: -1 })
@@ -501,6 +511,11 @@ router.get("/summary", verifyToken, async (req, res) => {
                     .select('enqId name mobile image product enqNo date time dueAt followUpDate nextFollowUpDate type activityType remarks status')
                     .sort({ date: -1, dueAt: -1, activityTime: -1, createdAt: -1 })
                     .limit(50)
+                    .lean(),
+                FollowUp.find(upcomingFollowUpQuery)
+                    .select('enqId name mobile image product enqNo date time dueAt followUpDate nextFollowUpDate type activityType remarks status')
+                    .sort({ date: 1, dueAt: 1, activityTime: 1, createdAt: 1 })
+                    .limit(20)
                     .lean()
             ]);
 
@@ -557,6 +572,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                 todayEnquiry,
                 todayFollowUps: todayFollowUpsCount,
                 missedFollowUps: missedFollowUpsCount,
+                upcomingFollowUps: upcomingFollowUpsCount,
                 overallSalesAmount: revenueNow,
                 monthlyRevenue: revenueNow,
                 salesMonthly: revenueResult[0]?.overall[0]?.count || 0,
@@ -580,6 +596,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                 recentEnquiries,
                 todayList,
                 missedList,
+                upcomingList,
             };
         }, 60000); // 60s TTL
 

@@ -1,5 +1,4 @@
-﻿const SystemLog = require("../models/SystemLog");
-
+﻿
 const normalizeRole = (role) => (role || "").toString().toLowerCase();
 
 const isSuperadmin = (role) => normalizeRole(role) === "superadmin";
@@ -16,17 +15,6 @@ const requireSuperadmin = requireRole("superadmin");
 
 const logSuperadminRequest = async (req, _res, next) => {
   try {
-    await SystemLog.create({
-      userId: req.userId || null,
-      action: `SUPERADMIN ${req.method} ${req.originalUrl}`,
-      ip: req.ip,
-      category: "api",
-      metadata: {
-        method: req.method,
-        path: req.originalUrl,
-        query: req.query || {},
-      },
-    });
   } catch (_err) {
     // Logging should not block request processing
   }

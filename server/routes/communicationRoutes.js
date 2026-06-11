@@ -4,6 +4,7 @@ const multer = require("multer");
 const path = require("path");
 const mongoose = require("mongoose");
 const CommunicationMessage = require("../models/CommunicationMessage");
+const CommunicationGroup = require("../models/CommunicationGroup");
 const CommunicationTask = require("../models/CommunicationTask");
 const User = require("../models/User");
 const Enquiry = require("../models/Enquiry");
@@ -15,6 +16,7 @@ const {
   createFileFilter,
   sanitizeFilename,
 } = require("../utils/uploadSecurity");
+const { sendToUsers } = require("../services/firebaseNotificationService");
 
 const router = express.Router();
 
@@ -43,7 +45,8 @@ const upload = multer({
   fileFilter: createFileFilter({
     allowedMimePatterns: [
       /^image\/(jpeg|png|gif|webp)$/,
-      /^audio\/(mpeg|mp3|wav|ogg|aac|webm)$/,
+      /^audio\/(mpeg|mp3|wav|ogg|aac|webm|mp4|m4a|x-m4a)$/,
+      /^video\/(mp4|mpeg|webm)$/,
       "application/pdf",
       "text/plain",
       "application/zip",
@@ -53,7 +56,7 @@ const upload = multer({
     ],
     allowedExtensions: [
       ".jpg", ".jpeg", ".png", ".gif", ".webp",
-      ".mp3", ".wav", ".ogg", ".aac", ".webm",
+      ".mp3", ".wav", ".ogg", ".aac", ".webm", ".m4a", ".mp4",
       ".pdf", ".txt", ".zip", ".doc", ".docx",
     ],
     message: "Unsupported attachment type.",
@@ -91,10 +94,10 @@ const buildAttachmentPayload = (file) => {
 
 const populateTaskQuery = (query) =>
   query
-    .populate("assignedTo", "name role")
-    .populate("createdBy", "name role")
+    .populate("assignedTo", "name role logo")
+    .populate("createdBy", "name role logo")
     .populate("relatedEnquiryId", "name enqNo")
-    .populate("statusHistory.updatedBy", "name role");
+    .populate("statusHistory.updatedBy", "name role logo");
 
 const getCompanyTeam = async (companyId) =>
   User.find({
@@ -171,6 +174,204 @@ const canManageTaskRemark = ({ reqUserRole, reqUserId, remarkUpdatedById }) => {
   return String(reqUserId || "") === String(remarkUpdatedById || "");
 };
 
+
+
+router.get(
+  "/messages/group/:groupId",
+  verifyToken,
+  requireCompany,
+  requireRole(["Admin", "Staff"]),
+  async (req, res) => {
+    try {
+      const group = await CommunicationGroup.findOne({
+        _id: req.params.groupId,
+        companyId: req.companyId,
+        isActive: true,
+      }).lean();
+
+      if (!group) return res.status(404).json({ error: "Group not found" });
+
+      // Check if user is in group
+      if (!group.members.some(id => String(id) === String(req.userId)) && req.user.role !== "Admin") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const rawLimit = Number(req.query.limit);
+      const limit = Math.min(
+        300,
+        Math.max(10, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 50),
+      );
+
+      const beforeRaw = String(req.query.before || "").trim();
+      const beforeDate = beforeRaw ? new Date(beforeRaw) : null;
+      const hasValidBefore = Boolean(beforeDate && !Number.isNaN(beforeDate.getTime()));
+      const beforeId = req.query.beforeId;
+
+      await CommunicationMessage.updateMany(
+        {
+          companyId: req.companyId,
+          groupId: req.params.groupId,
+          readBy: { $ne: req.userId },
+        },
+        { $addToSet: { readBy: req.userId } },
+      );
+
+      const baseQuery = {
+        companyId: req.companyId,
+        groupId: req.params.groupId,
+      };
+
+      const query = { ...baseQuery };
+      if (hasValidBefore) {
+        const cursorClause = beforeId
+          ? {
+            $or: [
+              { createdAt: { $lt: beforeDate } },
+              { createdAt: beforeDate, _id: { $lt: beforeId } },
+            ],
+          }
+          : { createdAt: { $lt: beforeDate } };
+        query.$and = [cursorClause];
+      }
+
+      const rows = await CommunicationMessage.find(query)
+        .populate("senderId", "name role logo")
+        .populate("taskId", "title status dueDate priority")
+        .populate({
+          path: "replyTo",
+          select: "message messageType senderId attachmentName",
+          populate: { path: "senderId", select: "name" },
+        })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(limit + 1)
+        .lean();
+
+      const hasMore = rows.length > limit;
+      const pageRows = hasMore ? rows.slice(0, limit) : rows;
+      const messages = pageRows.reverse(); // client expects ascending
+      const oldest = messages[0] || null;
+
+      res.json({
+        group,
+        messages,
+        page: {
+          limit,
+          hasMore,
+          before: oldest?.createdAt || null,
+          beforeId: oldest?._id || null,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+
+router.delete(
+  "/groups/:groupId",
+  verifyToken,
+  requireCompany,
+  requireRole(["Admin"]),
+  async (req, res) => {
+    try {
+      const group = await CommunicationGroup.findOneAndDelete({
+        _id: req.params.groupId,
+        companyId: req.companyId
+      });
+      if (!group) return res.status(404).json({ error: "Group not found" });
+
+      // Optionally delete associated messages
+      await CommunicationMessage.deleteMany({ groupId: req.params.groupId });
+
+      res.json({ success: true, message: "Group deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.patch(
+  "/groups/:groupId",
+  verifyToken,
+  requireCompany,
+  requireRole(["Admin"]),
+  upload.single("logo"),
+  async (req, res) => {
+    try {
+      const group = await CommunicationGroup.findOne({
+        _id: req.params.groupId,
+        companyId: req.companyId,
+      });
+
+      if (!group) return res.status(404).json({ error: "Group not found" });
+
+      if (req.body.name) {
+        group.name = String(req.body.name).trim();
+      }
+
+      if (req.body.meetingLink !== undefined) {
+        group.meetingLink = String(req.body.meetingLink).trim();
+      }
+
+      if (req.body.bio !== undefined) {
+        group.bio = String(req.body.bio).trim();
+      }
+
+      if (req.body.members) {
+        let membersData = [];
+        if (typeof req.body.members === "string") {
+          try {
+            membersData = JSON.parse(req.body.members);
+          } catch (e) {
+            // ignore
+          }
+        } else if (Array.isArray(req.body.members)) {
+          membersData = req.body.members;
+        }
+
+        // Ensure the updater remains in the group
+        group.members = [...new Set([String(group.createdBy), req.userId, ...membersData])];
+      }
+
+      if (req.file) {
+        group.logo = `/uploads/communication/${req.file.filename}`;
+      }
+
+      await group.save();
+      res.json(group);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+router.post(
+  "/groups",
+  verifyToken,
+  requireCompany,
+  requireRole(["Admin"]),
+  async (req, res) => {
+    try {
+      const name = String(req.body.name || "").trim();
+      const members = Array.isArray(req.body.members) ? req.body.members : [];
+      if (!name) return res.status(400).json({ error: "Group name is required" });
+
+      const group = await CommunicationGroup.create({
+        companyId: req.companyId,
+        name,
+        createdBy: req.userId,
+        members: [...new Set([req.userId, ...members])],
+        meetingLink: req.body.meetingLink ? String(req.body.meetingLink).trim() : "",
+        bio: req.body.bio ? String(req.body.bio).trim() : "",
+      });
+      res.status(201).json(group);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
 router.get(
   "/team",
   verifyToken,
@@ -196,12 +397,18 @@ router.get(
       const currentUserId = toObjectId(req.userId);
       const companyId = toObjectId(req.companyId);
 
-      const [team, latestMessages, unreadCounts] = await Promise.all([
+      const [team, myGroups, latestMessages, unreadCounts, latestGroupMessages, unreadGroupCounts] = await Promise.all([
         getCompanyTeam(req.companyId),
+        CommunicationGroup.find({
+          companyId,
+          isActive: true,
+          members: currentUserId,
+        }).lean(),
         CommunicationMessage.aggregate([
           {
             $match: {
               companyId,
+              groupId: null,
               $or: [{ senderId: currentUserId }, { receiverId: currentUserId }],
             },
           },
@@ -228,6 +435,7 @@ router.get(
           {
             $match: {
               companyId,
+              groupId: null,
               receiverId: currentUserId,
               readBy: { $ne: currentUserId },
             },
@@ -239,39 +447,101 @@ router.get(
             },
           },
         ]),
+        CommunicationMessage.aggregate([
+          {
+            $match: {
+              companyId,
+              groupId: { $ne: null },
+            },
+          },
+          { $sort: { createdAt: -1 } },
+          {
+            $group: {
+              _id: "$groupId",
+              lastMessage: { $first: "$message" },
+              messageType: { $first: "$messageType" },
+              callStatus: { $first: "$callStatus" },
+              createdAt: { $first: "$createdAt" },
+              attachmentName: { $first: "$attachmentName" },
+            },
+          },
+        ]),
+        CommunicationMessage.aggregate([
+          {
+            $match: {
+              companyId,
+              groupId: { $ne: null },
+              readBy: { $ne: currentUserId },
+            },
+          },
+          {
+            $group: {
+              _id: "$groupId",
+              unreadCount: { $sum: 1 },
+            },
+          },
+        ]),
       ]);
 
       const latestMap = new Map(latestMessages.map((item) => [String(item._id), item]));
       const unreadMap = new Map(unreadCounts.map((item) => [String(item._id), item.unreadCount]));
+
+      const latestGroupMap = new Map(latestGroupMessages.map((item) => [String(item._id), item]));
+      const unreadGroupMap = new Map(unreadGroupCounts.map((item) => [String(item._id), item.unreadCount]));
 
       const data = team
         .filter((member) => String(member._id) !== String(req.userId))
         .map((member) => {
           const latest = latestMap.get(String(member._id));
           return {
+            isGroup: false,
             member,
             lastMessage:
               latest?.lastMessage ||
               (latest?.messageType === "call"
                 ? getCommunicationCallLabel(latest?.callStatus)
                 : latest?.messageType === "audio"
-                ? "Voice message"
-                : latest?.messageType === "task"
-                ? "Task shared"
-                : latest?.attachmentName || ""),
+                  ? "Voice message"
+                  : latest?.messageType === "task"
+                    ? "Task shared"
+                    : latest?.attachmentName || ""),
             messageType: latest?.messageType || "",
             callStatus: latest?.callStatus || "",
             lastMessageAt: latest?.createdAt || null,
             unreadCount: unreadMap.get(String(member._id)) || 0,
           };
-        })
-        .sort((a, b) => {
-          const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
-          const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
-          return bTime - aTime || a.member.name.localeCompare(b.member.name);
         });
 
-      res.json(data);
+      const groupData = myGroups.map((group) => {
+        const latest = latestGroupMap.get(String(group._id));
+        return {
+          isGroup: true,
+          group,
+          lastMessage:
+            latest?.lastMessage ||
+            (latest?.messageType === "call"
+              ? getCommunicationCallLabel(latest?.callStatus)
+              : latest?.messageType === "audio"
+                ? "Voice message"
+                : latest?.messageType === "task"
+                  ? "Task shared"
+                  : latest?.attachmentName || ""),
+          messageType: latest?.messageType || "",
+          callStatus: latest?.callStatus || "",
+          lastMessageAt: latest?.createdAt || null,
+          unreadCount: unreadGroupMap.get(String(group._id)) || 0,
+        };
+      });
+
+      const finalData = [...data, ...groupData].sort((a, b) => {
+        const aTime = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+        const bTime = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+        const aName = a.isGroup ? a.group.name : a.member.name;
+        const bName = b.isGroup ? b.group.name : b.member.name;
+        return bTime - aTime || aName.localeCompare(bName);
+      });
+
+      res.json(finalData);
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
@@ -321,19 +591,24 @@ router.get(
       if (hasValidBefore) {
         const cursorClause = beforeId
           ? {
-              $or: [
-                { createdAt: { $lt: beforeDate } },
-                { createdAt: beforeDate, _id: { $lt: beforeId } },
-              ],
-            }
+            $or: [
+              { createdAt: { $lt: beforeDate } },
+              { createdAt: beforeDate, _id: { $lt: beforeId } },
+            ],
+          }
           : { createdAt: { $lt: beforeDate } };
         query.$and = [cursorClause];
       }
 
       const rows = await CommunicationMessage.find(query)
-        .populate("senderId", "name role")
-        .populate("receiverId", "name role")
+        .populate("senderId", "name role logo")
+        .populate("receiverId", "name role logo")
         .populate("taskId", "title status dueDate priority")
+        .populate({
+          path: "replyTo",
+          select: "message messageType senderId attachmentName",
+          populate: { path: "senderId", select: "name" },
+        })
         .sort({ createdAt: -1, _id: -1 })
         .limit(limit + 1)
         .lean();
@@ -368,12 +643,22 @@ router.post(
   async (req, res) => {
     try {
       const receiverId = String(req.body.receiverId || "").trim();
+      const groupId = String(req.body.groupId || "").trim();
       const text = String(req.body.message || "").trim();
       const messageType = String(req.body.messageType || "").trim().toLowerCase();
       const callStatus = normalizeCommunicationCallStatus(req.body.callStatus);
       const isCallMessage = messageType === "call";
-      const teammate = await getTeamMember(req.companyId, receiverId);
-      if (!teammate) return res.status(404).json({ error: "Receiver not found" });
+
+      let teammate = null;
+      let group = null;
+
+      if (groupId) {
+        group = await CommunicationGroup.findOne({ _id: groupId, companyId: req.companyId, isActive: true }).lean();
+        if (!group) return res.status(404).json({ error: "Group not found" });
+      } else {
+        teammate = await getTeamMember(req.companyId, receiverId);
+        if (!teammate) return res.status(404).json({ error: "Receiver not found" });
+      }
 
       const attachmentPayload = buildAttachmentPayload(req.file);
       if (!text && !attachmentPayload.attachmentUrl && !isCallMessage) {
@@ -390,9 +675,7 @@ router.post(
       const messagePayload = {
         companyId: req.companyId,
         senderId: req.userId,
-        receiverId,
         senderRole: normalizeRole(req.user.role),
-        receiverRole: normalizeRole(teammate.role),
         message: text || (isCallMessage ? getCommunicationCallLabel(callStatus) : ""),
         messageType: isCallMessage
           ? "call"
@@ -400,8 +683,18 @@ router.post(
         callDuration: isCallMessage && Number.isFinite(callDuration) ? callDuration : 0,
         callTime: isCallMessage && hasValidCallTime ? callTimeValue : null,
         readBy: [req.userId],
+        replyTo: req.body.replyTo || null,
         ...attachmentPayload,
       };
+
+      if (groupId) {
+        messagePayload.groupId = groupId;
+        messagePayload.receiverRole = "Staff"; // Default for groups
+      } else {
+        messagePayload.receiverId = receiverId;
+        messagePayload.receiverRole = normalizeRole(teammate.role);
+      }
+
       if (isCallMessage) {
         messagePayload.callStatus = callStatus;
       }
@@ -409,16 +702,20 @@ router.post(
       const message = await CommunicationMessage.create(messagePayload);
 
       const populated = await CommunicationMessage.findById(message._id)
-        .populate("senderId", "name role")
-        .populate("receiverId", "name role")
+        .populate("senderId", "name role logo")
+        .populate("receiverId", "name role logo")
+        .populate({
+          path: "replyTo",
+          select: "message messageType senderId attachmentName",
+          populate: { path: "senderId", select: "name" },
+        })
         .lean();
 
-      emitToUsers(
-        req,
-        [req.userId, receiverId],
-        "COMMUNICATION_MESSAGE_CREATED",
-        populated,
-      );
+      if (groupId) {
+        emitToUsers(req, group.members, "COMMUNICATION_MESSAGE_CREATED", populated);
+      } else {
+        emitToUsers(req, [req.userId, receiverId], "COMMUNICATION_MESSAGE_CREATED", populated);
+      }
 
       res.status(201).json(populated);
     } catch (error) {
@@ -453,8 +750,8 @@ router.get(
       }
 
       const tasks = await CommunicationTask.find(query)
-        .populate("assignedTo", "name role")
-        .populate("createdBy", "name role")
+        .populate("assignedTo", "name role logo")
+        .populate("createdBy", "name role logo")
         .populate("relatedEnquiryId", "name enqNo")
         .sort({ status: 1, dueDate: 1, createdAt: -1 })
         .limit(300)
@@ -499,10 +796,10 @@ router.post(
 
       const filePayload = req.file
         ? {
-            attachmentUrl: `/uploads/communication/${req.file.filename}`,
-            attachmentName: req.file.originalname || req.file.filename,
-            attachmentMimeType: req.file.mimetype || "",
-          }
+          attachmentUrl: `/uploads/communication/${req.file.filename}`,
+          attachmentName: req.file.originalname || req.file.filename,
+          attachmentMimeType: req.file.mimetype || "",
+        }
         : {};
 
       const task = await CommunicationTask.create({
@@ -523,12 +820,46 @@ router.post(
       });
 
       const populatedTask = await CommunicationTask.findById(task._id)
-        .populate("assignedTo", "name role")
-        .populate("createdBy", "name role")
+        .populate("assignedTo", "name role logo")
+        .populate("createdBy", "name role logo")
         .populate("relatedEnquiryId", "name enqNo")
         .lean();
 
-      if (assignedTo && String(assignedTo) !== String(req.userId)) {
+      const groupId = String(req.body.groupId || "").trim();
+
+      if (groupId) {
+        const group = await CommunicationGroup.findOne({
+          _id: groupId,
+          companyId: req.companyId,
+          members: req.userId,
+        });
+
+        if (group) {
+          const taskMessage = await CommunicationMessage.create({
+            companyId: req.companyId,
+            senderId: req.userId,
+            groupId: group._id,
+            senderRole: normalizeRole(req.user.role),
+            receiverRole: "Staff",
+            message: `New task: ${title}`,
+            messageType: "task",
+            taskId: task._id,
+            readBy: [req.userId],
+          });
+
+          const populatedTaskMessage = await CommunicationMessage.findById(taskMessage._id)
+            .populate("senderId", "name role logo")
+            .populate("taskId", "title status dueDate priority")
+            .lean();
+
+          emitToUsers(
+            req,
+            group.members,
+            "COMMUNICATION_MESSAGE_CREATED",
+            populatedTaskMessage || taskMessage,
+          );
+        }
+      } else if (assignedTo && String(assignedTo) !== String(req.userId)) {
         const taskMessage = await CommunicationMessage.create({
           companyId: req.companyId,
           senderId: req.userId,
@@ -542,8 +873,8 @@ router.post(
         });
 
         const populatedTaskMessage = await CommunicationMessage.findById(taskMessage._id)
-          .populate("senderId", "name role")
-          .populate("receiverId", "name role")
+          .populate("senderId", "name role logo")
+          .populate("receiverId", "name role logo")
           .populate("taskId", "title status dueDate priority")
           .lean();
 
@@ -561,6 +892,13 @@ router.post(
         "COMMUNICATION_TASK_UPDATED",
         populatedTask,
       );
+
+      if (assignedTo && String(assignedTo) !== String(req.userId)) {
+        sendToUsers([assignedTo], {
+          title: "New Task Assigned",
+          body: `You have been assigned a new task: ${title}`,
+        }).catch(err => console.error("[Push Error]", err));
+      }
 
       res.status(201).json(populatedTask);
     } catch (error) {
@@ -633,6 +971,27 @@ router.patch(
         "COMMUNICATION_TASK_UPDATED",
         task,
       );
+
+      if (
+        assignedTo &&
+        String(assignedTo) !== String(req.userId) &&
+        String(assignedTo) !== String(existingTask.assignedTo)
+      ) {
+        sendToUsers([assignedTo], {
+          title: "Task Assigned",
+          body: `You have been assigned a task: ${title}`,
+        }).catch(err => console.error("[Push Error]", err));
+      }
+
+      if (
+        nextStatus !== existingTask.status &&
+        String(task?.createdBy?._id) !== String(req.userId)
+      ) {
+        sendToUsers([task?.createdBy?._id], {
+          title: "Task Status Updated",
+          body: `Task "${title}" status changed to ${nextStatus}`,
+        }).catch(err => console.error("[Push Error]", err));
+      }
 
       res.json(task);
     } catch (error) {
@@ -721,8 +1080,8 @@ router.patch(
         });
 
         const populatedTaskMessage = await CommunicationMessage.findById(taskMessage._id)
-          .populate("senderId", "name role")
-          .populate("receiverId", "name role")
+          .populate("senderId", "name role logo")
+          .populate("receiverId", "name role logo")
           .populate("taskId", "title status dueDate priority")
           .lean();
 
@@ -740,6 +1099,17 @@ router.patch(
         "COMMUNICATION_TASK_UPDATED",
         task,
       );
+
+      if (counterpartyId && counterpartyId !== actorId) {
+        sendToUsers([counterpartyId], {
+          title: "Task Status Updated",
+          body: buildTaskStatusReplyText({
+            title: task?.title,
+            status: nextStatus,
+            remark,
+          }),
+        }).catch(err => console.error("[Push Error]", err));
+      }
 
       res.json(task);
     } catch (error) {

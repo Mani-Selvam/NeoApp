@@ -244,6 +244,27 @@ export const updateEnquiryStatus = async (id, status) => {
     }
 };
 
+// BULK ASSIGN ENQUIRIES
+export const bulkAssignEnquiries = async (enquiryIds, assignedTo) => {
+    try {
+        const client = await getApiClient();
+        const response = await client.put("/enquiries/bulk-assign", {
+            enquiryIds,
+            assignedTo,
+        });
+        Promise.resolve(
+            invalidateCacheTags(["dashboard", "enquiries", "followups", "reports"]),
+        ).catch(() => {});
+        // Note: Individual ENQUIRY_UPDATED socket events will be handled by the backend
+        return response.data;
+    } catch (error) {
+        console.error(
+            "Bulk assign error:",
+            error.response?.data || error.message,
+        );
+        throw error;
+    }
+};
 // FOLLOW-UP REMINDERS (today + overdue handled in UI when needed)
 export const getFollowUpReminders = async () => {
     try {

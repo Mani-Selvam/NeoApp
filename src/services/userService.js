@@ -137,9 +137,9 @@ export const getBillingPlans = async () => {
     return response.data;
 };
 
-export const getEffectivePlan = async () => {
+export const getEffectivePlan = async (config = {}) => {
     const client = await getApiClient();
-    const response = await client.get("/users/billing/effective-plan");
+    const response = await client.get("/users/billing/effective-plan", config);
     return response.data;
 };
 

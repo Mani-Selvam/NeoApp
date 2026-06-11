@@ -1,4 +1,4 @@
-﻿import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import * as Clipboard from "expo-clipboard";
@@ -981,6 +981,23 @@ export default function HomeScreen({ navigation }) {
                 : 36;
     const sectionTitleSize = isTablet || isDesktop ? 19 : 17;
 
+    const [showVoice, setShowVoice] = useState(false);
+    const voicePulseAnim = useRef(new Animated.Value(0)).current;
+    const voiceSpinAnim = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        Animated.loop(
+            Animated.sequence([
+                Animated.timing(voicePulseAnim, { toValue: 1, duration: 2500, useNativeDriver: true }),
+                Animated.timing(voicePulseAnim, { toValue: 0, duration: 0, useNativeDriver: true }),
+            ])
+        ).start();
+
+        Animated.loop(
+            Animated.timing(voiceSpinAnim, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true })
+        ).start();
+    }, []);
+
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [rangeType, setRangeType] = useState("year"); // day | week | month | year
@@ -1006,12 +1023,15 @@ export default function HomeScreen({ navigation }) {
         new: 0,
         ip: 0,
         conv: 0,
+        upcomingFollowups: 0,
+        upcomingList: [],
     });
     const [coupons, setCoupons] = useState([]);
     const [copiedCouponCode, setCopiedCouponCode] = useState("");
     const [todayTasks, setTodayTasks] = useState([]);
     const [missedTasks, setMissedTasks] = useState([]);
     const [missedListOpen, setMissedListOpen] = useState(false);
+    const [upcomingListOpen, setUpcomingListOpen] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
     const [showLogout, setShowLogout] = useState(false);
     const [skipAnim, setSkipAnim] = useState(false);
@@ -1114,6 +1134,8 @@ export default function HomeScreen({ navigation }) {
                 new: data.counts?.new || 0,
                 ip: data.counts?.inProgress || 0,
                 conv: data.counts?.converted || 0,
+                upcomingFollowups: Number(data.upcomingFollowUps || 0),
+                upcomingList: Array.isArray(data.upcomingList) ? data.upcomingList : [],
             });
             setTodayTasks(data.todayList || []);
             setMissedTasks(data.missedList || []);
@@ -1425,6 +1447,121 @@ export default function HomeScreen({ navigation }) {
         });
     };
 
+    const renderUpcomingCard = (item, idx, fullWidth = false, isMissed = false) => {
+        const itemDate = isoToDate(item.date);
+        const todayIso = toLocalIsoDate(new Date());
+        const tomorrowIso = addDaysIso(todayIso, 1);
+        const yesterdayIso = addDaysIso(todayIso, -1);
+        
+        let dayLabel = isMissed ? "MISSED" : "UPCOMING";
+        let dayColor = isMissed ? C.rose : C.amber;
+        
+        if (!isMissed) {
+            if (item.date === todayIso) {
+                dayLabel = "TODAY";
+                dayColor = C.blue;
+            } else if (item.date === tomorrowIso) {
+                dayLabel = "TOMORROW";
+                dayColor = C.emerald;
+            } else if (itemDate) {
+                dayLabel = itemDate.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short" }).toUpperCase();
+                dayColor = C.amber;
+            }
+        } else {
+            if (item.date === yesterdayIso) {
+                dayLabel = "YESTERDAY";
+            } else if (itemDate) {
+                dayLabel = itemDate.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short" }).toUpperCase();
+            }
+        }
+        
+        const shortDate = fmtShortDate(item.date).toUpperCase();
+        const timeLabel = item.time || "Any time";
+        
+        const initials = (item.name || "").substring(0, 2).toUpperCase();
+        
+        const actType = String(item?.activityType || item?.type || "").trim().toLowerCase();
+        let iconName = "call-outline";
+        if (actType.includes("whatsapp")) iconName = "logo-whatsapp";
+        else if (actType.includes("mail") || actType.includes("email")) iconName = "mail-outline";
+        else if (actType.includes("meet") || actType.includes("person")) iconName = "people-outline";
+
+        return (
+            <TouchableOpacity
+                key={item._id || idx}
+                activeOpacity={0.85}
+                onPress={() => {
+                    if (isMissed) {
+                        openMissedEnquiryDetail(item);
+                        return;
+                    }
+                    const enqNo = String(item?.enqNo || "").trim();
+                    const enqId = String(item?.enqId || "").trim();
+                    if (!enqNo && !enqId) return;
+                    setUpcomingListOpen(false);
+                    navigation.navigate("FollowUp", {
+                        openComposer: true,
+                        composerToken: `home-upcoming-${enqNo || enqId}-${Date.now()}`,
+                        enquiry: {
+                            enqId: enqId || null,
+                            enqNo,
+                            name: item?.name || "Lead",
+                            mobile: item?.mobile || "",
+                            product: item?.product || "",
+                            image: item?.image || null,
+                            status: "Scheduled",
+                            date: item?.date || null,
+                            time: item?.time || null,
+                        },
+                        focusTab: "Upcoming",
+                        focusKey: `home-upcoming-open-${enqNo || enqId}-${Date.now()}`,
+                    });
+                }}
+                style={{
+                    width: fullWidth ? '100%' : 200,
+                    backgroundColor: dayColor + "08",
+                    borderWidth: 1,
+                    borderColor: dayColor + "25",
+                    borderRadius: 16,
+                    padding: 14,
+                }}>
+                
+                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
+                    <Text style={{ fontSize: 10, fontWeight: "900", color: dayColor, letterSpacing: 0.5 }}>{dayLabel}</Text>
+                    <Text style={{ fontSize: 10, fontWeight: "600", color: C.textDim }}>{shortDate}</Text>
+                </View>
+                
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 10 }}>
+                    <Ionicons name="time-outline" size={14} color={dayColor} />
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: dayColor }}>{timeLabel}</Text>
+                </View>
+                
+                <Text style={{ fontSize: 15, fontWeight: "800", color: C.ink, marginBottom: 4 }} numberOfLines={1}>{item.name}</Text>
+                <Text style={{ fontSize: 12, fontWeight: "500", color: C.textDim, marginBottom: 16 }} numberOfLines={1}>{item.remarks || item.product || "Follow-up"}</Text>
+                
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <View style={{
+                        width: 32, height: 32, borderRadius: 16, backgroundColor: dayColor + "20",
+                        justifyContent: "center", alignItems: "center"
+                    }}>
+                        <Text style={{ fontSize: 12, fontWeight: "800", color: dayColor }}>{initials}</Text>
+                    </View>
+                    <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={{
+                            width: 32, height: 32, borderRadius: 16, backgroundColor: C.blue + "15",
+                            justifyContent: "center", alignItems: "center"
+                        }}
+                        onPress={() => {
+                            // Future implementation to open dialer directly
+                        }}>
+                        <Ionicons name={iconName} size={16} color={C.blue} />
+                    </TouchableOpacity>
+                </View>
+            </TouchableOpacity>
+        );
+    };
+
     const weekSeries = Array.isArray(stats.weekSales) ? stats.weekSales : [];
     const highlightIdx = weekSeries.length
         ? weekSeries.findIndex(
@@ -1509,7 +1646,8 @@ export default function HomeScreen({ navigation }) {
                             style={[
                                 S.topGreet,
                                 isTablet || isDesktop ? { fontSize: 12 } : {},
-                            ]}>
+                            ]}
+                            numberOfLines={1}>
                             {greeting}
                         </Text>
                         <Text
@@ -1544,6 +1682,16 @@ export default function HomeScreen({ navigation }) {
                                         : "Year"}{" "}
                             • {rangeLabel}
                         </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[S.menuBtn, { marginLeft: 6, marginRight: 6, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }]}
+                        activeOpacity={0.85}
+                        onPress={() => setShowVoice(true)}>
+                        <Ionicons
+                            name="mic-outline"
+                            size={20}
+                            color={C.textSub}
+                        />
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={S.avatarBtn}
@@ -1793,67 +1941,9 @@ export default function HomeScreen({ navigation }) {
                                         </View>
                                     </View>
 
-                                    {section.items.map((item, idx) => {
-                                        const key = String(
-                                            item?._id ||
-                                            item?.enqNo ||
-                                            `${item?.mobile || "missed"}-${idx}`,
-                                        );
-                                        return (
-                                            <TouchableOpacity
-                                                key={key}
-                                                style={S.missedItem}
-                                                activeOpacity={0.9}
-                                                onPress={() =>
-                                                    openMissedEnquiryDetail(
-                                                        item,
-                                                    )
-                                                }>
-                                                <View style={S.missedItemTop}>
-                                                    <View
-                                                        style={
-                                                            S.missedLeadBadge
-                                                        }>
-                                                        <Ionicons
-                                                            name="alert-circle-outline"
-                                                            size={14}
-                                                            color={C.rose}
-                                                        />
-                                                    </View>
-                                                    <Text
-                                                        style={S.missedItemName}
-                                                        numberOfLines={1}>
-                                                        {item?.name ||
-                                                            "Unknown"}
-                                                    </Text>
-                                                    <View style={S.missedBadge}>
-                                                        <Text
-                                                            style={
-                                                                S.missedBadgeText
-                                                            }>
-                                                            Missed
-                                                        </Text>
-                                                    </View>
-                                                </View>
-                                                <Text
-                                                    style={S.missedItemMeta}
-                                                    numberOfLines={1}>
-                                                    #{item?.enqNo || "-"} ·{" "}
-                                                    {item?.mobile || "-"}
-                                                </Text>
-                                                <Text
-                                                    style={S.missedItemMeta}
-                                                    numberOfLines={1}>
-                                                    {item?.product ||
-                                                        "General"}{" "}
-                                                    · {item?.date || "-"}{" "}
-                                                    {item?.time
-                                                        ? `• ${item.time}`
-                                                        : ""}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        );
-                                    })}
+                                    <View style={{ gap: 12 }}>
+                                        {section.items.map((item, idx) => renderUpcomingCard(item, idx, true, true))}
+                                    </View>
                                 </View>
                             ))
                         ) : (
@@ -1875,8 +1965,68 @@ export default function HomeScreen({ navigation }) {
                 </View>
             ) : null}
 
+            {upcomingListOpen ? (
+                <View style={S.missedFullScreen}>
+                    <View
+                        style={[
+                            S.missedHeader,
+                            {
+                                paddingTop:
+                                    (insets.top > 0 ? 12 : 14) +
+                                    (isTablet || isDesktop ? 2 : 0),
+                            },
+                        ]}>
+                        <TouchableOpacity
+                            style={S.missedBackBtn}
+                            onPress={() => setUpcomingListOpen(false)}
+                            activeOpacity={0.85}>
+                            <Ionicons
+                                name="chevron-back"
+                                size={20}
+                                color={C.textSub}
+                            />
+                        </TouchableOpacity>
+                        <View style={{ flex: 1 }}>
+                            <Text style={S.missedTitle}>Upcoming Activity</Text>
+                            <Text style={S.missedSub}>
+                                Total upcoming follow-ups: {stats.upcomingFollowups || 0}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <ScrollView
+                        showsVerticalScrollIndicator={false}
+                        contentContainerStyle={[
+                            S.missedListWrap,
+                            {
+                                paddingBottom: Math.max(insets.bottom, 14) + 26,
+                            },
+                        ]}>
+                        {stats.upcomingList && stats.upcomingList.length > 0 ? (
+                            <View style={{ gap: 12 }}>
+                                {stats.upcomingList.map((item, idx) => renderUpcomingCard(item, idx, true))}
+                            </View>
+                        ) : (
+                            <View style={S.missedEmpty}>
+                                <Ionicons
+                                    name="checkmark-circle-outline"
+                                    size={28}
+                                    color={C.emerald}
+                                />
+                                <Text style={S.missedEmptyTitle}>
+                                    No upcoming follow-ups
+                                </Text>
+                                <Text style={S.missedEmptySub}>
+                                    Your schedule is clear.
+                                </Text>
+                            </View>
+                        )}
+                    </ScrollView>
+                </View>
+            ) : null}
+
             {/* MAIN SCROLL */}
-            {!missedListOpen ? (
+            {!missedListOpen && !upcomingListOpen ? (
                 <ScrollView
                     showsVerticalScrollIndicator={false}
                     refreshControl={
@@ -2146,6 +2296,59 @@ export default function HomeScreen({ navigation }) {
                                 </View>
                             </View>
                         </MotiView>
+                        
+                        {/* UPCOMING FOLLOW-UPS */}
+                        <MotiView
+                            from={skipAnim ? { opacity: 1 } : { opacity: 0, translateX: 14 }}
+                            animate={{ opacity: 1, translateX: 0 }}
+                            transition={{ delay: 460 }}
+                            style={S.section}>
+                            <SH
+                                title="Upcoming Follow-ups"
+                                titleSize={sectionTitleSize}
+                                sub="Next 7 days activity"
+                                right={
+                                    <View style={{
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        backgroundColor: C.blue + "14",
+                                        paddingHorizontal: 10,
+                                        paddingVertical: 5,
+                                        borderRadius: 14,
+                                        gap: 4
+                                    }}>
+                                        <Ionicons name="time-outline" size={14} color={C.blue} />
+                                        <Text style={{ fontSize: 12, fontWeight: "800", color: C.blue }}>
+                                            {stats.upcomingFollowups || 0} Upcoming
+                                        </Text>
+                                    </View>
+                                }
+                            />
+                            
+                            <View style={[S.activityCard, { padding: 12, paddingBottom: 16 }]}>
+                                {(!stats.upcomingList || stats.upcomingList.length === 0) ? (
+                                    <View style={{ alignItems: 'center', padding: 20 }}>
+                                        <Text style={{ color: C.textDim, fontSize: 14 }}>No upcoming follow-ups</Text>
+                                    </View>
+                                ) : (
+                                    <ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        contentContainerStyle={{ gap: 12, paddingRight: 10 }}>
+                                        {stats.upcomingList.map((item, idx) => renderUpcomingCard(item, idx, false))}
+                                    </ScrollView>
+                                )}
+                                
+                                <TouchableOpacity 
+                                    style={{ marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingRight: 4 }}
+                                    activeOpacity={0.8}
+                                    onPress={() => setUpcomingListOpen(true)}>
+                                    <Text style={{ fontSize: 13, fontWeight: "800", color: C.blue, marginRight: 4 }}>View all follow-ups</Text>
+                                    <Ionicons name="arrow-forward" size={14} color={C.blue} />
+                                </TouchableOpacity>
+                            </View>
+                        </MotiView>
+                        
                         <SH
                             title="Revenue & Conversion"
                             sub={`Filtered: ${rangeType} • ${rangeLabel}`}
@@ -2736,6 +2939,11 @@ export default function HomeScreen({ navigation }) {
                 </ScrollView>
             ) : null}
 
+            <VoiceAssistantOverlay
+                visible={showVoice}
+                onClose={() => setShowVoice(false)}
+                compact={false}
+            />
 
         </View>
     );

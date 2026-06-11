@@ -314,6 +314,8 @@ function FloatingInput({
 function VoiceNotePlayer({ uri }) {
     const [sound, setSound] = useState(null);
     const [isPlaying, setIsPlaying] = useState(false);
+    const [duration, setDuration] = useState(0);
+    const [position, setPosition] = useState(0);
 
     useEffect(() => {
         return sound ? () => { sound.unloadAsync(); } : undefined;
@@ -326,31 +328,72 @@ function VoiceNotePlayer({ uri }) {
                 setIsPlaying(false);
             }
         } else {
-            if (sound) {
-                await sound.playAsync();
-                setIsPlaying(true);
-            } else {
-                try {
-                    const { sound: newSound } = await Audio.Sound.createAsync({ uri: getImageUrl(uri) });
+            try {
+                // Ensure audio mode is set for playback
+                await Audio.setAudioModeAsync({
+                    allowsRecordingIOS: false,
+                    playsInSilentModeIOS: true,
+                    shouldDuckAndroid: true,
+                    staysActiveInBackground: false,
+                    playThroughEarpieceAndroid: false,
+                });
+
+                if (sound) {
+                    const status = await sound.getStatusAsync();
+                    if (status.positionMillis >= status.durationMillis && status.durationMillis > 0) {
+                        await sound.setPositionAsync(0);
+                    }
+                    await sound.playAsync();
+                    setIsPlaying(true);
+                } else {
+                    const audioUri = getImageUrl(uri);
+                    const { sound: newSound } = await Audio.Sound.createAsync(
+                        { uri: audioUri },
+                        { shouldPlay: true },
+                        (status) => {
+                            if (status.isLoaded) {
+                                setDuration(status.durationMillis || 0);
+                                setPosition(status.positionMillis || 0);
+                                if (status.didJustFinish) {
+                                    setIsPlaying(false);
+                                    setPosition(0);
+                                }
+                            }
+                        }
+                    );
                     setSound(newSound);
                     setIsPlaying(true);
-                    await newSound.playAsync();
-                    newSound.setOnPlaybackStatusUpdate((status) => {
-                        if (status.didJustFinish) setIsPlaying(false);
-                    });
-                } catch (err) {
-                    console.error("Playback error:", err);
-                    Alert.alert("Error", "Failed to play voice note.");
                 }
+            } catch (err) {
+                console.error("Playback error:", err);
+                Alert.alert("Error", "Failed to play voice note.");
             }
         }
     };
 
+    const formatTime = (millis) => {
+        const totalSeconds = Math.floor(millis / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
+    };
+
+    const progress = duration > 0 ? (position / duration) * 100 : 0;
+
     return (
-        <TouchableOpacity onPress={togglePlayback} style={{ marginTop: 8, flexDirection: "row", alignItems: "center", backgroundColor: "#EFF6FF", padding: 8, borderRadius: 6, alignSelf: "flex-start" }}>
-            <Ionicons name={isPlaying ? "pause-circle" : "play-circle"} size={24} color="#2563EB" />
-            <Text style={{ fontSize: 13, color: "#1D4ED8", marginLeft: 6, fontWeight: "500" }}>{isPlaying ? "Playing..." : "Play Voice Note"}</Text>
-        </TouchableOpacity>
+        <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center", backgroundColor: "#F1F5F9", padding: 8, borderRadius: 24, alignSelf: "stretch" }}>
+            <TouchableOpacity onPress={togglePlayback} style={{ padding: 4, backgroundColor: "#2563EB", borderRadius: 20 }}>
+                <Ionicons name={isPlaying ? "pause" : "play"} size={16} color="#FFFFFF" style={{ marginLeft: isPlaying ? 0 : 2 }} />
+            </TouchableOpacity>
+            
+            <View style={{ flex: 1, marginHorizontal: 12, height: 4, backgroundColor: "#CBD5E1", borderRadius: 2 }}>
+                <View style={{ width: `${progress}%`, height: "100%", backgroundColor: "#2563EB", borderRadius: 2 }} />
+            </View>
+            
+            <Text style={{ fontSize: 11, color: "#64748B", fontWeight: "600", minWidth: 32, textAlign: "right" }}>
+                {formatTime(position)}
+            </Text>
+        </View>
     );
 }
 
@@ -363,6 +406,7 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
     const [sound, setSound] = useState(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [editNoteId, setEditNoteId] = useState(null);
 
     useEffect(() => {
         return sound
@@ -399,15 +443,30 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
 
     const playSound = async () => {
         if (!recordedURI) return;
-        const { sound } = await Audio.Sound.createAsync({ uri: recordedURI });
-        setSound(sound);
-        setIsPlaying(true);
-        await sound.playAsync();
-        sound.setOnPlaybackStatusUpdate((status) => {
-            if (status.didJustFinish) {
-                setIsPlaying(false);
-            }
-        });
+        try {
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+                shouldDuckAndroid: true,
+                staysActiveInBackground: false,
+                playThroughEarpieceAndroid: false,
+            });
+            const { sound: newSound } = await Audio.Sound.createAsync(
+                { uri: recordedURI },
+                { shouldPlay: true }
+            );
+            setSound(newSound);
+            setIsPlaying(true);
+            newSound.setOnPlaybackStatusUpdate((status) => {
+                if (status.didJustFinish) {
+                    setIsPlaying(false);
+                }
+            });
+        } catch (err) {
+            console.error("Play sound error:", err);
+            Alert.alert("Error", "Failed to play voice note.");
+            setIsPlaying(false);
+        }
     };
 
     const stopSound = async () => {
@@ -428,7 +487,33 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
     const handleCancel = () => {
         setNote("");
         clearAudio();
+        setEditNoteId(null);
         setShowForm(false);
+    };
+
+    const handleEditNote = (n) => {
+        setEditNoteId(n._id || n.id);
+        setNote(n.note || "");
+        setRecordedURI(n.voiceNote || null);
+        setShowForm(true);
+    };
+
+    const handleDeleteNote = (n) => {
+        Alert.alert("Confirm Delete", "Are you sure you want to delete this note?", [
+            { text: "Cancel", style: "cancel" },
+            { 
+                text: "Delete", 
+                style: "destructive",
+                onPress: async () => {
+                    try {
+                        await followupService.deleteFollowUp(n._id || n.id);
+                        if (onSaved) onSaved(); // UI will refresh via parent
+                    } catch (err) {
+                        Alert.alert("Error", "Failed to delete note.");
+                    }
+                }
+            }
+        ]);
     };
 
     const handleSaveNote = async () => {
@@ -455,7 +540,12 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
                 status: "Completed",
                 voiceNoteUri: recordedURI,
             };
-            await followupService.createFollowUp(payload);
+            if (editNoteId) {
+                await followupService.updateFollowUp(editNoteId, payload);
+                setEditNoteId(null);
+            } else {
+                await followupService.createFollowUp(payload);
+            }
             setNote("");
             clearAudio();
             setShowForm(false);
@@ -559,10 +649,35 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
                 <View style={{ marginTop: 8 }}>
                     <Text style={{ fontSize: 16, fontWeight: "600", color: "#0F172A", marginBottom: 12 }}>📋 Previous Notes</Text>
                     {noteRows.map((n, i) => (
-                        <View key={n._id || i} style={{ backgroundColor: "#FFFFFF", padding: 14, borderRadius: 12, marginBottom: 12, elevation: 1, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, borderWidth: 1, borderColor: "#E2E8F0" }}>
+                        <View 
+                            key={n._id || i} 
+                            style={{ 
+                                backgroundColor: "#FFFFFF", 
+                                padding: 14, 
+                                borderRadius: 12, 
+                                marginBottom: 12, 
+                                elevation: 1, 
+                                shadowColor: "#000", 
+                                shadowOffset: { width: 0, height: 1 }, 
+                                shadowOpacity: 0.05, 
+                                shadowRadius: 2, 
+                                borderWidth: 1, 
+                                borderColor: "#E2E8F0" 
+                            }}
+                        >
                             <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
-                                <Text style={{ fontSize: 13, color: "#64748B", fontWeight: "600" }}>{n.staffName || "Staff"}</Text>
-                                <Text style={{ fontSize: 12, color: "#94A3B8" }}>{new Date(n.activityTime || n.createdAt || n.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</Text>
+                                <View>
+                                    <Text style={{ fontSize: 13, color: "#64748B", fontWeight: "600" }}>{n.staffName || "Staff"}</Text>
+                                    <Text style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>{new Date(n.activityTime || n.createdAt || n.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</Text>
+                                </View>
+                                <View style={{ flexDirection: "row", gap: 8 }}>
+                                    <TouchableOpacity onPress={() => handleEditNote(n)} style={{ padding: 4 }}>
+                                        <Ionicons name="pencil-outline" size={18} color="#64748B" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity onPress={() => handleDeleteNote(n)} style={{ padding: 4 }}>
+                                        <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                                    </TouchableOpacity>
+                                </View>
                             </View>
                             {n.note ? (
                                 <Text style={{ fontSize: 15, color: "#334155", lineHeight: 22 }}>{n.note}</Text>
@@ -2749,6 +2864,7 @@ const DetailView = ({
                                 noteRows={noteRows}
                                 onSaved={() => {
                                     setPanelRefreshNonce(prev => prev + 1);
+                                    refreshDetailHistory?.();
                                     onRefreshList?.();
                                 }}
                             />
@@ -3216,10 +3332,12 @@ const DetailView = ({
                                                                                 }>
                                                                                 Time
                                                                             </Text>
-                                                                            <View
+                                                                            <TouchableOpacity
                                                                                 style={
                                                                                     FU.datePicker
-                                                                                }>
+                                                                                }
+                                                                                onPress={() => setTimePickerVisible(true)}
+                                                                            >
                                                                                 <Ionicons
                                                                                     name="time-outline"
                                                                                     size={
@@ -3239,7 +3357,7 @@ const DetailView = ({
                                                                                     {editNextTime ||
                                                                                         "Auto-selected"}
                                                                                 </Text>
-                                                                            </View>
+                                                                            </TouchableOpacity>
                                                                             {isTimePickerVisible &&
                                                                                 Platform.OS !==
                                                                                 "web" && (
@@ -3381,7 +3499,7 @@ const DetailView = ({
                                                     </Text>
                                                 </View>
                                             ) : (
-                                                timelineRows.filter(h => !(isCallActivity(h) && h.status === 'Completed')).map((h, i) => {
+                                                timelineRows.filter(h => !(isCallActivity(h) && h.status === 'Completed')).reverse().map((h, i) => {
                                                     const tc = getTypeIcon(
                                                         h.type ||
                                                         h.activityType,
@@ -4837,6 +4955,7 @@ export default function FollowUpScreen({ navigation, route }) {
         let alive = true;
         const tick = async () => {
             if (!alive) return;
+            if (isDatePickerVisible || isTimePickerVisible || selectedEnquiry || editFollowUpId) return;
             try {
                 await fetchTabCounts(selectedDate);
                 if (showMissedModal) {
@@ -4860,6 +4979,7 @@ export default function FollowUpScreen({ navigation, route }) {
         let alive = true;
         const checkMissedItems = () => {
             if (!alive || followUps.length === 0) return;
+            if (isDatePickerVisible || isTimePickerVisible || selectedEnquiry || editFollowUpId) return;
 
             const now = new Date();
             const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -4938,9 +5058,11 @@ export default function FollowUpScreen({ navigation, route }) {
     ]);
 
     // ── Focus ────────────────────────────────────────────────────────────────
-    // Auto-refresh every 5 seconds while active
     useSilentRefresh(
-        () => fetchFollowUps(activeTab, true, { showIndicator: false, force: true }),
+        () => {
+            if (isDatePickerVisible || isTimePickerVisible || selectedEnquiry || editFollowUpId) return;
+            fetchFollowUps(activeTab, true, { showIndicator: false, force: true });
+        },
         5000,
     );
 
@@ -6389,11 +6511,13 @@ export default function FollowUpScreen({ navigation, route }) {
             }
         } else {
             setEditNextDate(v);
-            const now = new Date();
-            setTimePickerValue(now);
-            setEditNextTime(formatTime(now));
-            setEditTimeMeridian(now.getHours() >= 12 ? "PM" : "AM");
-            if (Platform.OS !== "web") setTimePickerVisible(true);
+            if (!editNextTime) {
+                const now = new Date();
+                setTimePickerValue(now);
+                setEditNextTime(formatTime(now));
+                setEditTimeMeridian(now.getHours() >= 12 ? "PM" : "AM");
+                if (Platform.OS !== "web") setTimePickerVisible(true);
+            }
         }
         setTimeout(() => setDatePickerVisible(false), 100);
     };
@@ -6484,22 +6608,21 @@ export default function FollowUpScreen({ navigation, route }) {
     }, [isDatePickerVisible, calendarMonth]);
     const handleConfirmTime = (event, d) => {
         if (Platform.OS === "android") {
-            if (event?.type === "dismissed") {
-                setTimePickerVisible(false);
-                return;
-            }
-            if (d) {
+            setTimePickerVisible(false);
+            if (event?.type === "set" && d) {
                 const t = formatTime(d);
                 setEditNextTime(t);
                 setEditTimeMeridian(d.getHours() >= 12 ? "PM" : "AM");
+                setTimePickerValue(d);
             }
-            setTimePickerVisible(false);
             return;
         }
+        // iOS behavior
         if (d) {
             const t = formatTime(d);
             setEditNextTime(t);
             setEditTimeMeridian(d.getHours() >= 12 ? "PM" : "AM");
+            setTimePickerValue(d);
         }
     };
     const calMarkedDates = useMemo(() => {
@@ -6628,12 +6751,13 @@ export default function FollowUpScreen({ navigation, route }) {
             <View style={[MS.header, { paddingHorizontal: sc.hPad }]}>
                 <View style={MS.headerTop}>
                     <TouchableOpacity
-                        style={MS.headerBtn}
+                        style={[MS.headerBtn, { paddingHorizontal: 0 }]}
                         onPress={() => setMenuVisible(true)}>
                         <Ionicons name="menu" size={21} color={C.textSub} />
                     </TouchableOpacity>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
+                    <View style={{ flex: 1, marginLeft: 10, marginRight: 8 }}>
                         <Text
+                            numberOfLines={1}
                             style={{
                                 fontSize: 11,
                                 color: C.textMuted,
@@ -6649,7 +6773,9 @@ export default function FollowUpScreen({ navigation, route }) {
                                 gap: 8,
                             }}>
                             <Text
+                                numberOfLines={1}
                                 style={{
+                                    flexShrink: 1,
                                     fontSize: 17,
                                     color: C.text,
                                     fontWeight: "800",
@@ -6682,11 +6808,12 @@ export default function FollowUpScreen({ navigation, route }) {
                             }}>
                             <Ionicons
                                 name="alert-circle-outline"
-                                size={20}
+                                size={16}
                                 color={
                                     missedAlertCount > 0 ? C.danger : C.textSub
                                 }
                             />
+                            <Text style={[MS.headerBtnText, missedAlertCount > 0 && { color: C.danger }]}>Missed</Text>
                             {missedAlertCount > 0 && (
                                 <View style={MS.notifBadge}>
                                     <Text style={MS.notifBadgeText}>
@@ -6704,13 +6831,14 @@ export default function FollowUpScreen({ navigation, route }) {
                             }}>
                             <Ionicons
                                 name="archive-outline"
-                                size={20}
+                                size={16}
                                 color={
                                     droppedAlertCount > 0
                                         ? C.textMuted
                                         : C.textSub
                                 }
                             />
+                            <Text style={MS.headerBtnText}>Dropped</Text>
                             {droppedAlertCount > 0 && (
                                 <View style={[MS.notifBadge, MS.dropBadge]}>
                                     <Text style={MS.notifBadgeText}>
@@ -6769,8 +6897,9 @@ export default function FollowUpScreen({ navigation, route }) {
                 style={MS.tabScroll}
                 contentContainerStyle={{
                     paddingHorizontal: sc.hPad,
-                    paddingVertical: 8,
+                    paddingVertical: 14,
                     gap: 6,
+                    alignItems: "center"
                 }}>
                 {STATUS_TABS.map((t) => {
                     const active = activeTab === t.value;
@@ -7532,14 +7661,22 @@ const MS = StyleSheet.create({
         marginBottom: 10,
     },
     headerBtn: {
-        width: 38,
+        minWidth: 38,
         height: 38,
         borderRadius: 12,
         backgroundColor: C.bg,
         justifyContent: "center",
         alignItems: "center",
+        flexDirection: "row",
         borderWidth: 1,
         borderColor: C.border,
+        paddingHorizontal: 10,
+        gap: 6,
+    },
+    headerBtnText: {
+        fontSize: 12,
+        fontWeight: "700",
+        color: C.textSub,
     },
     profileBtn: {
         width: 38,
@@ -7630,7 +7767,9 @@ const MS = StyleSheet.create({
         backgroundColor: C.card,
         borderBottomWidth: 1,
         borderBottomColor: C.border,
-        maxHeight: 52,
+        minHeight: 65,
+        maxHeight: 65,
+        paddingBottom: 4, // Allow shadows to not clip
     },
     tabPill: {
         minWidth: 90,

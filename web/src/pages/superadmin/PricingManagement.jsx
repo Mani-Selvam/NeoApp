@@ -79,6 +79,9 @@ const toPayload = (form) => ({
   maxStaff: Number(form.maxStaff || 0),
   extraAdminPrice: Number(form.extraAdminPrice || 0),
   extraStaffPrice: Number(form.extraStaffPrice || 0),
+  aiVoiceLimitYearly: Number(form.aiVoiceLimitYearly || 0),
+  aiVoiceExtraPrice: Number(form.aiVoiceExtraPrice || 0),
+  aiVoiceExtraRequests: Number(form.aiVoiceExtraRequests || 0),
   isActive: Boolean(form.isActive),
 });
 
@@ -91,6 +94,9 @@ const buildInitialForm = (plan) => ({
   maxStaff: String(plan.maxStaff ?? ""),
   extraAdminPrice: String(plan.extraAdminPrice ?? ""),
   extraStaffPrice: String(plan.extraStaffPrice ?? ""),
+  aiVoiceLimitYearly: String(plan.aiVoiceLimitYearly ?? "3000"),
+  aiVoiceExtraPrice: String(plan.aiVoiceExtraPrice ?? "500"),
+  aiVoiceExtraRequests: String(plan.aiVoiceExtraRequests ?? "1000"),
   isActive: Boolean(plan.isActive),
 });
 
@@ -192,6 +198,7 @@ export default function PricingManagement() {
     { key: "name", label: "Plan Name" },
     { key: "basePriceLabel", label: "Base Price" },
     { key: "addonPriceLabel", label: "Add-on Pricing" },
+    { key: "aiLimitsLabel", label: "AI Quota (Yearly)" },
     { key: "limitsLabel", label: "Limits" },
     { key: "trialDaysLabel", label: "Trial" },
     { key: "featuresLabel", label: "Included Features" },
@@ -224,6 +231,7 @@ export default function PricingManagement() {
     ...plan,
     basePriceLabel: formatCurrency(plan.basePrice),
     addonPriceLabel: `Admin ${formatCurrency(plan.extraAdminPrice)} / Staff ${formatCurrency(plan.extraStaffPrice)}`,
+    aiLimitsLabel: `${plan.aiVoiceLimitYearly || 0} reqs / Top-up: ${formatCurrency(plan.aiVoiceExtraPrice)} for ${plan.aiVoiceExtraRequests || 1000} reqs`,
     limitsLabel: `${Number(plan.maxAdmins || 0)} admins / ${Number(plan.maxStaff || 0)} staff`,
     trialDaysLabel: `${Number(plan.trialDays || 0)} days`,
     featuresLabel: plan.features.join(", "),
@@ -350,6 +358,36 @@ export default function PricingManagement() {
                     onChange={(e) => setForm({ ...form, extraStaffPrice: e.target.value })}
                   />
                 </label>
+
+                <div className="pm-field pm-field-full">
+                  <span>AI Voice Assistant Limits</span>
+                  <div className="pm-limit-grid">
+                    <label className="pm-field pm-limit-card">
+                      <span>Yearly Requests</span>
+                      <input
+                        type="number"
+                        value={form.aiVoiceLimitYearly}
+                        onChange={(e) => setForm({ ...form, aiVoiceLimitYearly: e.target.value })}
+                      />
+                    </label>
+                    <label className="pm-field pm-limit-card">
+                      <span>Top-up Requests Added</span>
+                      <input
+                        type="number"
+                        value={form.aiVoiceExtraRequests}
+                        onChange={(e) => setForm({ ...form, aiVoiceExtraRequests: e.target.value })}
+                      />
+                    </label>
+                    <label className="pm-field pm-limit-card">
+                      <span>Top-up Price (USD)</span>
+                      <input
+                        type="number"
+                        value={form.aiVoiceExtraPrice}
+                        onChange={(e) => setForm({ ...form, aiVoiceExtraPrice: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                </div>
 
                 <label className="pm-field pm-field-full">
                   <span>Included Features</span>

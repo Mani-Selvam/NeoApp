@@ -1,4 +1,4 @@
-﻿const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 
 const planSchema = new mongoose.Schema(
   {
@@ -10,6 +10,9 @@ const planSchema = new mongoose.Schema(
     trialDays: { type: Number, min: 0, default: 0 },
     maxAdmins: { type: Number, min: 0, default: 1 },
     maxStaff: { type: Number, min: 0, default: 0 },
+    aiVoiceLimitYearly: { type: Number, min: 0, default: 3000 },
+    aiVoiceExtraPrice: { type: Number, min: 0, default: 500 },
+    aiVoiceExtraRequests: { type: Number, min: 0, default: 1000 },
     features: [{ type: String, trim: true }],
     isActive: { type: Boolean, default: true, index: true },
     sortOrder: { type: Number, default: 0 },

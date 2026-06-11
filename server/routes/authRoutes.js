@@ -22,7 +22,6 @@ const {
     clearUserCache,
 } = require("../middleware/auth");
 const { requireSuperadmin } = require("../middleware/role.middleware");
-const SystemLog = require("../models/SystemLog");
 const { getSecurityPolicy } = require("../services/settingsService");
 const { getClientIp, isIpAllowed } = require("../utils/ipAllowlist");
 const {
@@ -1269,11 +1268,6 @@ router.post(
                 String(policy?.superadminIpAllowlist || "").trim()
             ) {
                 if (!isIpAllowed(ip, policy.superadminIpAllowlist)) {
-                    await SystemLog.create({
-                        action: "SUPERADMIN_LOGIN_BLOCKED_IP",
-                        ip,
-                        category: "auth",
-                    });
                     return res.status(403).json({
                         success: false,
                         code: "IP_NOT_ALLOWED",
@@ -1317,12 +1311,6 @@ router.post(
 
             const isMatch = await bcrypt.compare(password, user.password);
             if (!isMatch) {
-                await SystemLog.create({
-                    userId: user._id,
-                    action: "SUPERADMIN_LOGIN_FAILED",
-                    ip,
-                    category: "auth",
-                });
                 return res.status(401).json({
                     success: false,
                     message: "Invalid email or password",
@@ -1337,12 +1325,6 @@ router.post(
                     const ageMs = Date.now() - new Date(changedAt).getTime();
                     const maxMs = rotationDays * 24 * 60 * 60 * 1000;
                     if (Number.isFinite(ageMs) && ageMs > maxMs) {
-                        await SystemLog.create({
-                            userId: user._id,
-                            action: "SUPERADMIN_LOGIN_PASSWORD_EXPIRED",
-                            ip,
-                            category: "auth",
-                        });
                         return res.status(403).json({
                             success: false,
                             code: "PASSWORD_EXPIRED",
@@ -1353,12 +1335,6 @@ router.post(
             }
 
             if (policy?.enforceSuperadmin2fa && !user.twoFactorEnabled) {
-                await SystemLog.create({
-                    userId: user._id,
-                    action: "SUPERADMIN_LOGIN_2FA_NOT_ENABLED",
-                    ip,
-                    category: "auth",
-                });
                 return res.status(403).json({
                     success: false,
                     code: "TWOFA_SETUP_REQUIRED",
@@ -1375,12 +1351,6 @@ router.post(
                     await User.findByIdAndUpdate(user._id, {
                         $set: { twoFactorEnabled: false },
                     });
-                    await SystemLog.create({
-                        userId: user._id,
-                        action: "SUPERADMIN_LOGIN_2FA_SECRET_MISSING_RESET",
-                        ip,
-                        category: "auth",
-                    });
                     return res.status(403).json({
                         success: false,
                         code: "TWOFA_RESET_REQUIRED",
@@ -1396,12 +1366,6 @@ router.post(
                     });
                 }
                 if (!verifyTotp({ secretBase32: secret, token })) {
-                    await SystemLog.create({
-                        userId: user._id,
-                        action: "SUPERADMIN_LOGIN_2FA_FAILED",
-                        ip,
-                        category: "auth",
-                    });
                     return res.status(401).json({
                         success: false,
                         code: "OTP_INVALID",
@@ -1437,13 +1401,6 @@ router.post(
                     "[Auth] Failed to send superadmin login alert:",
                     alertErr?.message,
                 );
-            });
-
-            await SystemLog.create({
-                userId: user._id,
-                action: "SUPERADMIN_LOGIN_SUCCESS",
-                ip,
-                category: "auth",
             });
 
             return res.json({
@@ -1482,12 +1439,6 @@ router.get(
                 // Self-heal inconsistent state so UI doesn't show "Enabled" without a usable secret.
                 await User.findByIdAndUpdate(req.userId, {
                     $set: { twoFactorEnabled: false },
-                });
-                await SystemLog.create({
-                    userId: req.userId,
-                    action: "SUPERADMIN_2FA_STATUS_SECRET_MISSING_RESET",
-                    ip: getClientIp(req),
-                    category: "auth",
                 });
                 return res.json({
                     success: true,
@@ -1538,13 +1489,6 @@ router.post(
                 },
             });
 
-            await SystemLog.create({
-                userId: req.userId,
-                action: "SUPERADMIN_2FA_SETUP_CREATED",
-                ip: getClientIp(req),
-                category: "auth",
-            });
-
             return res.json({
                 success: true,
                 message: "2FA secret generated. Verify OTP to enable.",
@@ -1583,12 +1527,6 @@ router.post(
             if (
                 !verifyTotp({ secretBase32: user.twoFactorSecret, token: otp })
             ) {
-                await SystemLog.create({
-                    userId: req.userId,
-                    action: "SUPERADMIN_2FA_ENABLE_FAILED",
-                    ip: getClientIp(req),
-                    category: "auth",
-                });
                 return res
                     .status(400)
                     .json({ success: false, message: "Invalid OTP" });
@@ -1596,12 +1534,6 @@ router.post(
 
             await User.findByIdAndUpdate(req.userId, {
                 $set: { twoFactorEnabled: true },
-            });
-            await SystemLog.create({
-                userId: req.userId,
-                action: "SUPERADMIN_2FA_ENABLED",
-                ip: getClientIp(req),
-                category: "auth",
             });
             return res.json({ success: true, twoFactorEnabled: true });
         } catch (err) {
@@ -1633,12 +1565,6 @@ router.post(
                 !user.twoFactorSecret ||
                 !verifyTotp({ secretBase32: user.twoFactorSecret, token: otp })
             ) {
-                await SystemLog.create({
-                    userId: req.userId,
-                    action: "SUPERADMIN_2FA_DISABLE_FAILED",
-                    ip: getClientIp(req),
-                    category: "auth",
-                });
                 return res
                     .status(400)
                     .json({ success: false, message: "Invalid OTP" });
@@ -1647,12 +1573,6 @@ router.post(
             await User.findByIdAndUpdate(req.userId, {
                 $set: { twoFactorEnabled: false },
                 $unset: { twoFactorSecret: "" },
-            });
-            await SystemLog.create({
-                userId: req.userId,
-                action: "SUPERADMIN_2FA_DISABLED",
-                ip: getClientIp(req),
-                category: "auth",
             });
             return res.json({ success: true, twoFactorEnabled: false });
         } catch (err) {

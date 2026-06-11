@@ -92,33 +92,7 @@ const getApiClient = async () => {
             }
         } else {
             // Normal JSON request
-            if (__DEV__ && config.url && config.url.includes("/enquiries")) {
-                console.log("📝 JSON Request:", {
-                    url: config.url,
-                    method: config.method,
-                    paramsKeys:
-                        config?.params && typeof config.params === "object"
-                            ? Object.keys(config.params)
-                            : [],
-                    paramsPreview:
-                        config?.params && typeof config.params === "object"
-                            ? {
-                                  page: config.params.page,
-                                  limit: config.params.limit,
-                                  search:
-                                      typeof config.params.search === "string"
-                                          ? `${config.params.search.slice(0, 20)}${config.params.search.length > 20 ? "…" : ""}`
-                                          : config.params.search,
-                                  date: config.params.date,
-                                  followUpDate: config.params.followUpDate,
-                              }
-                            : null,
-                    bodyKeys:
-                        typeof config.data === "string"
-                            ? "string"
-                            : Object.keys(config.data || {}),
-                });
-            }
+            // Console logs removed to reduce noise
         }
 
         return config;

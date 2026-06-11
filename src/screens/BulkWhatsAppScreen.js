@@ -11,6 +11,7 @@ import { MotiView } from "moti";
 import { getAllEnquiries } from "../services/enquiryService";
 import * as templateService from "../services/officialWhatsappTemplateService";
 import * as whatsappService from "../services/whatsappService";
+import * as Contacts from "expo-contacts";
 
 const { width: W } = Dimensions.get("window");
 
@@ -116,8 +117,52 @@ export default function BulkWhatsAppScreen({ navigation }) {
     const insets = useSafeAreaInsets();
 
     const [enquiries, setEnquiries]           = useState([]);
+    const [deviceContacts, setDeviceContacts] = useState([]);
+    const [contactMode, setContactMode]       = useState("enquiry");
     const [loading, setLoading]               = useState(true);
     const [searchQuery, setSearchQuery]       = useState("");
+
+    const enableDeviceContacts = String(process.env.EXPO_PUBLIC_ENABLE_CONTACTS_IMPORT || "").trim() === "true";
+
+    const loadDeviceContacts = async () => {
+        try {
+            const { status } = await Contacts.requestPermissionsAsync();
+            if (status === 'granted') {
+                const { data } = await Contacts.getContactsAsync({
+                    fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+                });
+
+                if (data.length > 0) {
+                    const mapped = data
+                        .filter(c => c.phoneNumbers && c.phoneNumbers.length > 0)
+                        .map((c, i) => {
+                            const mobileRaw = c.phoneNumbers[0].number || "";
+                            const digits = mobileRaw.replace(/\D/g, "");
+                            return {
+                                _id: c.id || `contact_${i}`,
+                                name: c.name || "Unknown",
+                                mobile: digits.length >= 10 ? digits : mobileRaw,
+                            };
+                        });
+                    setDeviceContacts(mapped);
+                }
+            } else {
+                Alert.alert("Permission Denied", "Cannot access device contacts.");
+            }
+        } catch (err) {
+            console.log("Error fetching contacts:", err);
+        }
+    };
+
+    const handleSwitchMode = (mode) => {
+        if (mode === contactMode) return;
+        setContactMode(mode);
+        setSelectedIds(new Set());
+        setSearchQuery("");
+        if (mode === "device" && deviceContacts.length === 0) {
+            loadDeviceContacts();
+        }
+    };
     const [selectedIds, setSelectedIds]       = useState(new Set());
     const [templates, setTemplates]           = useState([]);
     const [selectedTemplate, setSelectedTemplate] = useState(null);
@@ -147,13 +192,15 @@ export default function BulkWhatsAppScreen({ navigation }) {
 
     useEffect(() => { loadData(); }, [loadData]);
 
+    const activeList = contactMode === "enquiry" ? enquiries : deviceContacts;
+
     const filtered = useMemo(() => {
-        if (!searchQuery) return enquiries;
+        if (!searchQuery) return activeList;
         const q = searchQuery.toLowerCase();
-        return enquiries.filter(e =>
+        return activeList.filter(e =>
             (e.name || "").toLowerCase().includes(q) || (e.mobile || "").includes(q)
         );
-    }, [enquiries, searchQuery]);
+    }, [activeList, searchQuery]);
 
     const allSelected = selectedIds.size === filtered.length && filtered.length > 0;
 
@@ -190,7 +237,8 @@ export default function BulkWhatsAppScreen({ navigation }) {
 
     const executeSend = async () => {
         setIsSending(true);
-        const contacts = enquiries.filter(e => selectedIds.has(e._id));
+        const activeList = contactMode === "enquiry" ? enquiries : deviceContacts;
+        const contacts = activeList.filter(e => selectedIds.has(e._id));
         setProgress({ total: contacts.length, current: 0 });
 
         let ok = 0, fail = 0;
@@ -246,6 +294,26 @@ export default function BulkWhatsAppScreen({ navigation }) {
                     </View>
                 )}
             </View>
+
+            {/* ── Segmented Control for Modes ── */}
+            {enableDeviceContacts && (
+                <View style={S.segmentRow}>
+                    <TouchableOpacity
+                        style={[S.segmentBtn, contactMode === "enquiry" && S.segmentBtnActive]}
+                        onPress={() => handleSwitchMode("enquiry")}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={[S.segmentTxt, contactMode === "enquiry" && S.segmentTxtActive]}>Enquiries</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[S.segmentBtn, contactMode === "device" && S.segmentBtnActive]}
+                        onPress={() => handleSwitchMode("device")}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={[S.segmentTxt, contactMode === "device" && S.segmentTxtActive]}>My Contacts</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             {/* ── Search + Select All (sticky sub-header) ── */}
             <View style={S.subHeader}>
@@ -475,6 +543,19 @@ const S = StyleSheet.create({
         paddingHorizontal: 6,
     },
     headerBadgeText: { fontSize: 13, fontWeight: "800", color: "#fff" },
+
+    // Segment Row
+    segmentRow: {
+        flexDirection: "row", paddingHorizontal: 16, paddingTop: 10, paddingBottom: 5,
+        backgroundColor: "#FFFFFF",
+    },
+    segmentBtn: {
+        flex: 1, paddingVertical: 10, alignItems: "center",
+        borderBottomWidth: 2, borderBottomColor: "transparent",
+    },
+    segmentBtnActive: { borderBottomColor: C.primary },
+    segmentTxt: { fontSize: 14, fontWeight: "600", color: C.textSub },
+    segmentTxtActive: { color: C.primary },
 
     // Sub-header
     subHeader: {

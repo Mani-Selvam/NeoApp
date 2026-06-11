@@ -51,6 +51,10 @@ const CompanySchema = new mongoose.Schema(
       language: { type: String, trim: true, default: "en" },
       buttonIndex: { type: Number, default: 0},
     },
+    assistantUsage: {
+      yearlyUsed: { type: Number, default: 0 },
+      extraPurchased: { type: Number, default: 0 }
+    },
     settings: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true },

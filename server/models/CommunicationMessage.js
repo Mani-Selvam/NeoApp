@@ -17,7 +17,13 @@ const CommunicationMessageSchema = new mongoose.Schema(
     receiverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      default: null,
+      index: true,
+    },
+    groupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CommunicationGroup",
+      default: null,
       index: true,
     },
     senderRole: {
@@ -68,6 +74,11 @@ const CommunicationMessageSchema = new mongoose.Schema(
     taskId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "CommunicationTask",
+      default: null,
+    },
+    replyTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CommunicationMessage",
       default: null,
     },
     readBy: [

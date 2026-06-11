@@ -7,24 +7,24 @@ import { LinearGradient } from "expo-linear-gradient";
 import { AnimatePresence, MotiView } from "moti";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Animated,
-    Dimensions,
-    FlatList,
-    Image,
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Dimensions,
+  FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { io } from "socket.io-client";
@@ -200,161 +200,161 @@ const MessageBubble = ({
             </View>
           </TouchableOpacity>
         ) : /* AUDIO */
-        item.type === "audio" || item.type === "ptt" ? (
-          <View style={S.audioMsg}>
-            <TouchableOpacity
-              onPress={() => onToggleAudio?.(item)}
-              style={[
-                S.audioPlayBtn,
-                isOwner && {
-                  backgroundColor: "rgba(255,255,255,0.2)",
-                },
-              ]}
-            >
-              <Ionicons
-                name={isAudioPlaying ? "pause" : "play"}
-                size={16}
-                color={isOwner ? "#fff" : C.forest}
-              />
-            </TouchableOpacity>
-            <View style={S.waveformWrap}>
-              {[8, 14, 10, 20, 16, 12, 18, 10, 14, 8, 16, 12].map((h, i) => (
-                <View
-                  key={i}
+          item.type === "audio" || item.type === "ptt" ? (
+            <View style={S.audioMsg}>
+              <TouchableOpacity
+                onPress={() => onToggleAudio?.(item)}
+                style={[
+                  S.audioPlayBtn,
+                  isOwner && {
+                    backgroundColor: "rgba(255,255,255,0.2)",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={isAudioPlaying ? "pause" : "play"}
+                  size={16}
+                  color={isOwner ? "#fff" : C.forest}
+                />
+              </TouchableOpacity>
+              <View style={S.waveformWrap}>
+                {[8, 14, 10, 20, 16, 12, 18, 10, 14, 8, 16, 12].map((h, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      S.waveLine,
+                      {
+                        height: h,
+                        backgroundColor: isOwner
+                          ? i < 6
+                            ? "rgba(255,255,255,0.85)"
+                            : "rgba(255,255,255,0.35)"
+                          : i < 6
+                            ? C.forest
+                            : C.sand,
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text
+                style={[
+                  S.audioDuration,
+                  {
+                    color: isOwner ? "rgba(255,255,255,0.7)" : C.tan,
+                  },
+                ]}
+              >
+                0:12
+              </Text>
+              <View style={[S.msgMeta, { marginTop: 0, marginLeft: 6 }]}>
+                <Text
                   style={[
-                    S.waveLine,
-                    {
-                      height: h,
-                      backgroundColor: isOwner
-                        ? i < 6
-                          ? "rgba(255,255,255,0.85)"
-                          : "rgba(255,255,255,0.35)"
-                        : i < 6
-                          ? C.forest
-                          : C.sand,
+                    S.timestamp,
+                    isOwner
+                      ? { color: "rgba(255,255,255,0.6)" }
+                      : { color: C.tan },
+                  ]}
+                >
+                  {time}
+                </Text>
+                {statusIcon && (
+                  <MaterialCommunityIcons
+                    name={statusIcon.name}
+                    size={12}
+                    color={statusIcon.color}
+                    style={{ marginLeft: 3 }}
+                  />
+                )}
+              </View>
+            </View>
+          ) : /* DOCUMENT */
+            item.type === "document" ? (
+              <TouchableOpacity style={S.docMsg} activeOpacity={0.8}>
+                <View
+                  style={[
+                    S.docIcon,
+                    isOwner && {
+                      backgroundColor: "rgba(255,255,255,0.18)",
                     },
                   ]}
-                />
-              ))}
-            </View>
-            <Text
-              style={[
-                S.audioDuration,
-                {
-                  color: isOwner ? "rgba(255,255,255,0.7)" : C.tan,
-                },
-              ]}
-            >
-              0:12
-            </Text>
-            <View style={[S.msgMeta, { marginTop: 0, marginLeft: 6 }]}>
-              <Text
-                style={[
-                  S.timestamp,
-                  isOwner
-                    ? { color: "rgba(255,255,255,0.6)" }
-                    : { color: C.tan },
-                ]}
-              >
-                {time}
-              </Text>
-              {statusIcon && (
-                <MaterialCommunityIcons
-                  name={statusIcon.name}
-                  size={12}
-                  color={statusIcon.color}
-                  style={{ marginLeft: 3 }}
-                />
-              )}
-            </View>
-          </View>
-        ) : /* DOCUMENT */
-        item.type === "document" ? (
-          <TouchableOpacity style={S.docMsg} activeOpacity={0.8}>
-            <View
-              style={[
-                S.docIcon,
-                isOwner && {
-                  backgroundColor: "rgba(255,255,255,0.18)",
-                },
-              ]}
-            >
-              <Feather
-                name="file-text"
-                size={18}
-                color={isOwner ? "#fff" : C.forest}
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text
-                style={[
-                  S.docName,
-                  isOwner ? { color: "#fff" } : { color: C.espresso },
-                ]}
-                numberOfLines={1}
-              >
-                {item.fileName || "Document"}
-              </Text>
-              <Text
-                style={[
-                  S.docType,
-                  isOwner
-                    ? { color: "rgba(255,255,255,0.6)" }
-                    : { color: C.tan },
-                ]}
-              >
-                {item.mimeType?.split("/")[1]?.toUpperCase() || "PDF"}
-              </Text>
-            </View>
-            <View style={S.msgMeta}>
-              <Text
-                style={[
-                  S.timestamp,
-                  isOwner
-                    ? { color: "rgba(255,255,255,0.6)" }
-                    : { color: C.tan },
-                ]}
-              >
-                {time}
-              </Text>
-              {statusIcon && (
-                <MaterialCommunityIcons
-                  name={statusIcon.name}
-                  size={12}
-                  color={statusIcon.color}
-                  style={{ marginLeft: 3 }}
-                />
-              )}
-            </View>
-          </TouchableOpacity>
-        ) : (
-          /* TEXT */
-          <View>
-            <Text style={[S.msgText, isOwner ? S.msgTextOut : S.msgTextIn]}>
-              {item.content}
-            </Text>
-            <View style={S.msgMeta}>
-              <Text
-                style={[
-                  S.timestamp,
-                  isOwner
-                    ? { color: "rgba(255,255,255,0.6)" }
-                    : { color: C.tan },
-                ]}
-              >
-                {time}
-              </Text>
-              {statusIcon && (
-                <MaterialCommunityIcons
-                  name={statusIcon.name}
-                  size={12}
-                  color={statusIcon.color}
-                  style={{ marginLeft: 3 }}
-                />
-              )}
-            </View>
-          </View>
-        )}
+                >
+                  <Feather
+                    name="file-text"
+                    size={18}
+                    color={isOwner ? "#fff" : C.forest}
+                  />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text
+                    style={[
+                      S.docName,
+                      isOwner ? { color: "#fff" } : { color: C.espresso },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.fileName || "Document"}
+                  </Text>
+                  <Text
+                    style={[
+                      S.docType,
+                      isOwner
+                        ? { color: "rgba(255,255,255,0.6)" }
+                        : { color: C.tan },
+                    ]}
+                  >
+                    {item.mimeType?.split("/")[1]?.toUpperCase() || "PDF"}
+                  </Text>
+                </View>
+                <View style={S.msgMeta}>
+                  <Text
+                    style={[
+                      S.timestamp,
+                      isOwner
+                        ? { color: "rgba(255,255,255,0.6)" }
+                        : { color: C.tan },
+                    ]}
+                  >
+                    {time}
+                  </Text>
+                  {statusIcon && (
+                    <MaterialCommunityIcons
+                      name={statusIcon.name}
+                      size={12}
+                      color={statusIcon.color}
+                      style={{ marginLeft: 3 }}
+                    />
+                  )}
+                </View>
+              </TouchableOpacity>
+            ) : (
+              /* TEXT */
+              <View>
+                <Text style={[S.msgText, isOwner ? S.msgTextOut : S.msgTextIn]}>
+                  {item.content}
+                </Text>
+                <View style={S.msgMeta}>
+                  <Text
+                    style={[
+                      S.timestamp,
+                      isOwner
+                        ? { color: "rgba(255,255,255,0.6)" }
+                        : { color: C.tan },
+                    ]}
+                  >
+                    {time}
+                  </Text>
+                  {statusIcon && (
+                    <MaterialCommunityIcons
+                      name={statusIcon.name}
+                      size={12}
+                      color={statusIcon.color}
+                      style={{ marginLeft: 3 }}
+                    />
+                  )}
+                </View>
+              </View>
+            )}
       </View>
     </MotiView>
   );
@@ -743,11 +743,11 @@ export default function ChatScreen({
         prev.map((m) =>
           m._id === tempId
             ? {
-                ...m,
-                status: response?.status || "sent",
-                _id: response._id || m._id,
-                providerError: response?.providerError || null,
-              }
+              ...m,
+              status: response?.status || "sent",
+              _id: response._id || m._id,
+              providerError: response?.providerError || null,
+            }
             : m,
         ),
       );
@@ -760,8 +760,8 @@ export default function ChatScreen({
       Alert.alert(
         "Error",
         e?.response?.data?.message ||
-          e?.response?.data?.error ||
-          "Failed to send. Please check your connection.",
+        e?.response?.data?.error ||
+        "Failed to send. Please check your connection.",
       );
     } finally {
       setSending(false);
@@ -803,6 +803,25 @@ export default function ChatScreen({
       const asset = result.assets[0];
       handleSend(
         { uri: asset.uri, type: "image/jpeg", name: "image.jpg" },
+        "image",
+      );
+    }
+  };
+
+  const takePhoto = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (perm.status !== "granted") {
+      Alert.alert("Permission needed", "Please allow camera access.");
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      const asset = result.assets[0];
+      handleSend(
+        { uri: asset.uri, type: asset.mimeType || "image/jpeg", name: asset.fileName || "photo.jpg" },
         "image",
       );
     }
@@ -1121,11 +1140,11 @@ export default function ChatScreen({
                   isReadOnly
                     ? 24
                     : Math.max(
-                        composerHeight +
-                          16 +
-                          (manualKeyboardLift ? Math.round(keyboardHeight * 0.16) : 0),
-                        92,
-                      ),
+                      composerHeight +
+                      16 +
+                      (manualKeyboardLift ? Math.round(keyboardHeight * 0.16) : 0),
+                      92,
+                    ),
               },
             ]}
             showsVerticalScrollIndicator={false}
@@ -1195,125 +1214,162 @@ export default function ChatScreen({
         ) : null}
 
         {!isReadOnly && (
-        <Animated.View
-          style={[
-            S.inputArea,
-            isComposerFocused && S.inputAreaFocused,
-            {
-              paddingBottom: composerBottomInset,
-              transform: manualKeyboardLift
-                ? [
+          <Animated.View
+            style={[
+              S.inputArea,
+              isComposerFocused && S.inputAreaFocused,
+              {
+                paddingBottom: composerBottomInset,
+                transform: manualKeyboardLift
+                  ? [
                     {
                       translateY: Animated.multiply(composerLiftAnim, -1),
                     },
                   ]
-                : undefined,
-            },
-          ]}
-          onLayout={(event) => {
-            const nextHeight = Math.ceil(event.nativeEvent.layout.height);
-            if (nextHeight && Math.abs(nextHeight - composerHeight) > 2) {
-              setComposerHeight(nextHeight);
-            }
-          }}
-        >
-          {/* Template picker */}
-          <AnimatePresence>
-            {showTemplates && (
-              <MotiView
-                from={{
-                  opacity: 0,
-                  translateY: 12,
-                  scale: 0.96,
-                }}
-                animate={{
-                  opacity: 1,
-                  translateY: 0,
-                  scale: 1,
-                }}
-                exit={{
-                  opacity: 0,
-                  translateY: 12,
-                  scale: 0.96,
-                }}
-                style={S.templatePicker}
-              >
-                <View style={S.templatePickerHeader}>
-                  <Ionicons name="flash-outline" size={13} color={C.forest} />
-                  <Text style={S.templatePickerTitle}>Quick Templates</Text>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={S.templateList}
+                  : undefined,
+              },
+            ]}
+            onLayout={(event) => {
+              const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+              if (nextHeight && Math.abs(nextHeight - composerHeight) > 2) {
+                setComposerHeight(nextHeight);
+              }
+            }}
+          >
+            {/* Template picker */}
+            <AnimatePresence>
+              {showTemplates && (
+                <MotiView
+                  from={{
+                    opacity: 0,
+                    translateY: 12,
+                    scale: 0.96,
+                  }}
+                  animate={{
+                    opacity: 1,
+                    translateY: 0,
+                    scale: 1,
+                  }}
+                  exit={{
+                    opacity: 0,
+                    translateY: 12,
+                    scale: 0.96,
+                  }}
+                  style={S.templatePicker}
                 >
-                  {filteredTemplates.map((item) => (
-                    <TouchableOpacity
-                      key={item._id}
-                      style={S.templateChip}
-                      onPress={() => selectTemplate(item)}
-                      activeOpacity={0.8}
-                    >
-                      <View style={S.templateChipIcon}>
-                        <Text style={S.templateChipInitial}>
-                          {item.name[0]}
-                        </Text>
-                      </View>
-                      <View>
-                        <Text style={S.templateChipKeyword}>
-                          @{item.keyword}
-                        </Text>
-                        <Text style={S.templateChipName} numberOfLines={1}>
-                          {item.name}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </MotiView>
-            )}
-          </AnimatePresence>
+                  <View style={S.templatePickerHeader}>
+                    <Ionicons name="flash-outline" size={13} color={C.forest} />
+                    <Text style={S.templatePickerTitle}>Quick Templates</Text>
+                  </View>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={S.templateList}
+                  >
+                    {filteredTemplates.map((item) => (
+                      <TouchableOpacity
+                        key={item._id}
+                        style={S.templateChip}
+                        onPress={() => selectTemplate(item)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={S.templateChipIcon}>
+                          <Text style={S.templateChipInitial}>
+                            {item.name[0]}
+                          </Text>
+                        </View>
+                        <View>
+                          <Text style={S.templateChipKeyword}>
+                            @{item.keyword}
+                          </Text>
+                          <Text style={S.templateChipName} numberOfLines={1}>
+                            {item.name}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </MotiView>
+              )}
+            </AnimatePresence>
 
-          {isRecordingAudio && (
-            <View style={S.recordingBanner}>
-              <View style={S.recordingDot} />
-              <Text style={S.recordingText}>
-                Recording voice note {formatRecordingDuration(recordingDurationMs)}
-              </Text>
+            {isRecordingAudio && (
+              <View style={S.recordingBanner}>
+                <View style={S.recordingDot} />
+                <Text style={S.recordingText}>
+                  Recording voice note {formatRecordingDuration(recordingDurationMs)}
+                </Text>
+                <TouchableOpacity
+                  style={S.recordingDeleteBtn}
+                  onPress={cancelAudioRecording}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#B91C1C" />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Input row */}
+            <View style={S.inputRow}>
+              {/* Attach button */}
               <TouchableOpacity
-                style={S.recordingDeleteBtn}
-                onPress={cancelAudioRecording}
+                style={S.attachBtn}
+                onPress={pickDocument}
                 activeOpacity={0.8}
               >
-                <Ionicons name="trash-outline" size={16} color="#B91C1C" />
+                <Feather name="paperclip" size={20} color={C.brown} />
               </TouchableOpacity>
-            </View>
-          )}
 
-          {/* Input row */}
-          <View style={S.inputRow}>
-            {/* Attach button */}
-            <TouchableOpacity
-              style={S.attachBtn}
-              onPress={pickDocument}
-              activeOpacity={0.8}
-            >
-              <Feather name="paperclip" size={20} color={C.brown} />
-            </TouchableOpacity>
-
-            {/* Text input box */}
-            <>
-              <FloatingChatInput
-                value={inputText}
-                onChangeText={handleTextChange}
-                onFocus={() => {
-                  setIsComposerFocused(true);
-                  scrollToLatest(false, true);
-                }}
-                onBlur={() => setIsComposerFocused(false)}
-                maxLength={2000}
-                scrollEnabled
-                rightSlot={
+              {/* Text input box */}
+              <>
+                <FloatingChatInput
+                  value={inputText}
+                  onChangeText={handleTextChange}
+                  onFocus={() => {
+                    setIsComposerFocused(true);
+                    scrollToLatest(false, true);
+                  }}
+                  onBlur={() => setIsComposerFocused(false)}
+                  maxLength={2000}
+                  scrollEnabled
+                  rightSlot={
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <TouchableOpacity
+                        style={S.inputIconBtn}
+                        onPress={takePhoto}
+                        activeOpacity={0.8}
+                      >
+                        <Feather name="camera" size={18} color={C.tan} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={S.inputIconBtn}
+                        onPress={pickImage}
+                        activeOpacity={0.8}
+                      >
+                        <Feather name="image" size={18} color={C.tan} />
+                      </TouchableOpacity>
+                    </View>
+                  }
+                />
+                {false && <View style={S.inputBox}>
+                  <TextInput
+                    style={S.inputField}
+                    placeholder="Message..."
+                    placeholderTextColor={C.sand}
+                    multiline
+                    maxLength={2000}
+                    value={inputText}
+                    onChangeText={handleTextChange}
+                  />
+                  {/* Camera picker */}
+                  <TouchableOpacity
+                    style={S.inputIconBtn}
+                    onPress={takePhoto}
+                    activeOpacity={0.8}
+                  >
+                    <Feather name="camera" size={18} color={C.tan} />
+                  </TouchableOpacity>
+                  {/* Image picker */}
                   <TouchableOpacity
                     style={S.inputIconBtn}
                     onPress={pickImage}
@@ -1321,55 +1377,35 @@ export default function ChatScreen({
                   >
                     <Feather name="image" size={18} color={C.tan} />
                   </TouchableOpacity>
-                }
-              />
-              {false && <View style={S.inputBox}>
-              <TextInput
-                style={S.inputField}
-                placeholder="Message..."
-                placeholderTextColor={C.sand}
-                multiline
-                maxLength={2000}
-                value={inputText}
-                onChangeText={handleTextChange}
-              />
-              {/* Image picker */}
-              <TouchableOpacity
-                style={S.inputIconBtn}
-                onPress={pickImage}
-                activeOpacity={0.8}
-              >
-                <Feather name="image" size={18} color={C.tan} />
-              </TouchableOpacity>
-            </View>}
-            </>
+                </View>}
+              </>
 
-            {/* Send / Mic button */}
-            <TouchableOpacity
-              style={[
-                S.sendBtn,
-                (hasText || isRecordingAudio) && S.sendBtnActive,
-                isRecordingAudio && S.sendBtnRecording,
-              ]}
-              onPress={handlePrimaryAction}
-              disabled={sending}
-              activeOpacity={0.85}
-            >
-              {sending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons
-                  name={
-                    hasText ? "send" : isRecordingAudio ? "stop" : "mic-outline"
-                  }
-                  size={hasText ? 18 : 20}
-                  color="#fff"
-                  style={hasText && { marginLeft: 2 }}
-                />
-              )}
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
+              {/* Send / Mic button */}
+              <TouchableOpacity
+                style={[
+                  S.sendBtn,
+                  (hasText || isRecordingAudio) && S.sendBtnActive,
+                  isRecordingAudio && S.sendBtnRecording,
+                ]}
+                onPress={handlePrimaryAction}
+                disabled={sending}
+                activeOpacity={0.85}
+              >
+                {sending ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons
+                    name={
+                      hasText ? "send" : isRecordingAudio ? "stop" : "mic-outline"
+                    }
+                    size={hasText ? 18 : 20}
+                    color="#fff"
+                    style={hasText && { marginLeft: 2 }}
+                  />
+                )}
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
         )}
       </KeyboardAvoidingView>
 
@@ -1378,7 +1414,7 @@ export default function ChatScreen({
         transparent
         animationType="fade"
         onRequestClose={() =>
- setPreviewImageUri("")}
+          setPreviewImageUri("")}
       >
         <View style={S.previewOverlay}>
           <TouchableOpacity

@@ -426,7 +426,24 @@ router.get("/", verifyToken, async (req, res) => {
                 }
 
                 if (assignedTo && assignedTo !== "all") {
-                    query.assignedTo = assignedTo;
+                    // Include both explicitly assigned enquiries AND unassigned
+                    // enquiries created by this user (assignedTo is null/absent
+                    // means the creator "owns" them — i.e. self-assigned).
+                    const assignedToFilter = [
+                        { assignedTo: assignedTo },
+                        { assignedTo: { $in: [null, undefined] }, userId: assignedTo },
+                    ];
+
+                    // Merge with any existing $or (e.g. from search) using $and
+                    if (query.$or) {
+                        query.$and = [
+                            { $or: query.$or },
+                            { $or: assignedToFilter },
+                        ];
+                        delete query.$or;
+                    } else {
+                        query.$or = assignedToFilter;
+                    }
                 }
 
                 if (followUpDate) {
@@ -438,8 +455,8 @@ router.get("/", verifyToken, async (req, res) => {
                         isCurrent: { $ne: false },
                         date: followUpDate,
                     };
-                    if (query.assignedTo)
-                        followUpScope.assignedTo = query.assignedTo;
+                    if (assignedTo && assignedTo !== "all")
+                        followUpScope.assignedTo = assignedTo;
 
                     const followUpEnquiryIds = (
                         await FollowUp.distinct("enqId", followUpScope)
@@ -467,6 +484,7 @@ router.get("/", verifyToken, async (req, res) => {
                     const s = raw.slice(0, 60);
                     const digits = s.replace(/\D/g, "");
 
+                    let searchFilter;
                     // Fast paths that can use normal indexes (prefix regex).
                     if (
                         digits &&
@@ -474,7 +492,7 @@ router.get("/", verifyToken, async (req, res) => {
                         digits.length === s.length
                     ) {
                         const re = `^${escapeRegex(digits)}`;
-                        query.$or = [{ mobile: { $regex: re } }];
+                        searchFilter = [{ mobile: { $regex: re } }];
                     } else if (/^enq[\s\-_]?\d+/i.test(s)) {
                         query.enqNo = {
                             $regex: `^${escapeRegex(s)}`,
@@ -482,12 +500,26 @@ router.get("/", verifyToken, async (req, res) => {
                         };
                     } else {
                         const re = escapeRegex(s);
-                        query.$or = [
+                        searchFilter = [
                             { name: { $regex: re, $options: "i" } },
                             { mobile: { $regex: re, $options: "i" } },
                             { email: { $regex: re, $options: "i" } },
                             { enqNo: { $regex: re, $options: "i" } },
                         ];
+                    }
+
+                    // Merge search $or with any existing $or (from assignedTo filter)
+                    if (searchFilter) {
+                        if (query.$or) {
+                            if (!query.$and) query.$and = [];
+                            query.$and.push({ $or: query.$or });
+                            query.$and.push({ $or: searchFilter });
+                            delete query.$or;
+                        } else if (query.$and) {
+                            query.$and.push({ $or: searchFilter });
+                        } else {
+                            query.$or = searchFilter;
+                        }
                     }
                 }
 
@@ -1149,6 +1181,58 @@ router.get("/meta/report-summary", verifyToken, async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
+    }
+});
+// BULK ASSIGN ENQUIRIES
+router.put("/bulk-assign", verifyToken, async (req, res) => {
+    try {
+        const { enquiryIds, assignedTo } = req.body;
+        if (!Array.isArray(enquiryIds) || enquiryIds.length === 0) {
+            return res.status(400).json({ error: "No enquiries selected for bulk assignment" });
+        }
+        if (!assignedTo) {
+            return res.status(400).json({ error: "No staff member selected" });
+        }
+
+        const ownerId = req.user.role === "Staff" && req.user.parentUserId ? req.user.parentUserId : req.userId;
+        const ownerUser = await User.findById(ownerId).select("company_id").lean();
+        const companyId = req.user?.company_id || ownerUser?.company_id || null;
+
+        const resolvedAssignedTo = await resolveAssignee({
+            requestedAssignedTo: assignedTo,
+            ownerId,
+            actorId: req.userId,
+            actor: req.user,
+        });
+
+        if (!resolvedAssignedTo) {
+            return res.status(400).json({ error: "Invalid assignee selected" });
+        }
+
+        // Fetch enquiries to verify permissions and get full objects for notifications
+        const enquiries = await Enquiry.find({ _id: { $in: enquiryIds }, companyId }).lean();
+        if (enquiries.length === 0) {
+            return res.status(404).json({ error: "No matching enquiries found" });
+        }
+
+        // Update all
+        const validIds = enquiries.map((e) => e._id);
+        await Enquiry.updateMany(
+            { _id: { $in: validIds } },
+            { $set: { assignedTo: resolvedAssignedTo } }
+        );
+
+        // Notify and emit socket events
+        for (const enq of enquiries) {
+            const updatedEnq = { ...enq, assignedTo: resolvedAssignedTo };
+            await emitEnquiryUpdated(req, updatedEnq, companyId);
+            await sendEnquiryAssignmentNotifications(req, updatedEnq, resolvedAssignedTo);
+        }
+
+        res.json({ success: true, count: validIds.length });
+    } catch (error) {
+        console.error("Bulk assign error:", error);
+        res.status(500).json({ error: "Failed to bulk assign enquiries" });
     }
 });
 

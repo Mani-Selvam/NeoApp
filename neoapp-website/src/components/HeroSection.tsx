@@ -3,10 +3,13 @@ import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, PlayCircle } from "lucide-react";
 
-export function HeroSection() {
+interface HeroSectionProps {
+  onOpenModal: () => void;
+}
+
+export function HeroSection({ onOpenModal }: HeroSectionProps) {
   return (
     <section className="relative pt-32 pb-20 md:pt-40 md:pb-28 overflow-hidden">
-      {/* Background elements */}
       <div className="absolute inset-0 -z-10 bg-grid-pattern opacity-50"></div>
       <div className="absolute top-0 right-0 -z-10 w-[800px] h-[800px] bg-primary/20 dark:bg-primary/10 rounded-full blur-[100px] translate-x-1/3 -translate-y-1/3"></div>
       <div className="absolute bottom-0 left-0 -z-10 w-[600px] h-[600px] bg-indigo-500/20 dark:bg-indigo-500/10 rounded-full blur-[100px] -translate-x-1/3 translate-y-1/3"></div>
@@ -47,7 +50,11 @@ export function HeroSection() {
             transition={{ duration: 0.5, delay: 0.3 }}
             className="flex flex-col sm:flex-row items-center gap-4 pt-4"
           >
-            <Button size="lg" className="rounded-full px-8 h-14 text-base shadow-xl shadow-primary/25">
+            <Button
+              size="lg"
+              className="rounded-full px-8 h-14 text-base shadow-xl shadow-primary/25"
+              onClick={onOpenModal}
+            >
               Start Free Trial <ArrowRight className="ml-2 w-5 h-5" />
             </Button>
             <Button variant="outline" size="lg" className="rounded-full px-8 h-14 text-base glass-card hover:bg-muted/50">

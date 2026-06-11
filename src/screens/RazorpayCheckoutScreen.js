@@ -7,6 +7,7 @@ import {
     Text,
     TouchableOpacity,
     View,
+    Platform,
 } from "react-native";
 import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
@@ -19,6 +20,7 @@ import {
     SkeletonSpacer,
 } from "../components/skeleton/Skeleton";
 import { verifyRazorpayPayment } from "../services/userService";
+import getApiClient from "../services/apiClient";
 
 export default function RazorpayCheckoutScreen({ navigation, route }) {
     const insets = useSafeAreaInsets();
@@ -40,6 +42,7 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
         prefill = {},
         notes = {},
         theme = { color: "#0E5E6F" },
+        isAiTopup = false,
     } = route?.params || {};
 
     const onMessage = useCallback(
@@ -65,21 +68,33 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
                 try {
                     setVerifying(true);
                     const payload = msg.payload || {};
-                    const res = await verifyRazorpayPayment({
-                        planId,
-                        couponCode,
-                        adminCount,
-                        staffCount,
-                        razorpay_order_id: payload.razorpay_order_id,
-                        razorpay_payment_id: payload.razorpay_payment_id,
-                        razorpay_signature: payload.razorpay_signature,
-                    });
+                    let res;
+                    
+                    if (isAiTopup) {
+                        const client = await getApiClient();
+                        const verifyResponse = await client.post("/ai-payments/razorpay/verify", {
+                            razorpay_order_id: payload.razorpay_order_id,
+                            razorpay_payment_id: payload.razorpay_payment_id,
+                            razorpay_signature: payload.razorpay_signature,
+                        });
+                        res = verifyResponse.data;
+                    } else {
+                        res = await verifyRazorpayPayment({
+                            planId,
+                            couponCode,
+                            adminCount,
+                            staffCount,
+                            razorpay_order_id: payload.razorpay_order_id,
+                            razorpay_payment_id: payload.razorpay_payment_id,
+                            razorpay_signature: payload.razorpay_signature,
+                        });
+                    }
 
                     navigation.navigate("PaymentSuccessScreen", {
                         planName:
                             res?.plan?.name || notes?.planName || "Selected",
                         finalPrice: res?.pricing?.finalPrice,
-                        renewDate: res?.renewDate,
+                        renewDate: res?.renewDate || new Date().toISOString(),
                         receipt: res?.receipt || null,
                         displayCurrency,
                         usdInrRate,
@@ -87,7 +102,7 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
                 } catch (e) {
                     Alert.alert(
                         "Payment Verification Failed",
-                        e?.message || "Unable to verify payment",
+                        e?.response?.data?.message || e?.message || "Unable to verify payment",
                     );
                     navigation.goBack();
                 } finally {
@@ -184,6 +199,104 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
         prefill.name,
         theme.color,
     ]);
+
+    React.useEffect(() => {
+        if (Platform.OS === "web") {
+            const loadScript = async () => {
+                const scriptId = "razorpay-checkout-js";
+                if (!document.getElementById(scriptId)) {
+                    const script = document.createElement("script");
+                    script.id = scriptId;
+                    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+                    script.async = true;
+                    document.body.appendChild(script);
+                    await new Promise((resolve) => {
+                        script.onload = resolve;
+                    });
+                }
+                const options = {
+                    key: keyId,
+                    amount: amountInrPaise,
+                    currency: "INR",
+                    name: prefill?.name || "NeoApp",
+                    description: "Plan purchase",
+                    order_id: orderId,
+                    prefill: {
+                        name: prefill?.name || "",
+                        email: prefill?.email || "",
+                        contact: prefill?.contact || "",
+                    },
+                    notes: notes || {},
+                    theme: { color: theme?.color || "#0E5E6F" },
+                    handler: function (resp) {
+                        onMessage({ type: "success", payload: resp });
+                    },
+                    modal: {
+                        ondismiss: function () {
+                            onMessage({ type: "cancel" });
+                        },
+                    },
+                };
+                if (window.Razorpay) {
+                    try {
+                        const rzp = new window.Razorpay(options);
+                        rzp.open();
+                    } catch (e) {
+                        onMessage({ type: "error", message: String(e) });
+                    }
+                } else {
+                    onMessage({ type: "error", message: "Razorpay script failed to load." });
+                }
+            };
+            loadScript();
+        }
+    }, [
+        Platform.OS,
+        keyId,
+        amountInrPaise,
+        orderId,
+        prefill,
+        notes,
+        theme,
+        onMessage,
+    ]);
+
+    if (Platform.OS === "web") {
+        return (
+            <SafeAreaView
+                style={[styles.container, { paddingTop: insets.top + 10 }]}>
+                <StatusBar barStyle="dark-content" />
+                <View style={styles.header}>
+                    <TouchableOpacity
+                        style={styles.backButton}
+                        onPress={() => navigation.goBack()}>
+                        <Ionicons name="arrow-back" size={20} color="#182028" />
+                    </TouchableOpacity>
+                    <Text style={styles.headerTitle}>Payment</Text>
+                    <View style={styles.headerSpacer} />
+                </View>
+                <View style={styles.webWrap}>
+                    <View style={styles.loadingOverlay}>
+                        <Text style={{ fontWeight: "700", color: "#182028", marginBottom: 12 }}>
+                            Opening Secure Payment...
+                        </Text>
+                        <SkeletonPulse>
+                            <SkeletonCard
+                                style={{
+                                    width: 240,
+                                    alignItems: "center",
+                                    borderRadius: 22,
+                                }}>
+                                <SkeletonCircle size={40} />
+                                <SkeletonSpacer h={14} />
+                                <SkeletonLine width="72%" height={12} />
+                            </SkeletonCard>
+                        </SkeletonPulse>
+                    </View>
+                </View>
+            </SafeAreaView>
+        );
+    }
 
     return (
         <SafeAreaView

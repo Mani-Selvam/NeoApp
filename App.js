@@ -1,5 +1,10 @@
 import { useEffect } from "react";
-import { Platform, StatusBar } from "react-native";
+import { Platform, StatusBar, LogBox } from "react-native";
+
+// Ignore React 19 specific warnings from third party UI libraries
+LogBox.ignoreLogs([
+    "Accessing element.ref was removed in React 19",
+]);
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import {
     SafeAreaProvider,

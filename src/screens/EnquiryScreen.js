@@ -50,6 +50,7 @@ import {
 } from "../services/appCache";
 import * as enquiryService from "../services/enquiryService";
 import * as followupService from "../services/followupService";
+import * as staffService from "../services/staffService";
 import notificationService from "../services/notificationService";
 import { getAuthToken } from "../services/secureTokenStorage";
 import {
@@ -179,6 +180,17 @@ const getAssignedUserLabel = (assignedTo, currentUser = null) => {
     return assignedTo?.name || assignedTo?.email || assignedTo?.mobile || "-";
 };
 
+const getOrdinalWord = (position) => {
+    const words = {
+        1: "Main",
+        2: "Secondary",
+        3: "Third",
+        4: "Fourth",
+        5: "Fifth",
+    };
+    return words[position] || `${position}th`;
+};
+
 // â”€â”€â”€ Compact enquiry card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const EnquiryCard = React.memo(function EnquiryCard({
     item,
@@ -193,6 +205,9 @@ const EnquiryCard = React.memo(function EnquiryCard({
     onDeleteConfirm,
     onDeleteCancel,
     swipeResetTrigger = 0,
+    isSelectionMode = false,
+    isSelected = false,
+    onToggleSelect,
 }) {
     const scale = useRef(new Animated.Value(1)).current;
     const translateX = useRef(new Animated.Value(0)).current;
@@ -326,6 +341,18 @@ const EnquiryCard = React.memo(function EnquiryCard({
                         <View
                             style={[S.stripe, { backgroundColor: pCfg.color }]}
                         />
+                        {isSelectionMode && (
+                            <TouchableOpacity
+                                onPress={() => onToggleSelect(item)}
+                                style={{ padding: 12, justifyContent: 'center' }}
+                            >
+                                <Ionicons
+                                    name={isSelected ? "checkbox" : "square-outline"}
+                                    size={24}
+                                    color={isSelected ? C.primary : C.border}
+                                />
+                            </TouchableOpacity>
+                        )}
 
                         <View style={S.cardBody}>
                             {/* Top row */}
@@ -952,6 +979,26 @@ export default function EnquiryListScreen({ navigation, route }) {
     const { user, logout, billingInfo, showUpgradePrompt, appConfig } = useAuth();
     const playStoreSafeMode = appConfig?.playStoreSafeMode;
 
+    const [staffList, setStaffList] = useState([]);
+    const [selectedStaffFilter, setSelectedStaffFilter] = useState("all");
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [selectedEnquiryIds, setSelectedEnquiryIds] = useState(new Set());
+    const [showBulkAssignModal, setShowBulkAssignModal] = useState(false);
+    const [isBulkAssigning, setIsBulkAssigning] = useState(false);
+    const [staffPickerVisible, setStaffPickerVisible] = useState(false);
+    const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
+
+    const adminRoleLabelMap = useMemo(() => {
+        const sortedAdmins = [...staffList]
+            .filter((member) => String(member?.role || "").toLowerCase() === "admin")
+            .sort((a, b) => new Date(a?.createdAt || 0).getTime() - new Date(b?.createdAt || 0).getTime());
+
+        return sortedAdmins.reduce((acc, member, index) => {
+            acc[member._id] = `${getOrdinalWord(index + 1)} Admin`;
+            return acc;
+        }, {});
+    }, [staffList]);
+
     const [enquiries, setEnquiries] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
     const [isLoading, setIsLoading] = useState(true);
@@ -1040,6 +1087,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                 String(searchQuery || "")
                     .trim()
                     .toLowerCase(),
+                selectedStaffFilter === "all" ? "" : selectedStaffFilter
             );
 
             let cached = null;
@@ -1090,6 +1138,8 @@ export default function EnquiryListScreen({ navigation, route }) {
                             searchQuery,
                             "",
                             selectedDate,
+                            "",
+                            { assignedTo: selectedStaffFilter === "all" ? "" : selectedStaffFilter }
                         );
 
                         if (Array.isArray(res)) {
@@ -1134,6 +1184,8 @@ export default function EnquiryListScreen({ navigation, route }) {
                         searchQuery,
                         "",
                         selectedDate,
+                        "",
+                        { assignedTo: selectedStaffFilter === "all" ? "" : selectedStaffFilter }
                     );
                     let data = [];
                     let totalPages = 1;
@@ -1185,6 +1237,7 @@ export default function EnquiryListScreen({ navigation, route }) {
             dedupeEnquiries,
             user?.id,
             user?._id,
+            selectedStaffFilter,
         ],
     );
 
@@ -1198,23 +1251,36 @@ export default function EnquiryListScreen({ navigation, route }) {
         5000,
     );
     useEffect(() => {
-        fetchEnquiries(true, {
-            showIndicator: false,
-            force: false,
-            allowCache: true,
-        });
-    }, []);
-    useEffect(() => {
-        if (isInitialMount.current) {
-            isInitialMount.current = false;
-            return;
+        if (!isStaffUser) {
+            staffService.getAllStaff()
+                .then(res => setStaffList(Array.isArray(res) ? res : res?.data || []))
+                .catch(() => {});
         }
         fetchEnquiries(true, {
             showIndicator: false,
             force: false,
             allowCache: true,
         });
-    }, [selectedDate]);
+    }, [isStaffUser]);
+    useEffect(() => {
+        if (isInitialMount.current) {
+            isInitialMount.current = false;
+            return;
+        }
+        setEnquiries([]);
+        setPage(1);
+        setHasMore(true);
+        setIsLoading(true);
+        // Reset in-flight guard so a pending fetch won't block the new one
+        enquiriesFetchInFlightRef.current = false;
+        // Use fetchRef.current which holds the latest fetchEnquiries with correct filter values
+        // (fetchRef is updated by an earlier effect in the same commit phase)
+        fetchRef.current?.(true, {
+            showIndicator: true,
+            force: true,
+            allowCache: false,
+        });
+    }, [selectedDate, selectedStaffFilter]);
     useEffect(() => {
         if (isInitialMount.current) return;
         if (skipNextSearch.current) {
@@ -1595,16 +1661,25 @@ export default function EnquiryListScreen({ navigation, route }) {
                 onSwipe={openDetail}
                 onCall={handleCall}
                 onWhatsApp={handleWhatsApp}
-                onLongPress={(enquiry) =>
+                onLongPress={(enquiry) => {
+                    if (isSelectionMode) return;
                     setDeleteEnquiryId((current) =>
                         current === enquiry._id ? null : enquiry._id,
-                    )
-                }
+                    );
+                }}
                 deleteMode={deleteEnquiryId === item._id}
                 deleting={deletingEnquiryId === item._id}
                 onDeleteCancel={() => setDeleteEnquiryId(null)}
                 onDeleteConfirm={(enquiry) => handleDelete(enquiry)}
                 swipeResetTrigger={swipeResetTrigger}
+                isSelectionMode={isSelectionMode}
+                isSelected={selectedEnquiryIds.has(item._id)}
+                onToggleSelect={(enq) => {
+                    const next = new Set(selectedEnquiryIds);
+                    if (next.has(enq._id)) next.delete(enq._id);
+                    else next.add(enq._id);
+                    setSelectedEnquiryIds(next);
+                }}
             />
         ),
         [
@@ -1615,6 +1690,8 @@ export default function EnquiryListScreen({ navigation, route }) {
             deleteEnquiryId,
             deletingEnquiryId,
             swipeResetTrigger,
+            isSelectionMode,
+            selectedEnquiryIds,
         ],
     );
 
@@ -1705,7 +1782,7 @@ export default function EnquiryListScreen({ navigation, route }) {
             <View style={S.header}>
                 <View style={S.headerTop}>
                     <TouchableOpacity
-                        style={S.headerBtn}
+                        style={[S.headerBtn, { paddingHorizontal: 0 }]}
                         onPress={() => setMenuVisible(true)}>
                         <Ionicons name="menu" size={21} color={C.textSub} />
                     </TouchableOpacity>
@@ -1724,30 +1801,14 @@ export default function EnquiryListScreen({ navigation, route }) {
                         </View>
                     </View>
                     <View style={S.headerRight}>
-                        {/* <TouchableOpacity
-                            style={[S.headerBtn, S.headerBtnPrimary]}
-                            accessibilityRole="button"
-                            accessibilityLabel="Add website URL"
-                            onPress={() => setScrapeModalVisible(true)}>
-                            <Ionicons
-                                name="link-outline"
-                                size={20}
-                                color={C.primary}
-                            />
-                        </TouchableOpacity> */}
-
-                        {/* <TouchableOpacity
-                            style={[S.headerBtn, { marginRight: 8, borderColor: C.primary, borderWidth: 1 }]}
-                            accessibilityRole="button"
-                            accessibilityLabel="Open voice assistant"
-                            onPress={() => setVoiceBotVisible(true)}>
-                            <Ionicons
-                                name="mic-outline"
-                                size={20}
-                                color={C.primary}
-                            />
-                        </TouchableOpacity> */}
-
+                        {!isStaffUser && (
+                            <TouchableOpacity
+                                style={[S.headerBtn, { marginRight: 8, borderColor: isSelectionMode ? C.primary : C.border }]}
+                                onPress={() => setIsSelectionMode(!isSelectionMode)}>
+                                <Ionicons name="checkbox-outline" size={16} color={isSelectionMode ? C.primary : C.textMuted} />
+                                <Text style={[S.headerBtnText, isSelectionMode && { color: C.primary }]}>Select</Text>
+                            </TouchableOpacity>
+                        )}
                         <TouchableOpacity
                             style={S.profileBtn}
                             activeOpacity={0.85}
@@ -1815,7 +1876,42 @@ export default function EnquiryListScreen({ navigation, route }) {
                             <Text style={S.datePillText}>{selectedDate}</Text>
                         </TouchableOpacity>
                     )}
+
+                    {!isStaffUser && (
+                        <TouchableOpacity
+                            onPress={() => setStaffPickerVisible(true)}
+                            style={[S.datePill, { backgroundColor: C.primarySoft, borderColor: C.primary, marginLeft: 8 }]}>
+                            <Ionicons name="people-outline" size={14} color={C.primary} />
+                            <Text style={[S.datePillText, { color: C.primary, fontWeight: '600' }]}>
+                                {selectedStaffFilter === "all" ? "All Staff" : (staffList.find(s => s._id === selectedStaffFilter)?.name || "Filtered")}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
+
+                {isSelectionMode && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10, backgroundColor: C.cardAlt, borderBottomWidth: 1, borderBottomColor: C.border, marginTop: 10, borderRadius: 10 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '600', color: C.textSub }}>
+                            {selectedEnquiryIds.size} Selected
+                        </Text>
+                        <View style={{ flexDirection: 'row', gap: 10 }}>
+                            <TouchableOpacity onPress={() => { setIsSelectionMode(false); setSelectedEnquiryIds(new Set()); }} style={{ padding: 6 }}>
+                                <Text style={{ color: C.textMuted, fontSize: 13, fontWeight: '600' }}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => {
+                                    if (selectedEnquiryIds.size === 0) {
+                                        Alert.alert("Select Enquiries", "Please select at least one enquiry to assign.");
+                                        return;
+                                    }
+                                    setShowBulkAssignModal(true);
+                                }}
+                                style={{ backgroundColor: C.primary, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}>
+                                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>Assign</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )}
             </View>
 
             {/* ── List ── */}
@@ -2485,10 +2581,112 @@ export default function EnquiryListScreen({ navigation, route }) {
                 </View>
             </Modal>
 
+            {/* Staff Filter Modal */}
+            <Modal visible={staffPickerVisible} transparent animationType="fade" onRequestClose={() => setStaffPickerVisible(false)}>
+                <View style={S.modalBg}>
+                    <View style={{ backgroundColor: C.bg, padding: 20, paddingBottom: Math.max((insets?.bottom || 0), 20), borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '80%' }}>
+                        <Text style={{ fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 15 }}>Filter by Staff</Text>
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            <TouchableOpacity
+                                style={{ padding: 15, borderBottomWidth: 1, borderColor: C.border, flexDirection: 'row', justifyContent: 'space-between' }}
+                                onPress={() => { setSelectedStaffFilter("all"); setStaffPickerVisible(false); }}
+                            >
+                                <Text style={{ fontSize: 16, color: selectedStaffFilter === "all" ? C.primary : C.text }}>All Staff</Text>
+                                {selectedStaffFilter === "all" && <Ionicons name="checkmark" size={20} color={C.primary} />}
+                            </TouchableOpacity>
+                            {staffList.map(staff => (
+                                <TouchableOpacity
+                                    key={staff._id}
+                                    style={{ padding: 15, borderBottomWidth: 1, borderColor: C.border, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                                    onPress={() => { setSelectedStaffFilter(staff._id); setStaffPickerVisible(false); }}
+                                >
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <Text style={{ fontSize: 16, color: selectedStaffFilter === staff._id ? C.primary : C.text }}>{staff.name}</Text>
+                                        {staff.role && (
+                                            <Text style={{ fontSize: 13, color: C.textLight, marginLeft: 8 }}>
+                                                ({String(staff.role).toLowerCase() === "admin" ? adminRoleLabelMap[staff._id] || "Admin" : "Staff"})
+                                            </Text>
+                                        )}
+                                    </View>
+                                    {selectedStaffFilter === staff._id && <Ionicons name="checkmark" size={20} color={C.primary} />}
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                        <TouchableOpacity style={{ marginTop: 20, padding: 15, backgroundColor: C.card, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: C.border }} onPress={() => setStaffPickerVisible(false)}>
+                            <Text style={{ color: C.text, fontWeight: '600' }}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
 
-            
+            {/* Bulk Assign Modal */}
+            {(() => {
+                const currentAssignees = new Set();
+                if (showBulkAssignModal) {
+                    listEnquiries.forEach(enq => {
+                        if (selectedEnquiryIds.has(enq._id) && enq.assignedTo) {
+                            const assigneeId = typeof enq.assignedTo === 'object' ? enq.assignedTo._id : enq.assignedTo;
+                            if (assigneeId) currentAssignees.add(String(assigneeId));
+                        }
+                    });
+                }
+                return (
+                    <Modal visible={showBulkAssignModal} transparent animationType="fade" onRequestClose={() => setShowBulkAssignModal(false)}>
+                        <View style={S.modalBg}>
+                            <View style={{ backgroundColor: C.bg, padding: 20, paddingBottom: Math.max((insets?.bottom || 0), 20), borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '80%' }}>
+                                <Text style={{ fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 15 }}>Assign {selectedEnquiryIds.size} Enquiries To</Text>
+                                <ScrollView showsVerticalScrollIndicator={false}>
+                                    {staffList.map(staff => {
+                                        const isCurrent = currentAssignees.has(String(staff._id));
+                                        return (
+                                            <TouchableOpacity
+                                                key={staff._id}
+                                                style={{ padding: 15, borderBottomWidth: 1, borderColor: C.border, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                                                onPress={async () => {
+                                                    setIsBulkAssigning(true);
+                                                    try {
+                                                        const ids = Array.from(selectedEnquiryIds);
+                                                        await enquiryService.bulkAssignEnquiries(ids, staff._id);
+                                                        Alert.alert("Success", `Assigned ${ids.length} enquiries to ${staff.name}`);
+                                                        setShowBulkAssignModal(false);
+                                                        setIsSelectionMode(false);
+                                                        setSelectedEnquiryIds(new Set());
+                                                        fetchEnquiries(true, { force: true });
+                                                    } catch (error) {
+                                                        Alert.alert("Error", error.message || "Failed to assign enquiries.");
+                                                    } finally {
+                                                        setIsBulkAssigning(false);
+                                                    }
+                                                }}
+                                                disabled={isBulkAssigning}
+                                            >
+                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                    <Text style={{ fontSize: 16, color: C.text }}>{staff.name}</Text>
+                                                    {staff.role && (
+                                                        <Text style={{ fontSize: 13, color: C.textLight, marginLeft: 8 }}>
+                                                            ({String(staff.role).toLowerCase() === "admin" ? adminRoleLabelMap[staff._id] || "Admin" : "Staff"})
+                                                        </Text>
+                                                    )}
+                                                </View>
+                                                {isCurrent && (
+                                                    <View style={{ backgroundColor: C.primarySoft, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                                                        <Text style={{ fontSize: 12, color: C.primary, fontWeight: '600' }}>Current</Text>
+                                                    </View>
+                                                )}
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ScrollView>
+                                <TouchableOpacity style={{ marginTop: 20, padding: 15, backgroundColor: C.card, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: C.border }} onPress={() => setShowBulkAssignModal(false)}>
+                                    <Text style={{ color: C.text, fontWeight: '600' }}>Cancel</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    </Modal>
+                );
+            })()}
 
-            {/* â”€â”€ Detail page overlay â”€â”€ */}
+            {/* ── Detail page overlay ── */}
             {detailEnquiry && (
                 <View style={StyleSheet.absoluteFill}>
                     <EnquiryDetailPage
@@ -2541,14 +2739,22 @@ const S = StyleSheet.create({
     headerUserIcon: { marginRight: 6 },
     headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
     headerBtn: {
-        width: 38,
+        minWidth: 38,
         height: 38,
         borderRadius: 12,
         backgroundColor: C.bg,
         justifyContent: "center",
         alignItems: "center",
+        flexDirection: "row",
         borderWidth: 1,
         borderColor: C.border,
+        paddingHorizontal: 10,
+        gap: 6,
+    },
+    headerBtnText: {
+        fontSize: 12,
+        fontWeight: "700",
+        color: C.textSub,
     },
     headerBtnPrimary: {
         backgroundColor: C.primarySoft,

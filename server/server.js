@@ -249,6 +249,8 @@ app.use("/api/company", require("./routes/companyRoutes"));
 app.use("/api/superadmin", require("./routes/superadmin.routes"));
 
 app.use("/api/assistant", require("./routes/assistantRoutes"));
+app.use("/api/lead", require("./routes/leadRoutes"));
+app.use("/api/ai-payments", require("./routes/aiPaymentRoutes"));
 
 app.get("/api/config", (req, res) => {
     res.json({

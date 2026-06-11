@@ -2,7 +2,11 @@ import React from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 
-export function CtaSection() {
+interface CtaSectionProps {
+  onOpenModal: () => void;
+}
+
+export function CtaSection({ onOpenModal }: CtaSectionProps) {
   return (
     <section className="py-24 relative overflow-hidden">
       <div className="absolute inset-0 bg-primary dark:bg-primary/20"></div>
@@ -22,10 +26,20 @@ export function CtaSection() {
             Join thousands of businesses who have switched to the CRM that actually makes work feel less like work.
           </p>
           <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <Button size="lg" variant="secondary" className="rounded-full h-14 px-8 text-base shadow-lg">
+            <Button
+              size="lg"
+              variant="secondary"
+              className="rounded-full h-14 px-8 text-base shadow-lg"
+              onClick={onOpenModal}
+            >
               Start your 14-day free trial
             </Button>
-            <Button size="lg" variant="outline" className="rounded-full h-14 px-8 text-base bg-transparent border-white/30 text-white hover:bg-white/10 hover:text-white dark:border-border dark:text-foreground dark:hover:bg-accent">
+            <Button
+              size="lg"
+              variant="outline"
+              className="rounded-full h-14 px-8 text-base bg-transparent border-white/30 text-white hover:bg-white/10 hover:text-white dark:border-border dark:text-foreground dark:hover:bg-accent"
+              onClick={onOpenModal}
+            >
               Contact Sales
             </Button>
           </div>

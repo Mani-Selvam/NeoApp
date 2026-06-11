@@ -11,7 +11,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://neorenderserver.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api"
       }
     },
     "preview": {
@@ -20,7 +20,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://neorenderserver.onrender.com/api",
+        "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api",
         "EXPO_PUBLIC_PLAY_STORE_SAFE_MODE": "false"
       }
     },
@@ -30,7 +30,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://neorenderserver.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api"
       }
     },
     "production": {
@@ -39,7 +39,7 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://neorenderserver.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api"
       }
     }
   },

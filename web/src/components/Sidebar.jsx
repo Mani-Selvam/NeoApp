@@ -9,10 +9,12 @@ const ICONS = {
   subscriptions: "M4 5h16v14H4zM4 9h16M8 13h2",
   coupons: "M20 12a2 2 0 0 1-2 2h-2v3a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-3H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V3a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v3h2a2 2 0 0 1 2 2z",
   pricing: "M12 1v22M17 5H9.5a3.5 3.5 0 1 0 0 7h5a3.5 3.5 0 1 1 0 7H6",
+  aipayments: "M12 1v22M17 5H9.5a3.5 3.5 0 1 0 0 7h5a3.5 3.5 0 1 1 0 7H6",
   revenue: "M3 17l5-5 4 4 7-8M21 10V4h-6",
   logs: "M5 3h10l4 4v14H5zM9 13h6M9 17h6M9 9h1",
   support: "M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10zm-1-6h2v2h-2zm0-10h2v8h-2z",
   settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 15a1.7 1.7 0 0 0 .35 1.9l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .15A1.7 1.7 0 0 0 13 21v.08a2 2 0 0 1-4 0V21a1.7 1.7 0 0 0-1-1.45 1.7 1.7 0 0 0-1-.15 1.7 1.7 0 0 0-1.9.35l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 2.6 15a1.7 1.7 0 0 0-.15-1A1.7 1.7 0 0 0 1 13H.92a2 2 0 0 1 0-4H1a1.7 1.7 0 0 0 1.45-1 1.7 1.7 0 0 0 .15-1 1.7 1.7 0 0 0-.35-1.9L2.2 5.05a2 2 0 0 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 7 2.6a1.7 1.7 0 0 0 1-.15A1.7 1.7 0 0 0 9 1V.92a2 2 0 0 1 4 0V1a1.7 1.7 0 0 0 1 1.45 1.7 1.7 0 0 0 1 .15 1.7 1.7 0 0 0 1.9-.35l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 7a1.7 1.7 0 0 0 .15 1A1.7 1.7 0 0 0 21 9h.08a2 2 0 0 1 0 4H21a1.7 1.7 0 0 0-1.45 1 1.7 1.7 0 0 0-.15 1z",
+  websiteLeads: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
 };
 
 const sections = [
@@ -23,12 +25,14 @@ const sections = [
   {
     title: "Workspace",
     items: [
+      { id: "websiteLeads", label: "Website Leads", to: "/superadmin/website-leads" },
       { id: "companies", label: "Companies", to: "/superadmin/companies" },
       { id: "overrides", label: "Company Overrides", to: "/superadmin/overrides" },
       { id: "users", label: "Users", to: "/superadmin/users" },
       { id: "subscriptions", label: "Subscriptions", to: "/superadmin/subscriptions" },
       { id: "coupons", label: "Coupons", to: "/superadmin/coupons" },
       { id: "pricing", label: "Pricing Management", to: "/superadmin/pricing" },
+      { id: "aipayments", label: "AI Voice Payments", to: "/superadmin/ai-payments" },
     ],
   },
   {

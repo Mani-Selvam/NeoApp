@@ -2,7 +2,6 @@ const bcrypt = require("bcryptjs");
 const Company = require("../models/Company");
 const User = require("../models/User");
 const Enquiry = require("../models/Enquiry");
-const SystemLog = require("../models/SystemLog");
 const Plan = require("../models/Plan");
 const Coupon = require("../models/Coupon");
 const CompanySubscription = require("../models/CompanySubscription");
@@ -62,13 +61,6 @@ const logAction = async (
     category = "admin_action",
 ) => {
     try {
-        await SystemLog.create({
-            userId: req.userId || null,
-            action,
-            ip: req.ip,
-            category,
-            metadata,
-        });
     } catch (logErr) {
         console.warn("[SuperAdmin] logAction failed:", logErr?.message);
     }
@@ -1612,21 +1604,21 @@ exports.getRevenue = async (_req, res) => {
 
 exports.getLogs = async (req, res) => {
     try {
-        const limit = Number(req.query.limit || 100);
-        const category = req.query.category;
-        const query = category ? { category } : {};
+        res.json([]);
+    } catch (e) {
+        res.status(500).json({ success: false });
+    }
+};
 
-        const logs = await SystemLog.find(query)
-            .populate("userId", "name email role")
-            .sort({ createdAt: -1 })
-            .limit(Math.min(limit, 500))
-            .lean();
-
-        res.json(logs);
+exports.getWebsiteLeads = async (req, res) => {
+    try {
+        const WebsiteLead = require("../models/WebsiteLead");
+        const leads = await WebsiteLead.find().sort({ createdAt: -1 }).lean();
+        res.json(leads);
     } catch (_error) {
         res.status(500).json({
             success: false,
-            message: "Failed to fetch logs",
+            message: "Failed to fetch website leads",
         });
     }
 };

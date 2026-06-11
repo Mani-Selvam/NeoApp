@@ -3,12 +3,16 @@ import { motion } from "framer-motion";
 import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+interface PricingSectionProps {
+  onOpenModal: () => void;
+}
+
 const plans = [
   {
     name: "Free CRM",
     price: "0",
     description: "Perfect for solopreneurs getting started.",
-    trial: "14-day trial",
+    trial: "3-day trial",
     limits: "1 Admin • 1 Staff",
     features: [
       "Enquiry Management",
@@ -27,11 +31,11 @@ const plans = [
   },
   {
     name: "Basic CRM",
-    price: "84",
+    price: "7999",
     description: "For small teams building operations.",
-    trial: "7-day trial",
+    trial: "1 Year",
     limits: "1 Admin • 2 Staff",
-    extra: "Extra admin ₹12/mo, staff ₹8/mo",
+    extra: "Extra admin ₹1150/mo, staff ₹800/mo",
     features: [
       "Everything in Free",
       "Team Chat (Real-time)",
@@ -48,11 +52,11 @@ const plans = [
   },
   {
     name: "Pro CRM",
-    price: "199",
+    price: "13000",
     description: "The complete enterprise powerhouse.",
-    trial: "7-day trial",
+    trial: "1 Year",
     limits: "2 Admins • 10 Staff",
-    extra: "Extra admin ₹15/mo, staff ₹10/mo",
+    extra: "Extra admin ₹1150/mo, staff ₹800/mo",
     features: [
       "Everything in Basic",
       "WhatsApp Business API",
@@ -66,7 +70,7 @@ const plans = [
   }
 ];
 
-export function PricingSection() {
+export function PricingSection({ onOpenModal }: PricingSectionProps) {
   return (
     <section id="pricing" className="py-24 bg-background">
       <div className="container mx-auto px-4 md:px-6">
@@ -86,11 +90,10 @@ export function PricingSection() {
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.5, delay: index * 0.1 }}
-              className={`rounded-3xl p-8 flex flex-col ${
-                plan.highlight 
-                  ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 scale-105 z-10 relative" 
+              className={`rounded-3xl p-8 flex flex-col ${plan.highlight
+                  ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 scale-105 z-10 relative"
                   : "glass-card"
-              }`}
+                }`}
             >
               <div className="mb-8">
                 <h4 className={`text-xl font-semibold mb-2 ${plan.highlight ? "text-primary-foreground" : ""}`}>{plan.name}</h4>
@@ -125,11 +128,11 @@ export function PricingSection() {
                 ))}
               </ul>
 
-              <Button 
-                variant={plan.highlight ? "secondary" : "default"} 
-                className={`w-full rounded-full h-12 text-base font-semibold ${
-                  plan.highlight ? "text-primary hover:bg-white" : ""
-                }`}
+              <Button
+                variant={plan.highlight ? "secondary" : "default"}
+                className={`w-full rounded-full h-12 text-base font-semibold ${plan.highlight ? "text-primary hover:bg-white" : ""
+                  }`}
+                onClick={onOpenModal}
               >
                 {plan.button}
               </Button>

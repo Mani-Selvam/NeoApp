@@ -4,7 +4,11 @@ import { useTheme } from "next-themes";
 import { Moon, Sun, Menu, X, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export function Navbar() {
+interface NavbarProps {
+  onOpenModal: () => void;
+}
+
+export function Navbar({ onOpenModal }: NavbarProps) {
   const { theme, setTheme } = useTheme();
   const [isScrolled, setIsScrolled] = React.useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
@@ -61,7 +65,10 @@ export function Navbar() {
           </Button>
           
           <div className="hidden md:block">
-            <Button className="rounded-full px-6 shadow-md hover:shadow-lg transition-shadow">
+            <Button
+              className="rounded-full px-6 shadow-md hover:shadow-lg transition-shadow"
+              onClick={onOpenModal}
+            >
               Get Started
             </Button>
           </div>
@@ -77,7 +84,6 @@ export function Navbar() {
         </div>
       </div>
 
-      {/* Mobile Menu */}
       {mobileMenuOpen && (
         <div className="md:hidden absolute top-full left-0 right-0 glass-card border-t border-border/50 py-4 px-4 flex flex-col gap-4 shadow-xl">
           {navLinks.map((link) => (
@@ -90,7 +96,7 @@ export function Navbar() {
               {link.label}
             </a>
           ))}
-          <Button className="w-full mt-2 rounded-full">
+          <Button className="w-full mt-2 rounded-full" onClick={() => { setMobileMenuOpen(false); onOpenModal(); }}>
             Get Started
           </Button>
         </div>

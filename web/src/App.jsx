@@ -1,10 +1,12 @@
-﻿import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import Login from "./pages/auth/Login";
 import Dashboard from "./pages/superadmin/Dashboard";
 import PricingManagement from "./pages/superadmin/PricingManagement";
 import Companies from "./pages/superadmin/Companies";
 import Users from "./pages/superadmin/Users";
+import AIVoicePayments from "./pages/superadmin/AIVoicePayments";
+import WebsiteLeads from "./pages/superadmin/WebsiteLeads";
 import Subscriptions from "./pages/superadmin/Subscriptions";
 import Coupons from "./pages/superadmin/Coupons";
 import CompanyOverrides from "./pages/superadmin/CompanyOverrides";
@@ -39,6 +41,8 @@ export default function App() {
                 />
                 <Route path="/superadmin/companies" element={<Companies />} />
                 <Route path="/superadmin/users" element={<Users />} />
+                <Route path="/superadmin/ai-payments" element={<AIVoicePayments />} />
+                <Route path="/superadmin/website-leads" element={<WebsiteLeads />} />
                 <Route
                     path="/superadmin/subscriptions"
                     element={<Subscriptions />}

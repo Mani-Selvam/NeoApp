@@ -1,911 +1,376 @@
-import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { MotiView } from "moti";
-import { useEffect, useState } from "react";
+﻿import { Ionicons } from "@expo/vector-icons";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Dimensions,
-    FlatList,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { ListSkeleton } from "../components/skeleton/screens";
+import { SkeletonPulse } from "../components/skeleton/Skeleton";
 import * as messageTemplateService from "../services/messageTemplateService";
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-const COLORS = {
-    primary: "#6366F1",
-    primaryDark: "#4F46E5",
-    primaryLight: "#EEF2FF",
-    primaryBorder: "#C7D2FE",
-    bg: "#F8FAFC",
-    bgCard: "#FFFFFF",
-    text: "#1E293B",
-    textDim: "#475569",
-    textMuted: "#64748B",
-    line: "#E2E8F0",
-    success: "#10B981",
-    successSoft: "#ECFDF5",
-    successBorder: "#A7F3D0",
-    warning: "#F59E0B",
-    warningSoft: "#FFFBEB",
-    warningBorder: "#FDE68A",
-    info: "#3B82F6",
-    infoSoft: "#EFF6FF",
-    infoBorder: "#BFDBFE",
-    secondary: "#EC4899",
-    secondarySoft: "#FDF2F8",
-    secondaryBorder: "#FBCFE8",
+const T = {
+  bg: "#f5f4f0",
+  card: "#ffffff",
+  ink: "#0b0f1a",
+  mid: "#4b5563",
+  mute: "#9ca3af",
+  line: "#e8e8e3",
+  lineLight: "#f3f3ef",
+  danger: "#b91c1c",
+  radius: 8,
+  radiusLg: 14,
 };
 
 const CATEGORIES = ["Sales", "Support", "Marketing", "General"];
 const STATUSES = ["Active", "Inactive"];
 
-const getCategoryStyles = (cat) => {
-    switch (cat) {
-        case "Sales":
-            return { bg: COLORS.successSoft, text: COLORS.success, border: COLORS.successBorder };
-        case "Support":
-            return { bg: COLORS.infoSoft, text: COLORS.info, border: COLORS.infoBorder };
-        case "Marketing":
-            return { bg: COLORS.secondarySoft, text: COLORS.secondary, border: COLORS.secondaryBorder };
-        default:
-            return { bg: COLORS.warningSoft, text: COLORS.warning, border: COLORS.warningBorder };
-    }
-};
-
-const TemplateCard = ({ item, onEdit, onDelete }) => {
-    const catStyles = getCategoryStyles(item.category);
-    return (
-        <MotiView
-            from={{ opacity: 0, translateY: 15 }}
-            animate={{ opacity: 1, translateY: 0 }}
-            transition={{ type: "timing", duration: 350 }}
-            style={styles.card}
-        >
-            <View style={styles.cardHeader}>
-                <View style={styles.cardHeaderLeft}>
-                    <View style={[styles.categoryBadge, { backgroundColor: catStyles.bg, borderColor: catStyles.border }]}>
-                        <Text style={[styles.categoryText, { color: catStyles.text }]}>
-                            {item.category}
-                        </Text>
-                    </View>
-                    <Text style={styles.cardTitle} numberOfLines={1}>
-                        {item.name}
-                    </Text>
-                </View>
-                <View style={[styles.statusBadge, { backgroundColor: item.status === "Active" ? COLORS.successSoft : "#F1F5F9", borderColor: item.status === "Active" ? COLORS.successBorder : "#CBD5E1" }]}>
-                    <View style={[styles.statusDot, { backgroundColor: item.status === "Active" ? COLORS.success : "#64748B" }]} />
-                    <Text style={[styles.statusText, { color: item.status === "Active" ? COLORS.success : "#475569" }]}>
-                        {item.status}
-                    </Text>
-                </View>
-            </View>
-
-            <View style={styles.keywordRow}>
-                <View style={styles.keywordPill}>
-                    <Ionicons name="key-outline" size={13} color={COLORS.primary} style={{ marginRight: 4 }} />
-                    <Text style={styles.keywordPrefix}>Trigger: </Text>
-                    <Text style={styles.keywordText}>@{item.keyword}</Text>
-                </View>
-            </View>
-
-            <Text style={styles.cardContent} numberOfLines={3}>
-                {item.content}
-            </Text>
-
-            <View style={styles.cardDivider} />
-
-            <View style={styles.cardFooter}>
-                <Text style={styles.dateText}>
-                    Added {new Date(item.createdAt).toLocaleDateString()}
-                </Text>
-                <View style={styles.cardActions}>
-                    <TouchableOpacity style={styles.actionBtn} onPress={() => onEdit(item)} activeOpacity={0.7}>
-                        <Ionicons name="create-outline" size={16} color={COLORS.primary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionBtn, styles.deleteActionBtn]} onPress={() => onDelete(item._id)} activeOpacity={0.7}>
-                        <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </MotiView>
-    );
-};
-
 export default function MessageTemplateScreen({ navigation }) {
-    const insets = useSafeAreaInsets();
-    const [templates, setTemplates] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [modalVisible, setModalVisible] = useState(false);
-    const [editingTemplate, setEditingTemplate] = useState(null);
-    const [saving, setSaving] = useState(false);
-    const [form, setForm] = useState({
-        name: "",
-        keyword: "",
-        content: "",
-        category: "General",
-        status: "Active",
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [formLoading, setFormLoading] = useState(false);
+  
+  const [form, setForm] = useState({
+    name: "",
+    keyword: "",
+    content: "",
+    category: "General",
+    status: "Active",
+  });
+  
+  const [focusedField, setFocusedField] = useState(null);
+  const [expanded, setExpanded] = useState({});
+
+  const pad = width >= 1024 ? 32 : width >= 768 ? 24 : 20;
+  const nameInputRef = useRef(null);
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const data = await messageTemplateService.getMessageTemplates();
+      setTemplates(Array.isArray(data) ? data : []);
+    } catch { Alert.alert("Error", "Failed to fetch templates"); }
+    finally { setLoading(false); setRefreshing(false); }
+  };
+
+  const resetForm = useCallback(() => {
+    setForm({
+      name: "",
+      keyword: "",
+      content: "",
+      category: "General",
+      status: "Active",
     });
+    setEditingId(null);
+    setShowForm(false);
+  }, []);
 
-    const fetchTemplates = async () => {
-        try {
-            setLoading(true);
-            const data = await messageTemplateService.getMessageTemplates();
-            setTemplates(data || []);
-        } catch (error) {
-            Alert.alert("Error", "Failed to fetch templates");
-        } finally {
-            setLoading(false);
-        }
-    };
+  const handleSave = useCallback(async () => {
+    if (!form.name.trim() || !form.keyword.trim() || !form.content.trim()) {
+        Alert.alert("Required Fields", "Please fill in all template fields");
+        return;
+    }
+    try {
+      setFormLoading(true);
+      if (editingId) {
+          await messageTemplateService.updateMessageTemplate(editingId, form);
+      } else {
+          await messageTemplateService.createMessageTemplate(form);
+      }
+      resetForm();
+      load();
+    } catch (error) {
+        Alert.alert("Error", error.response?.data?.message || "Save failed");
+    } finally {
+        setFormLoading(false);
+    }
+  }, [form, editingId, resetForm]);
 
-    useEffect(() => {
-        fetchTemplates();
-    }, []);
+  const handleEdit = useCallback((item) => {
+    setEditingId(item._id); 
+    setForm({
+      name: item.name,
+      keyword: item.keyword,
+      content: item.content,
+      category: item.category || "General",
+      status: item.status || "Active",
+    });
+    setShowForm(true);
+    setTimeout(() => nameInputRef.current?.focus(), 150);
+  }, []);
 
-    const handleSave = async () => {
-        if (!form.name.trim() || !form.keyword.trim() || !form.content.trim()) {
-            Alert.alert("Required Fields", "Please fill in all template fields");
-            return;
-        }
+  const handleDelete = useCallback((id) => {
+    Alert.alert("Delete template", "This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => { try { await messageTemplateService.deleteMessageTemplate(id); load(); } catch { Alert.alert("Error", "Failed to delete"); } } },
+    ]);
+  }, []);
 
-        try {
-            setSaving(true);
-            if (editingTemplate) {
-                await messageTemplateService.updateMessageTemplate(
-                    editingTemplate._id,
-                    form,
-                );
-            } else {
-                await messageTemplateService.createMessageTemplate(form);
-            }
-            setModalVisible(false);
-            fetchTemplates();
-            resetForm();
-        } catch (error) {
-            Alert.alert(
-                "Error",
-                error.response?.data?.message || "Failed to save template",
-            );
-        } finally {
-            setSaving(false);
-        }
-    };
+  const Hdr = () => (
+    <View style={[styles.hdr, { paddingTop: insets.top + 14, paddingHorizontal: pad }]}>
+      <TouchableOpacity onPress={() => showForm ? setShowForm(false) : navigation.goBack()} style={styles.hdrBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Ionicons name="chevron-back" size={20} color={T.ink} />
+      </TouchableOpacity>
+      <Text style={styles.hdrTitle}>Quick Replies</Text>
+      <View style={{ width: 36 }} />
+    </View>
+  );
 
-    const handleDelete = (id) => {
-        Alert.alert(
-            "Delete Template",
-            "Are you sure you want to permanently delete this message template?",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Delete",
-                    style: "destructive",
-                    onPress: async () => {
-                        try {
-                            await messageTemplateService.deleteMessageTemplate(id);
-                            fetchTemplates();
-                        } catch (error) {
-                            Alert.alert("Error", "Failed to delete template");
-                        }
-                    },
-                },
-            ],
-        );
-    };
-
-    const resetForm = () => {
-        setForm({
-            name: "",
-            keyword: "",
-            content: "",
-            category: "General",
-            status: "Active",
-        });
-        setEditingTemplate(null);
-    };
-
-    const openEdit = (template) => {
-        setEditingTemplate(template);
-        setForm({
-            name: template.name,
-            keyword: template.keyword,
-            content: template.content,
-            category: template.category,
-            status: template.status,
-        });
-        setModalVisible(true);
-    };
-
+  const renderItem = useCallback(({ item, index }) => {
+    const isOpen = expanded[item._id];
     return (
-        <View style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <View style={[styles.row, index === 0 && { borderTopWidth: 0 }]}>
+        <TouchableOpacity
+          style={styles.rowMain}
+          onPress={() => setExpanded((p) => ({ ...p, [item._id]: !p[item._id] }))}
+          activeOpacity={0.7}>
+          <Text style={styles.rowNum}>{String(index + 1).padStart(2, "0")}</Text>
+          <View style={styles.rowBody}>
+            <Text style={styles.rowName}>{item.name}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>
+                <Text style={styles.rowSub}>@{item.keyword}</Text>
+                <View style={styles.dot} />
+                <Text style={styles.rowSub}>{item.category}</Text>
+                <View style={styles.dot} />
+                <Text style={[styles.rowSub, item.status === "Active" ? {color: "#10B981"} : {}]}>{item.status}</Text>
+            </View>
+          </View>
+          <View style={styles.rowAct}>
+            <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="pencil-outline" size={14} color={T.mid} />
+            </TouchableOpacity>
+            <View style={styles.actSep} />
+            <TouchableOpacity onPress={() => handleDelete(item._id)} style={styles.actBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="trash-outline" size={14} color={T.danger} />
+            </TouchableOpacity>
+            <View style={styles.actSep} />
+            <View style={styles.actBtn}>
+              <Ionicons name={isOpen ? "chevron-up" : "chevron-down"} size={14} color={T.mute} />
+            </View>
+          </View>
+        </TouchableOpacity>
+        {isOpen && (
+          <View style={styles.rowSub2}>
+            <View style={styles.subItem}>
+              <Ionicons name="chatbubble-ellipses-outline" size={14} color={T.mute} style={{ marginTop: 2 }} />
+              <Text style={styles.subTxt}>{item.content}</Text>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  }, [handleEdit, handleDelete, expanded]);
 
-            {/* Premium Slack-Style Header */}
-            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                <TouchableOpacity
-                    onPress={() => navigation.goBack()}
-                    style={styles.backBtn}
-                    activeOpacity={0.7}
-                >
-                    <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-                </TouchableOpacity>
+  if (showForm) return (
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1, backgroundColor: T.bg }}>
+      <SafeAreaView style={{ flex: 1 }} edges={["left", "right"]}>
+        <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+        <Hdr />
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: pad, paddingTop: 4, paddingBottom: 60 }}>
+          <View style={[styles.formCard, { maxWidth: 680, alignSelf: "center", width: "100%" }]}>
+            <Text style={styles.fEye}>{editingId ? "EDIT" : "NEW"}</Text>
+            <Text style={styles.fTitle}>{editingId ? "Edit Template" : "New Template"}</Text>
+            <View style={styles.fDivider} />
+            
+            <Text style={styles.fLbl}>TEMPLATE NAME</Text>
+            <TextInput
+              ref={nameInputRef}
+              style={[styles.fInput, focusedField === "name" && styles.fInputFocus]}
+              placeholder="e.g. Welcome Message"
+              placeholderTextColor={T.mute}
+              value={form.name}
+              onChangeText={(v) => setForm({ ...form, name: v })}
+              onFocus={() => setFocusedField("name")}
+              onBlur={() => setFocusedField(null)}
+              editable={!formLoading}
+              autoCapitalize="words"
+              returnKeyType="next"
+            />
 
-                <View style={styles.headerInfo}>
-                    <View style={styles.headerAvatar}>
-                        <Ionicons name="document-text" size={18} color={COLORS.primary} />
-                    </View>
-                    <View>
-                        <Text style={styles.headerTitle}>Quick Replies</Text>
-                        <Text style={styles.headerSubtitle}>
-                            {templates.length} Active Templates
-                        </Text>
-                    </View>
-                </View>
-
-                <TouchableOpacity
-                    style={styles.headerAddBtn}
-                    onPress={() => {
-                        resetForm();
-                        setModalVisible(true);
-                    }}
-                    activeOpacity={0.7}
-                >
-                    <Ionicons name="add-circle" size={24} color={COLORS.primary} />
-                </TouchableOpacity>
+            <Text style={styles.fLbl}>KEYWORD TRIGGER</Text>
+            <View style={[styles.fInput, styles.fInputWithIcon, focusedField === "keyword" && styles.fInputFocus, { marginBottom: 22 }]}>
+                <Text style={styles.fInputIcon}>@</Text>
+                <TextInput
+                  style={styles.fInputInner}
+                  placeholder="welcome"
+                  placeholderTextColor={T.mute}
+                  value={form.keyword}
+                  onChangeText={(v) => setForm({ ...form, keyword: v.toLowerCase().replace(/\s+/g, "") })}
+                  onFocus={() => setFocusedField("keyword")}
+                  onBlur={() => setFocusedField(null)}
+                  editable={!formLoading}
+                  autoCapitalize="none"
+                  returnKeyType="next"
+                />
             </View>
 
-            {loading ? (
-                <View style={styles.centered}>
-                    <ActivityIndicator size="large" color={COLORS.primary} />
-                </View>
-            ) : (
-                <FlatList
-                    data={templates}
-                    keyExtractor={(item) => item._id}
-                    renderItem={({ item }) => (
-                        <TemplateCard
-                            item={item}
-                            onEdit={openEdit}
-                            onDelete={handleDelete}
-                        />
-                    )}
-                    contentContainerStyle={[
-                        styles.listContainer,
-                        { paddingBottom: insets.bottom + 100 },
-                    ]}
-                    showsVerticalScrollIndicator={false}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <View style={styles.emptyIconBg}>
-                                <Ionicons
-                                    name="chatbubbles-outline"
-                                    size={42}
-                                    color={COLORS.primary}
-                                />
-                            </View>
-                            <Text style={styles.emptyText}>No Templates Yet</Text>
-                            <Text style={styles.emptySubText}>
-                                Create your first message template trigger to reply quickly in chat conversations.
-                            </Text>
-                            <TouchableOpacity
-                                style={styles.emptyBtn}
-                                onPress={() => {
-                                    resetForm();
-                                    setModalVisible(true);
-                                }}
-                                activeOpacity={0.8}
-                            >
-                                <LinearGradient
-                                    colors={["#6366F1", "#4F46E5"]}
-                                    style={styles.emptyBtnGradient}
-                                >
-                                    <Ionicons
-                                        name="add"
-                                        size={18}
-                                        color="#fff"
-                                        style={{ marginRight: 6 }}
-                                    />
-                                    <Text style={styles.emptyBtnText}>Create Template</Text>
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </View>
-                    }
-                />
-            )}
+            <Text style={styles.fLbl}>CATEGORY</Text>
+            <View style={styles.pickerRow}>
+                {CATEGORIES.map((cat) => {
+                    const isActive = form.category === cat;
+                    return (
+                        <TouchableOpacity
+                            key={cat}
+                            style={[styles.pickerItem, isActive && styles.pickerItemActive]}
+                            onPress={() => setForm({ ...form, category: cat })}
+                            activeOpacity={0.7}>
+                            <Text style={[styles.pickerText, isActive && styles.pickerTextActive]}>{cat}</Text>
+                        </TouchableOpacity>
+                    );
+                })}
+            </View>
 
-            {/* Premium Floating Action Button */}
-            <TouchableOpacity
-                style={[styles.fab, { bottom: insets.bottom + 24 }]}
-                onPress={() => {
-                    resetForm();
-                    setModalVisible(true);
-                }}
-                activeOpacity={0.8}
-            >
-                <LinearGradient colors={["#6366F1", "#4F46E5"]} style={styles.fabGradient}>
-                    <Ionicons name="add" size={28} color="#fff" />
-                </LinearGradient>
+            <Text style={styles.fLbl}>STATUS</Text>
+            <View style={styles.pickerRow}>
+                {STATUSES.map((status) => {
+                    const isActive = form.status === status;
+                    return (
+                        <TouchableOpacity
+                            key={status}
+                            style={[styles.pickerItem, isActive && styles.pickerItemActive]}
+                            onPress={() => setForm({ ...form, status })}
+                            activeOpacity={0.7}>
+                            <Text style={[styles.pickerText, isActive && styles.pickerTextActive]}>{status}</Text>
+                        </TouchableOpacity>
+                    );
+                })}
+            </View>
+
+            <Text style={styles.fLbl}>MESSAGE CONTENT</Text>
+            <TextInput
+              style={[styles.fInput, styles.fTextArea, focusedField === "content" && styles.fInputFocus]}
+              placeholder="Type your template message content here…"
+              placeholderTextColor={T.mute}
+              value={form.content}
+              onChangeText={(v) => setForm({ ...form, content: v })}
+              onFocus={() => setFocusedField("content")}
+              onBlur={() => setFocusedField(null)}
+              editable={!formLoading}
+              multiline
+              numberOfLines={5}
+              textAlignVertical="top"
+            />
+
+            <TouchableOpacity style={[styles.btnPri, formLoading && { opacity: 0.5 }, { marginTop: 10 }]} onPress={handleSave} disabled={formLoading} activeOpacity={0.85}>
+              {formLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.btnPriTxt}>{editingId ? "Save changes" : "Create template"}</Text>}
             </TouchableOpacity>
+            <TouchableOpacity style={styles.btnGhost} onPress={resetForm} disabled={formLoading} activeOpacity={0.7}>
+              <Text style={styles.btnGhostTxt}>Discard</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
+  );
 
-            {/* Modal Form Redesign */}
-            <Modal statusBarTranslucent
-                visible={modalVisible}
-                animationType="slide"
-                transparent={true}
-                onRequestClose={() => setModalVisible(false)}
-            >
-                <KeyboardAvoidingView
-                    behavior={Platform.OS === "ios" ? "padding" : "height"}
-                    style={styles.modalOverlay}
-                >
-                    <View
-                        style={[
-                            styles.modalContent,
-                            { paddingBottom: insets.bottom + 20 },
-                        ]}
-                    >
-                        <View style={styles.modalHandle} />
-
-                        <View style={styles.modalHeader}>
-                            <View style={styles.modalHeaderLeft}>
-                                <View style={styles.modalHeaderIconBg}>
-                                    <Ionicons name="create-outline" size={16} color={COLORS.primary} />
-                                </View>
-                                <Text style={styles.modalTitleText}>
-                                    {editingTemplate ? "Edit Template" : "New Template"}
-                                </Text>
-                            </View>
-                            <TouchableOpacity
-                                onPress={() => setModalVisible(false)}
-                                style={styles.closeBtn}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="close" size={22} color={COLORS.textMuted} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView
-                            showsVerticalScrollIndicator={false}
-                            keyboardShouldPersistTaps="handled"
-                            contentContainerStyle={{ paddingBottom: 20 }}
-                        >
-                            <Text style={styles.inputLabel}>TEMPLATE NAME</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="e.g. Welcome Message"
-                                placeholderTextColor={COLORS.textMuted}
-                                value={form.name}
-                                onChangeText={(val) => setForm({ ...form, name: val })}
-                            />
-
-                            <Text style={styles.inputLabel}>KEYWORD TRIGGER</Text>
-                            <View style={styles.keywordInputWrapper}>
-                                <Text style={styles.atSymbol}>@</Text>
-                                <TextInput
-                                    style={styles.keywordInput}
-                                    placeholder="welcome"
-                                    placeholderTextColor={COLORS.textMuted}
-                                    value={form.keyword}
-                                    onChangeText={(val) =>
-                                        setForm({ ...form, keyword: val.toLowerCase().replace(/\s+/g, "") })
-                                    }
-                                    autoCapitalize="none"
-                                />
-                            </View>
-
-                            <Text style={styles.inputLabel}>CATEGORY</Text>
-                            <View style={styles.pickerRow}>
-                                {CATEGORIES.map((cat) => {
-                                    const isActive = form.category === cat;
-                                    return (
-                                        <TouchableOpacity
-                                            key={cat}
-                                            style={[
-                                                styles.pickerItem,
-                                                isActive && styles.pickerItemActive,
-                                            ]}
-                                            onPress={() => setForm({ ...form, category: cat })}
-                                            activeOpacity={0.7}
-                                        >
-                                            <Text style={[styles.pickerText, isActive && styles.pickerTextActive]}>
-                                                {cat}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </View>
-
-                            <Text style={styles.inputLabel}>STATUS</Text>
-                            <View style={styles.pickerRow}>
-                                {STATUSES.map((status) => {
-                                    const isActive = form.status === status;
-                                    return (
-                                        <TouchableOpacity
-                                            key={status}
-                                            style={[
-                                                styles.pickerItem,
-                                                isActive && styles.pickerItemActive,
-                                            ]}
-                                            onPress={() => setForm({ ...form, status })}
-                                            activeOpacity={0.7}
-                                        >
-                                            <Text style={[styles.pickerText, isActive && styles.pickerTextActive]}>
-                                                {status}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </View>
-
-                            <Text style={styles.inputLabel}>MESSAGE CONTENT</Text>
-                            <TextInput
-                                style={[styles.input, styles.textArea]}
-                                placeholder="Type your template message content here…"
-                                placeholderTextColor={COLORS.textMuted}
-                                value={form.content}
-                                onChangeText={(val) => setForm({ ...form, content: val })}
-                                multiline
-                                numberOfLines={5}
-                                textAlignVertical="top"
-                            />
-
-                            <TouchableOpacity
-                                style={styles.saveBtn}
-                                onPress={handleSave}
-                                disabled={saving}
-                                activeOpacity={0.8}
-                            >
-                                <LinearGradient
-                                    colors={["#6366F1", "#4F46E5"]}
-                                    style={styles.saveBtnGradient}
-                                >
-                                    {saving ? (
-                                        <ActivityIndicator size="small" color="#fff" />
-                                    ) : (
-                                        <>
-                                            <Ionicons
-                                                name="checkmark-circle-outline"
-                                                size={18}
-                                                color="#fff"
-                                                style={{ marginRight: 6 }}
-                                            />
-                                            <Text style={styles.saveBtnText}>
-                                                {editingTemplate ? "Update Template" : "Save Template"}
-                                            </Text>
-                                        </>
-                                    )}
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </ScrollView>
-                    </View>
-                </KeyboardAvoidingView>
-            </Modal>
-        </View>
-    );
+  return (
+    <SafeAreaView style={styles.screen} edges={["left", "right"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+      <Hdr />
+      {loading
+        ? <View style={{ paddingHorizontal: pad, paddingTop: 20 }}><SkeletonPulse><ListSkeleton count={6} itemHeight={60} withAvatar={false} /></SkeletonPulse></View>
+        : (
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: pad, paddingBottom: insets.bottom + 110 }}
+            showsVerticalScrollIndicator={false}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={T.mute} />}>
+            <View style={styles.metaRow}>
+              <Text style={styles.metaCount}>{templates.length} {templates.length === 1 ? "template" : "templates"}</Text>
+            </View>
+            {templates.length > 0
+              ? (
+                <View style={styles.table}>
+                  <FlatList scrollEnabled={false} data={templates} keyExtractor={(i) => i._id} renderItem={renderItem} />
+                </View>
+              )
+              : (
+                <View style={styles.empty}>
+                  <Text style={styles.emptyTtl}>No templates yet</Text>
+                  <Text style={styles.emptySub}>Create your first message template trigger to reply quickly in chat conversations.</Text>
+                </View>
+              )}
+          </ScrollView>
+        )}
+      <View style={[styles.fabWrap, { bottom: insets.bottom + 24, paddingHorizontal: pad }]}>
+        <TouchableOpacity style={styles.fab} onPress={() => setShowForm(true)} activeOpacity={0.87}>
+          <Ionicons name="add" size={18} color="#fff" />
+          <Text style={styles.fabTxt}>Add Template</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: COLORS.bg,
-    },
-    // Header Style Redesign
-    header: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        paddingHorizontal: 12,
-        paddingBottom: 14,
-        backgroundColor: "#FFFFFF",
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: COLORS.line,
-    },
-    backBtn: {
-        padding: 8,
-    },
-    headerInfo: {
-        flexDirection: "row",
-        alignItems: "center",
-        flex: 1,
-        gap: 10,
-        marginLeft: 6,
-    },
-    headerAvatar: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: COLORS.primaryLight,
-        alignItems: "center",
-        justifyContent: "center",
-        borderWidth: 1,
-        borderColor: COLORS.primaryBorder,
-    },
-    headerTitle: {
-        fontSize: 17,
-        fontWeight: "800",
-        color: COLORS.text,
-    },
-    headerSubtitle: {
-        fontSize: 11,
-        fontWeight: "500",
-        color: COLORS.textMuted,
-    },
-    headerAddBtn: {
-        padding: 8,
-        marginRight: 4,
-    },
+  screen: { flex: 1, backgroundColor: T.bg },
+  hdr: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingBottom: 18 },
+  hdrTitle: { fontSize: 16, fontWeight: "700", color: T.ink, letterSpacing: -0.2 },
+  hdrBtn: { width: 36, height: 36, borderRadius: T.radius, backgroundColor: T.card, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: T.line },
+  metaRow: { paddingVertical: 14 },
+  metaCount: { fontSize: 11, fontWeight: "700", color: T.mute, letterSpacing: 1, textTransform: "uppercase" },
+  table: { backgroundColor: T.card, borderRadius: T.radiusLg, borderWidth: 1, borderColor: T.line, overflow: "hidden" },
+  row: { borderTopWidth: 1, borderTopColor: T.line },
+  rowMain: { flexDirection: "row", alignItems: "center", paddingHorizontal: 18, paddingVertical: 14 },
+  rowNum: { fontSize: 11, fontWeight: "700", color: T.mute, width: 26, letterSpacing: 0.5 },
+  rowBody: { flex: 1 },
+  rowName: { fontSize: 15, fontWeight: "600", color: T.ink },
+  rowSub: { fontSize: 12, color: T.mute },
+  dot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: T.mute, marginHorizontal: 6 },
+  rowAct: { flexDirection: "row", alignItems: "center" },
+  actBtn: { paddingHorizontal: 10, paddingVertical: 4 },
+  actSep: { width: 1, height: 14, backgroundColor: T.line },
+  rowSub2: { paddingHorizontal: 54, paddingBottom: 14 },
+  subItem: { flexDirection: "row", alignItems: "flex-start", gap: 10, backgroundColor: T.bg, padding: 12, borderRadius: T.radius, borderWidth: 1, borderColor: T.lineLight },
+  subTxt: { flex: 1, fontSize: 13, color: T.mid, lineHeight: 20 },
+  empty: { paddingTop: 52 },
+  emptyTtl: { fontSize: 22, fontWeight: "800", color: T.ink, marginBottom: 10, letterSpacing: -0.5 },
+  emptySub: { fontSize: 14, color: T.mute, lineHeight: 22, maxWidth: 320 },
+  fabWrap: { position: "absolute", left: 0, right: 0 },
+  fab: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: T.ink, paddingVertical: 15, borderRadius: T.radius, shadowColor: T.ink, shadowOpacity: 0.20, shadowRadius: 18, shadowOffset: { width: 0, height: 6 }, elevation: 8 },
+  fabTxt: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  
+  formCard: { backgroundColor: T.card, borderRadius: T.radiusLg, borderWidth: 1, borderColor: T.line, padding: 28, marginTop: 8 },
+  fEye: { fontSize: 10, fontWeight: "700", color: T.mute, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 },
+  fTitle: { fontSize: 28, fontWeight: "800", color: T.ink, letterSpacing: -0.7, marginBottom: 22 },
+  fDivider: { height: 1, backgroundColor: T.line, marginBottom: 22 },
+  fLbl: { fontSize: 11, fontWeight: "700", color: T.mute, letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 },
+  fInput: { height: 50, borderWidth: 1, borderColor: T.line, borderRadius: T.radius, paddingHorizontal: 16, fontSize: 15, fontWeight: "500", color: T.ink, backgroundColor: T.bg, marginBottom: 22 },
+  fInputFocus: { borderColor: T.ink, backgroundColor: T.card },
+  fInputWithIcon: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14 },
+  fInputIcon: { fontSize: 15, fontWeight: "600", color: T.mute, marginRight: 8 },
+  fInputInner: { flex: 1, height: "100%", fontSize: 15, fontWeight: "500", color: T.ink },
+  fTextArea: { height: 120, paddingTop: 16, paddingBottom: 16 },
+  
+  pickerRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 22 },
+  pickerItem: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: T.radius, borderWidth: 1, borderColor: T.line, backgroundColor: T.bg },
+  pickerItemActive: { borderColor: T.ink, backgroundColor: T.ink },
+  pickerText: { fontSize: 13, fontWeight: "600", color: T.mid },
+  pickerTextActive: { color: "#fff" },
 
-    // List Layout
-    listContainer: {
-        paddingHorizontal: 16,
-        paddingTop: 16,
-    },
-
-    // Premium Card Layout
-    card: {
-        backgroundColor: COLORS.bgCard,
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 14,
-        borderWidth: 1,
-        borderColor: COLORS.line,
-        shadowColor: "#0F172A",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.03,
-        shadowRadius: 8,
-        elevation: 2,
-    },
-    cardHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: 10,
-    },
-    cardHeaderLeft: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-        flex: 1,
-        marginRight: 8,
-    },
-    categoryBadge: {
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 6,
-        borderWidth: 0.8,
-    },
-    categoryText: {
-        fontSize: 10,
-        fontWeight: "800",
-        textTransform: "uppercase",
-    },
-    cardTitle: {
-        fontSize: 15,
-        fontWeight: "700",
-        color: COLORS.text,
-        flex: 1,
-    },
-    statusBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 6,
-        borderWidth: 0.8,
-        gap: 4,
-    },
-    statusDot: {
-        width: 5,
-        height: 5,
-        borderRadius: 2.5,
-    },
-    statusText: {
-        fontSize: 10,
-        fontWeight: "800",
-        textTransform: "uppercase",
-    },
-    keywordRow: {
-        marginBottom: 10,
-    },
-    keywordPill: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: "#F1F5F9",
-        alignSelf: "flex-start",
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 6,
-        borderWidth: 0.5,
-        borderColor: "#CBD5E1",
-    },
-    keywordPrefix: {
-        fontSize: 11,
-        color: COLORS.textMuted,
-        fontWeight: "600",
-    },
-    keywordText: {
-        fontSize: 12,
-        color: COLORS.primary,
-        fontWeight: "800",
-    },
-    cardContent: {
-        fontSize: 13.5,
-        color: COLORS.textDim,
-        lineHeight: 20,
-        marginBottom: 12,
-    },
-    cardDivider: {
-        height: StyleSheet.hairlineWidth,
-        backgroundColor: COLORS.line,
-        marginBottom: 10,
-    },
-    cardFooter: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-    },
-    dateText: {
-        fontSize: 11,
-        color: COLORS.textMuted,
-        fontWeight: "600",
-    },
-    cardActions: {
-        flexDirection: "row",
-        gap: 8,
-    },
-    actionBtn: {
-        width: 32,
-        height: 32,
-        borderRadius: 8,
-        backgroundColor: "#F8FAFC",
-        borderWidth: 0.8,
-        borderColor: COLORS.line,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    deleteActionBtn: {
-        borderColor: "#FEE2E2",
-        backgroundColor: "#FEF2F2",
-    },
-
-    // FAB Button Redesign
-    fab: {
-        position: "absolute",
-        right: 20,
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-        elevation: 6,
-    },
-    fabGradient: {
-        width: "100%",
-        height: "100%",
-        borderRadius: 28,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-
-    // Centered & Empty Layouts
-    centered: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    emptyContainer: {
-        alignItems: "center",
-        justifyContent: "center",
-        paddingTop: 80,
-        paddingHorizontal: 24,
-    },
-    emptyIconBg: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
-        backgroundColor: COLORS.primaryLight,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.primaryBorder,
-        marginBottom: 16,
-    },
-    emptyText: {
-        fontSize: 18,
-        color: COLORS.text,
-        fontWeight: "800",
-        marginBottom: 6,
-    },
-    emptySubText: {
-        fontSize: 13,
-        color: COLORS.textMuted,
-        textAlign: "center",
-        lineHeight: 19,
-        marginBottom: 24,
-    },
-    emptyBtn: {
-        borderRadius: 12,
-        overflow: "hidden",
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 8,
-        elevation: 3,
-    },
-    emptyBtnGradient: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingHorizontal: 20,
-        paddingVertical: 12,
-    },
-    emptyBtnText: {
-        color: "#fff",
-        fontWeight: "800",
-        fontSize: 14,
-    },
-
-    // Modal Style Upgrades
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: "rgba(15, 23, 42, 0.4)",
-        justifyContent: "flex-end",
-    },
-    modalContent: {
-        backgroundColor: "#FFFFFF",
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        paddingHorizontal: 20,
-        paddingTop: 10,
-        maxHeight: "92%",
-    },
-    modalHandle: {
-        width: 36,
-        height: 4,
-        backgroundColor: COLORS.line,
-        borderRadius: 2,
-        alignSelf: "center",
-        marginBottom: 14,
-    },
-    modalHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        marginBottom: 16,
-    },
-    modalHeaderLeft: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-    },
-    modalHeaderIconBg: {
-        width: 30,
-        height: 30,
-        borderRadius: 15,
-        backgroundColor: COLORS.primaryLight,
-        alignItems: "center",
-        justifyContent: "center",
-        borderWidth: 0.8,
-        borderColor: COLORS.primaryBorder,
-    },
-    modalTitleText: {
-        fontSize: 18,
-        fontWeight: "800",
-        color: COLORS.text,
-    },
-    closeBtn: {
-        padding: 4,
-    },
-    inputLabel: {
-        fontSize: 11,
-        fontWeight: "800",
-        color: COLORS.textMuted,
-        letterSpacing: 0.5,
-        marginBottom: 6,
-        marginTop: 12,
-    },
-    input: {
-        backgroundColor: "#F8FAFC",
-        borderRadius: 12,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        fontSize: 14.5,
-        color: COLORS.text,
-        borderWidth: 1,
-        borderColor: COLORS.line,
-        fontWeight: "500",
-    },
-    keywordInputWrapper: {
-        flexDirection: "row",
-        alignItems: "center",
-        backgroundColor: "#F8FAFC",
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: COLORS.line,
-        paddingHorizontal: 14,
-    },
-    atSymbol: {
-        fontSize: 16,
-        fontWeight: "800",
-        color: COLORS.primary,
-        marginRight: 4,
-    },
-    keywordInput: {
-        flex: 1,
-        paddingVertical: 12,
-        fontSize: 14.5,
-        color: COLORS.text,
-        fontWeight: "700",
-    },
-    textArea: {
-        minHeight: 100,
-        paddingTop: 12,
-        textAlignVertical: "top",
-    },
-    pickerRow: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 8,
-        marginVertical: 4,
-    },
-    pickerItem: {
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: COLORS.line,
-        backgroundColor: "#FFFFFF",
-    },
-    pickerItemActive: {
-        backgroundColor: COLORS.primary,
-        borderColor: COLORS.primary,
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.15,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    pickerText: {
-        fontSize: 12.5,
-        fontWeight: "700",
-        color: COLORS.textDim,
-    },
-    pickerTextActive: {
-        color: "#FFFFFF",
-    },
-    saveBtn: {
-        marginTop: 24,
-        borderRadius: 14,
-        overflow: "hidden",
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 4,
-        marginBottom: 10,
-    },
-    saveBtnGradient: {
-        flexDirection: "row",
-        paddingVertical: 14,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    saveBtnText: {
-        color: "#FFFFFF",
-        fontSize: 15,
-        fontWeight: "800",
-    },
+  btnPri: { height: 50, backgroundColor: T.ink, borderRadius: T.radius, alignItems: "center", justifyContent: "center", marginBottom: 10 },
+  btnPriTxt: { color: "#fff", fontSize: 14, fontWeight: "700", letterSpacing: 0.2 },
+  btnGhost: { height: 48, borderRadius: T.radius, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: T.line },
+  btnGhostTxt: { color: T.mid, fontSize: 14, fontWeight: "600" },
 });
+

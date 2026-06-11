@@ -16,6 +16,7 @@ const LeadSource = require("../models/LeadSource");
 const Target = require("../models/Target");
 const MessageTemplate = require("../models/MessageTemplate");
 const CommunicationMessage = require("../models/CommunicationMessage");
+const VoiceConversation = require("../models/VoiceConversation");
 const { verifyToken } = require("../middleware/auth");
 const { requireActivePlan, requireFeature } = require("../middleware/planGuard");
 
@@ -46,6 +47,162 @@ const toLocalIsoDate = (d = new Date()) => {
 };
 
 /**
+ * GET /api/assistant/voice-sessions
+ * Retrieves all voice conversation sessions for the user (for the sidebar).
+ */
+router.get("/voice-sessions", verifyToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const companyId = req.user?.company_id;
+        
+        const query = { userId };
+        if (companyId) {
+            query.companyId = companyId;
+        }
+
+        const sessions = await VoiceConversation.find(query)
+            .select("_id title updatedAt")
+            .sort({ updatedAt: -1 });
+
+        return res.json({ success: true, sessions });
+    } catch (error) {
+        console.error("[Voice Assistant Sessions Error]:", error);
+        return res.status(500).json({ success: false, error: "Failed to fetch sessions" });
+    }
+});
+
+/**
+ * GET /api/assistant/voice-history
+ * Retrieves the persistent voice conversation history for a specific chat.
+ */
+router.get("/voice-history", verifyToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const companyId = req.user?.company_id;
+        const chatId = req.query.chatId;
+        
+        const query = { userId };
+        if (companyId) {
+            query.companyId = companyId;
+        }
+        if (chatId) {
+            query._id = new mongoose.Types.ObjectId(chatId);
+        }
+
+        let conversation = chatId 
+            ? await VoiceConversation.findOne(query)
+            : await VoiceConversation.findOne(query).sort({ updatedAt: -1 });
+            
+        if (!conversation) {
+            conversation = new VoiceConversation({
+                userId,
+                companyId: companyId || null,
+                title: "New Chat",
+                messages: []
+            });
+            await conversation.save();
+        }
+
+        // Return max last 50 messages to frontend to avoid huge payloads
+        const messages = conversation.messages.slice(-50);
+
+        return res.json({ success: true, history: messages });
+    } catch (error) {
+        console.error("[Voice Assistant History Error]:", error);
+        return res.status(500).json({ success: false, error: "Failed to fetch history" });
+    }
+});
+
+/**
+ * DELETE /api/assistant/voice-history
+ * Clears a specific voice conversation history for the logged-in user.
+ */
+router.delete("/voice-history", verifyToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const companyId = req.user?.company_id;
+        const chatId = req.query.chatId;
+        
+        const query = { userId };
+        if (companyId) {
+            query.companyId = companyId;
+        }
+        if (chatId) {
+            query._id = new mongoose.Types.ObjectId(chatId);
+        }
+
+        await VoiceConversation.deleteOne(query);
+
+        return res.json({ success: true });
+    } catch (error) {
+        console.error("[Voice Assistant Delete History Error]:", error);
+        return res.status(500).json({ success: false, error: "Failed to delete history" });
+    }
+});
+
+/**
+ * PUT /api/assistant/voice-history
+ * Renames a specific voice conversation history.
+ */
+router.put("/voice-history", verifyToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const companyId = req.user?.company_id;
+        const { chatId, title } = req.body;
+        
+        if (!chatId || !title) {
+            return res.status(400).json({ success: false, error: "chatId and title are required" });
+        }
+
+        const query = { userId, _id: new mongoose.Types.ObjectId(chatId) };
+        if (companyId) {
+            query.companyId = companyId;
+        }
+
+        await VoiceConversation.updateOne(query, { $set: { title } });
+
+        return res.json({ success: true });
+    } catch (error) {
+        console.error("[Voice Assistant Rename History Error]:", error);
+        return res.status(500).json({ success: false, error: "Failed to rename history" });
+    }
+});
+
+/**
+ * GET /api/assistant/usage
+ * Fetch yearly assistant usage limit and count for the UI dashboard
+ */
+router.get("/usage", verifyToken, requireActivePlan, async (req, res) => {
+    try {
+        const companyId = req.user?.company_id;
+        if (!companyId) return res.status(400).json({ success: false, error: "Not part of a company" });
+
+        const Company = mongoose.model("Company");
+        const companyDoc = await Company.findById(companyId).select("assistantUsage");
+        
+        let usage = companyDoc?.assistantUsage || { yearlyUsed: 0, extraPurchased: 0 };
+        
+        const baseLimit = req.effectivePlan?.aiVoiceLimitYearly || 3000;
+        const totalLimit = baseLimit + (usage.extraPurchased || 0);
+        const remaining = Math.max(0, totalLimit - (usage.yearlyUsed || 0));
+
+        res.json({
+            success: true,
+            usage: {
+                limit: totalLimit,
+                used: usage.yearlyUsed || 0,
+                remaining,
+                extraPrice: req.effectivePlan?.aiVoiceExtraPrice || 500,
+                extraRequests: req.effectivePlan?.aiVoiceExtraRequests || 1000
+            }
+        });
+    } catch (error) {
+        console.error("[Voice Assistant Usage Error]:", error);
+        res.status(500).json({ success: false, error: "Failed to fetch usage data" });
+    }
+});
+
+/**
  * POST /api/assistant/voice-command
  * Main endpoint to analyze voice command using AI (Gemini/OpenAI) or local fallback
  * Accepts either JSON body `{ text }` OR multi-part form data with `audio` file.
@@ -58,6 +215,45 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
         const companyId = req.user?.company_id;
         const tzOffsetMinutes = req.body.tzOffsetMinutes || new Date().getTimezoneOffset();
 
+        // -------------------------------------------------------------
+        // Company Yearly Usage Limit Tracking
+        // -------------------------------------------------------------
+        if (companyId) {
+            const Company = mongoose.model("Company");
+            const companyDoc = await Company.findById(companyId);
+            if (companyDoc) {
+                let usage = companyDoc.assistantUsage || { yearlyUsed: 0, extraPurchased: 0 };
+
+                const baseLimit = req.effectivePlan?.aiVoiceLimitYearly || 3000;
+                const totalLimit = baseLimit + (usage.extraPurchased || 0);
+
+                // Check Quota
+                if ((usage.yearlyUsed || 0) >= totalLimit) {
+                    const errorMsg = `You have reached your company's yearly AI limit of ${totalLimit} queries. Please ask an admin to purchase a top-up.`;
+                    console.log(`[Voice Assistant] Rate limit exceeded for Company ${companyId}: ${usage.yearlyUsed}/${totalLimit}`);
+                    
+                    // Cleanup any uploaded temp audio
+                    if (req.file && req.file.path) {
+                        try { require("fs").unlinkSync(req.file.path); } catch (e) {}
+                    }
+
+                    return res.json({
+                        success: true,
+                        reply: errorMsg,
+                        replyAudioData: null,
+                        enquiries: [],
+                        intent: "ERROR_LIMIT_EXCEEDED"
+                    });
+                }
+
+                // Increment Usage
+                usage.yearlyUsed = (usage.yearlyUsed || 0) + 1;
+                companyDoc.assistantUsage = usage;
+                await companyDoc.save();
+            }
+        }
+        // -------------------------------------------------------------
+
         let contextObj = null;
         if (req.body.context) {
             try {
@@ -67,14 +263,24 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             }
         }
         
-        let historyObj = null;
-        if (req.body.history) {
-            try {
-                historyObj = typeof req.body.history === "string" ? JSON.parse(req.body.history) : req.body.history;
-            } catch(e) {
-                console.warn("[Voice Assistant] Failed to parse history:", e);
-            }
+        let voiceDoc;
+        const chatId = req.body.chatId;
+        
+        if (chatId) {
+            voiceDoc = await VoiceConversation.findOne({ _id: new mongoose.Types.ObjectId(chatId), userId });
         }
+        
+        if (!voiceDoc) {
+            voiceDoc = new VoiceConversation({
+                userId,
+                companyId: companyId || null,
+                title: "New Chat",
+                messages: []
+            });
+        }
+        
+        // Pass last 15 messages to AI to save tokens but retain context
+        let historyObj = voiceDoc.messages.slice(-15);
 
         // Check if an audio file was uploaded
         const audioFile = req.file;
@@ -153,6 +359,7 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             activeTasksCount,
             missedFollowupsList,
             todayFollowupsList,
+            upcomingFollowupsList,
             companyDetails,
             leadSources,
             targets,
@@ -187,13 +394,19 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                 ...query,
                 isCurrent: { $ne: false },
                 status: "Missed"
-            }).select("name").limit(5).lean(),
+            }).populate("enqId", "address mobile").select("name").limit(5).lean(),
             FollowUp.find({
                 ...query,
                 date: todayDateStr,
                 isCurrent: { $ne: false },
                 status: { $nin: ["Missed", "Completed", "Drop", "Dropped", "Converted"] }
-            }).select("name").limit(5).lean(),
+            }).populate("enqId", "address mobile").select("name").limit(5).lean(),
+            FollowUp.find({
+                ...query,
+                date: { $gt: todayDateStr },
+                isCurrent: { $ne: false },
+                status: { $nin: ["Missed", "Completed", "Drop", "Dropped", "Converted"] }
+            }).sort({ date: 1 }).populate("enqId", "address mobile").select("name date time").limit(10).lean(),
             companyId ? Company.findById(companyId).select("name plan status").lean() : Promise.resolve(null),
             LeadSource.find({ createdBy: { $in: userIdsInCompany } }).select("name").lean(),
             companyId ? Target.find({ company_id: companyId }).sort({ year: -1, month: -1 }).limit(3).lean() : Promise.resolve([]),
@@ -204,7 +417,11 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
 
         const missedNames = (missedFollowupsList || []).map(f => f.name).filter(Boolean);
         const todayNames = (todayFollowupsList || []).map(f => f.name).filter(Boolean);
+        const missedDetails = (missedFollowupsList || []).map(f => ({ name: f.name, mobile: f.mobile || f.enqId?.mobile || "Not provided", address: f.enqId?.address || "Not provided" }));
+        const todayDetails = (todayFollowupsList || []).map(f => ({ name: f.name, mobile: f.mobile || f.enqId?.mobile || "Not provided", address: f.enqId?.address || "Not provided" }));
         const leadSourceNames = (leadSources || []).map(s => s.name);
+        const upcomingFollowupsSummary = (upcomingFollowupsList || []).map(f => ({ name: f.name, date: f.date, time: f.time, mobile: f.mobile || f.enqId?.mobile || "Not provided", address: f.enqId?.address || "Not provided" }));
+
         const targetsSummary = (targets || []).map(t => ({
             year: t.year,
             month: t.month,
@@ -246,6 +463,9 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             activeTasks: activeTasksCount,
             missedNames,
             todayNames,
+            missedDetails,
+            todayDetails,
+            upcomingFollowupsList: upcomingFollowupsSummary,
             companyDetails: companyDetails ? {
                 name: companyDetails.name,
                 plan: companyDetails.plan?.type || "Starter",
@@ -311,11 +531,11 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                     responsePayload = await callOpenAI(transcript, dbStatsSummary, openaiKey);
                 } else {
                     console.log("[Voice Assistant] No API key found. Falling back to local smart-regex parser...");
-                    responsePayload = handleLocalFallback(transcript, dbStatsSummary);
+                    responsePayload = handleLocalFallback(transcript, dbStatsSummary, historyObj, contextObj);
                 }
             } catch (err) {
                 console.warn("[Voice Assistant Warning] Text AI API failed. Self-healing to local fallback:", err.message || err);
-                responsePayload = handleLocalFallback(transcript, dbStatsSummary);
+                responsePayload = handleLocalFallback(transcript, dbStatsSummary, historyObj, contextObj);
             }
             responsePayload.recognizedText = transcript;
         }
@@ -342,12 +562,172 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             }
         }
 
+        // --- DATA ENGINE: Intercept Intents and Generate Widgets ---
+        let widgetObj = null;
+        try {
+            if (responsePayload.intent === "QUERY_ENQUIRIES") {
+                const params = responsePayload.queryParams || {};
+                let eqQuery = { ...query };
+                if (params.dateFilter && params.dateFilter.toLowerCase() === "today") {
+                    eqQuery.createdAt = { $gte: new Date(new Date().setHours(0,0,0,0)) };
+                } else if (params.dateFilter && params.dateFilter.toLowerCase() === "yesterday") {
+                    const yesterday = new Date();
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    yesterday.setHours(0,0,0,0);
+                    const today = new Date();
+                    today.setHours(0,0,0,0);
+                    eqQuery.createdAt = { $gte: yesterday, $lt: today };
+                }
+                if (params.nameQuery) eqQuery.name = { $regex: params.nameQuery, $options: "i" };
+                const list = await Enquiry.find(eqQuery).select("name mobile status createdAt").limit(20).lean();
+                widgetObj = { type: "ENQUIRY_LIST", data: list };
+                if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
+                    responsePayload.spokenText = `I found ${list.length} matching enquiries.`;
+                }
+            } 
+            else if (responsePayload.intent === "SHOW_PIE_CHART") {
+                const target = responsePayload.chartTarget || "staff";
+                let chartData = [];
+                const colors = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#32ADE6"];
+                
+                if (target === "leads") {
+                    const leadStats = await Enquiry.aggregate([
+                        { $match: query },
+                        { $group: { _id: "$status", count: { $sum: 1 } } }
+                    ]);
+                    chartData = leadStats.map((s, i) => ({
+                        name: s._id || "Unknown",
+                        count: s.count,
+                        color: colors[i % colors.length],
+                        legendFontColor: "#1C1C1E",
+                        legendFontSize: 13
+                    }));
+                    if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
+                        responsePayload.spokenText = "Here is the leads pie chart by status.";
+                    }
+                } else {
+                    const staffStats = await Enquiry.aggregate([
+                        { $match: query },
+                        { $group: { _id: "$assignedTo", count: { $sum: 1 } } }
+                    ]);
+                    const populatedStats = await User.populate(staffStats, { path: "_id", select: "name" });
+                    chartData = populatedStats.map((s, i) => ({
+                        name: (s._id && s._id.name) ? s._id.name : "Unassigned",
+                        count: s.count,
+                        color: colors[i % colors.length],
+                        legendFontColor: "#1C1C1E",
+                        legendFontSize: 13
+                    }));
+                    if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
+                        responsePayload.spokenText = "Here is the staff performance chart.";
+                    }
+                }
+                widgetObj = { type: "PIE_CHART", data: chartData };
+            }
+            else if (responsePayload.intent === "EXPORT_DATA") {
+                const fs = require("fs");
+                const path = require("path");
+                
+                const target = responsePayload.exportTarget || "enquiries";
+                const format = responsePayload.exportFormat || "excel";
+                let rawData = [];
+                
+                if (target === "staff") {
+                    const staffStats = await Enquiry.aggregate([
+                        { $match: query },
+                        { $group: { _id: "$assignedTo", count: { $sum: 1 } } }
+                    ]);
+                    const populatedStats = await User.populate(staffStats, { path: "_id", select: "name" });
+                    rawData = populatedStats.map(s => ({
+                        "Staff Name": (s._id && s._id.name) ? s._id.name : "Unassigned",
+                        "Enquiries Handled": s.count
+                    }));
+                } else {
+                    const enquiries = await Enquiry.find(query).select("name mobile email status source product cost address remarks createdAt").lean();
+                    rawData = enquiries.map(e => ({
+                        "Name": e.name || "",
+                        "Mobile": e.mobile || "",
+                        "Email": e.email || "",
+                        "Status": e.status || "",
+                        "Source": e.source || "",
+                        "Product": e.product || "",
+                        "Cost": e.cost || "",
+                        "Address": e.address || "",
+                        "Created": e.createdAt ? new Date(e.createdAt).toLocaleDateString() : ""
+                    }));
+                }
+                
+                if (format === "pdf") {
+                    let html = `<html><head><style>body{font-family:sans-serif;} table{width:100%;border-collapse:collapse;margin-top:20px;} th,td{border:1px solid #ddd;padding:8px;text-align:left;} th{background-color:#0A84FF;color:white;}</style></head><body><h2>${target === "staff" ? "Staff Performance" : "Enquiries"} Report</h2><table><tr>`;
+                    const keys = rawData.length > 0 ? Object.keys(rawData[0]) : [];
+                    keys.forEach(k => html += `<th>${k}</th>`);
+                    html += `</tr>`;
+                    rawData.forEach(row => {
+                        html += `<tr>`;
+                        keys.forEach(k => html += `<td>${row[k]}</td>`);
+                        html += `</tr>`;
+                    });
+                    html += `</table></body></html>`;
+                    
+                    widgetObj = { type: "DOWNLOAD_LINK", html, format: "pdf", label: "Download PDF" };
+                    if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
+                        responsePayload.spokenText = `I have generated the ${target} report in PDF format.`;
+                    }
+                } else {
+                    const XLSX = require("xlsx");
+                    const worksheet = XLSX.utils.json_to_sheet(rawData);
+                    const workbook = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
+                    
+                    const uploadsDir = path.join(__dirname, "../uploads");
+                    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+                    const fileName = `export_${Date.now()}.xlsx`;
+                    XLSX.writeFile(workbook, path.join(uploadsDir, fileName));
+                    
+                    widgetObj = { type: "DOWNLOAD_LINK", url: `${req.protocol}://${req.get('host')}/uploads/${fileName}`, format: "excel", label: "Download Excel" };
+                    if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
+                        responsePayload.spokenText = `I have generated the ${target} report in Excel format.`;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("[Data Engine Error]:", e);
+        }
+
+        // Save the conversation to persistent history
+        if (responsePayload.recognizedText) {
+            // Auto-generate title for new chats based on first user message
+            if (voiceDoc.messages.length === 0 && responsePayload.recognizedText) {
+                let shortTitle = responsePayload.recognizedText.replace(/^"|"$/g, "").substring(0, 30);
+                if (shortTitle.length === 30) shortTitle += "...";
+                voiceDoc.title = shortTitle || "New Chat";
+            }
+            
+            voiceDoc.messages.push({
+                role: "user",
+                text: responsePayload.recognizedText,
+                timestamp: new Date()
+            });
+        }
+        if (responsePayload.spokenText) {
+            const aiMsg = {
+                role: "assistant",
+                text: responsePayload.spokenText,
+                timestamp: new Date()
+            };
+            if (widgetObj) aiMsg.widget = widgetObj;
+            voiceDoc.messages.push(aiMsg);
+        }
+        await voiceDoc.save();
+
         return res.json({
             success: true,
+            chatId: voiceDoc._id,
             spokenText: responsePayload.spokenText,
             intent: responsePayload.intent,
             language: responsePayload.language,
             context: responsePayload.context || null,
+            widget: widgetObj || null,
             statsUsed: {
                 ...dbStatsSummary,
                 recognizedText: responsePayload.recognizedText || "Preset/Type"
@@ -389,6 +769,7 @@ Below are the actual real-time CRM statistics and configuration for the logged-i
 - Active Pending Tasks: ${stats.activeTasks}
 - Missed Follow-up Client Names (Up to 5): ${stats.missedNames ? stats.missedNames.join(", ") : "None"}
 - Today's Scheduled Follow-up Client Names (Up to 5): ${stats.todayNames ? stats.todayNames.join(", ") : "None"}
+- Upcoming Follow-ups (Next 7 Days): ${stats.upcomingFollowupsList ? JSON.stringify(stats.upcomingFollowupsList) : "None"}
 - Company Details: ${stats.companyDetails ? `${stats.companyDetails.name} (Plan: ${stats.companyDetails.plan}, Staff Limit: ${stats.companyDetails.staffLimit}, Status: ${stats.companyDetails.status})` : "None"}
 - Lead Sources: ${stats.leadSources ? stats.leadSources.join(", ") : "None"}
 - Monthly Targets: ${JSON.stringify(stats.targets)}
@@ -402,18 +783,39 @@ Listen carefully to the user's spoken voice command inside the attached audio fi
 Instructions:
 1. Transcribe the audio file exactly to text.
 2. Formulate a natural, professional spoken reply to directly answer their query using the database stats provided above.
-3. Speak clearly and concisely (limit to 1-2 short sentences maximum).
+3. Speak clearly and concisely (limit to 1-2 short sentences maximum), UNLESS the user explicitly asks for "full details" or "address/mobile/etc". In that case, read out the full details (date, time, mobile, address etc.) clearly.
 4. If they ask about missed follow-ups, carefully check if they are asking about *today's* missed follow-ups or *overall* missed follow-ups, and tell them the exact number and/or client names directly. Don't tell them overall missed if they asked for today's missed.
 5. If they ask about Company Name, subscription plan, lead sources, admin/staff details, monthly targets, message templates, or team chat messages, read them the exact details from the metrics provided.
 
 ADD ENQUIRY INSTRUCTIONS:
 If the user asks to add or create an enquiry, OR if the Conversation Context mode is "ADD_ENQUIRY":
 1. ALWAYS set context "mode" to "ADD_ENQUIRY".
-2. ALWAYS preserve the existing "draft" fields from the Conversation Context. Do not delete or reset them.
-3. Look at the Chat History to see the LAST question asked by the assistant. WHATEVER the user replied (e.g., "John" for name, "Website" for source, or a phone number), YOU MUST save it directly into that exact missing field in the "draft". If the user says "skip" or "no", save "skip" in that field.
-4. Check the "draft" for missing fields in this exact strict order: priority -> source -> assignedTo -> name -> mobile -> email -> product -> cost -> address.
-5. If there are missing fields, set intent to "GATHER_ENQUIRY_FIELD", and explicitly ask the user for the NEXT missing field in "spokenText" (e.g., "Got it. What is the mobile number?"). DO NOT ask the same question twice in a row. If they provided ANY answer, accept it into the draft and move on.
-6. If ALL 9 fields are filled (or marked as skip), set intent to "SUBMIT_ENQUIRY" and say "All details captured. Submitting the enquiry now."
+2. ALWAYS preserve the existing "draft" fields from the Conversation Context. If starting a new draft, IMMEDIATELY set "priority", "source", and "assignedTo" to "skip" by default so you don't ask for them.
+3. Look at the user's message. If they provided MULTIPLE enquiries (like a table or list of multiple people), extract ALL of them into a "drafts" array in the context JSON, where each item has {name, mobile, email, product, cost, address}.
+4. If they provided a single enquiry's details in a sentence or form, extract ALL of them at once and save them into the single "draft" object. If they say "skip", save "skip".
+5. Check the "draft" for missing fields in this exact strict order: name -> mobile -> email -> product -> cost -> address.
+6. If there are missing fields, set intent to "GATHER_ENQUIRY_FIELD".
+7. IMPORTANT: When asking for missing fields for the VERY FIRST TIME, provide this exact copy-paste form in your spokenText so the user can optionally fill everything at once:
+"I can help with that! Please provide the details, or simply copy and fill this form:
+Full name: 
+Phone: 
+Email: 
+Product/Service: 
+Estimate amount: 
+Address: "
+8. For subsequent turns, explicitly ask the user for the NEXT missing field in "spokenText" (e.g. "What is the phone number?"). DO NOT ask the same question twice in a row.
+9. If ALL 9 fields are filled (or marked as skip), OR if you extracted multiple records into the "drafts" array, set intent to "SUBMIT_ENQUIRY" and say "All details captured. Submitting the enquiries now."
+
+DATA ENGINE INSTRUCTIONS:
+If the user asks for specific enquiries (e.g., "particular enq name", "today enquiries", "yesterday", "any date"):
+- Set intent to "QUERY_ENQUIRIES".
+- Add "queryParams": { "dateFilter": "today" | "yesterday" | "all" | "YYYY-MM-DD", "nameQuery": "optional name" } to the JSON.
+If the user asks for "staff performance" or "leads pie chart" or "pie chart":
+- Set intent to "SHOW_PIE_CHART".
+- Add "chartTarget": "staff" (for staff performance) or "leads" (for lead status) to the JSON.
+If the user asks to "send pdf", "export to excel", "give record for pdf/excel":
+- Set intent to "EXPORT_DATA".
+- Add "exportFormat": "pdf" | "excel" and "exportTarget": "enquiries" | "staff" to the JSON.
 
 OTHER INSTRUCTIONS:
 6. If they ask how to create/add an enquiry but do not want to use the voice assistant to do it, explain how to do it in the app.
@@ -428,9 +830,13 @@ You MUST respond with a JSON object in this exact structure:
 {
   "recognizedText": "The exact transcription of what the user said in the audio",
   "spokenText": "The spoken answer text goes here.",
-  "intent": "GET_GENERAL_STATS" or "GATHER_ENQUIRY_FIELD" or "SUBMIT_ENQUIRY" or "GET_COMPANY_PLAN" or "UNKNOWN",
+  "intent": "GET_GENERAL_STATS" or "GATHER_ENQUIRY_FIELD" or "SUBMIT_ENQUIRY" or "QUERY_ENQUIRIES" or "SHOW_PIE_CHART" or "EXPORT_DATA" or "UNKNOWN",
   "language": "en" or "ta",
-  "context": { "mode": "ADD_ENQUIRY", "draft": { "priority": "...", "source": "...", "assignedTo": "...", "name": "...", "mobile": "...", "email": "...", "product": "...", "cost": "...", "address": "..." } }
+  "context": { "mode": "ADD_ENQUIRY", "draft": { "priority": "...", "source": "...", "assignedTo": "...", "name": "...", "mobile": "...", "email": "...", "product": "...", "cost": "...", "address": "..." } },
+  "queryParams": { "dateFilter": "today", "nameQuery": "" },
+  "chartTarget": "staff",
+  "exportFormat": "pdf",
+  "exportTarget": "enquiries"
 }
 `;
 
@@ -501,14 +907,20 @@ You MUST respond with a JSON object in this exact structure:
                 lastError = err;
 
                 const status = err.response?.status;
-                if (status === 403 || status === 400 || status === 404) {
+                if (status === 400) {
                     console.log(`[Gemini API] Aborting candidacy early due to status ${status}`);
                     throw err; // Fail-fast to local stats fallback instantly!
+                }
+                
+                // If model not found or rate limited, don't waste time retrying it, jump to next candidate!
+                if (status === 404 || status === 429) {
+                    console.log(`[Gemini API] Skipping model ${model} immediately due to status ${status}`);
+                    break;
                 }
 
                 retries -= 1;
                 if (retries > 0) {
-                    await new Promise((resolve) => setTimeout(resolve, 500));
+                    await new Promise((resolve) => setTimeout(resolve, 300));
                 }
             }
         }
@@ -560,6 +972,7 @@ Below are the actual real-time CRM statistics and configuration for the logged-i
 - Active Pending Tasks: ${stats.activeTasks}
 - Missed Follow-up Client Names (Up to 5): ${stats.missedNames ? stats.missedNames.join(", ") : "None"}
 - Today's Scheduled Follow-up Client Names (Up to 5): ${stats.todayNames ? stats.todayNames.join(", ") : "None"}
+- Upcoming Follow-ups (Next 7 Days): ${stats.upcomingFollowupsList ? JSON.stringify(stats.upcomingFollowupsList) : "None"}
 - Company Details: ${stats.companyDetails ? `${stats.companyDetails.name} (Plan: ${stats.companyDetails.plan}, Staff Limit: ${stats.companyDetails.staffLimit}, Status: ${stats.companyDetails.status})` : "None"}
 - Lead Sources: ${stats.leadSources ? stats.leadSources.join(", ") : "None"}
 - Monthly Targets: ${JSON.stringify(stats.targets)}
@@ -573,33 +986,59 @@ The user just spoke this query: "${transcript}"
 
 Generate a natural, conversational spoken reply to directly answer their spoken query.
 Instructions:
-1. Speak clearly and concisely (limit to 1-2 short sentences maximum). Ideal for voice playback.
+1. Speak clearly and concisely (limit to 1-2 short sentences maximum). Ideal for voice playback, UNLESS the user explicitly asks for "full details" or "address/mobile/etc". In that case, read out the full details (date, time, mobile, address etc.) clearly.
 2. If they ask about missed follow-ups, carefully check if they are asking about *today's* missed follow-ups or *overall* missed follow-ups, and tell them the exact number and/or client names directly. Don't tell them overall missed if they asked for today's missed.
 3. If they ask about Company Name, subscription plan, lead sources, admin/staff details, monthly targets, message templates, or team chat messages, read them the exact details from the metrics provided.
 
 ADD ENQUIRY INSTRUCTIONS:
 If the user asks to add or create an enquiry, OR if the Conversation Context mode is "ADD_ENQUIRY":
 1. ALWAYS set context "mode" to "ADD_ENQUIRY".
-2. ALWAYS preserve the existing "draft" fields from the Conversation Context. Do not delete or reset them.
-3. Look at the Chat History to see the LAST question asked by the assistant. WHATEVER the user replied (e.g., "John" for name, "Website" for source, or a phone number), YOU MUST save it directly into that exact missing field in the "draft". If the user says "skip" or "no", save "skip" in that field.
-4. Check the "draft" for missing fields in this exact strict order: priority -> source -> assignedTo -> name -> mobile -> email -> product -> cost -> address.
-5. If there are missing fields, set intent to "GATHER_ENQUIRY_FIELD", and explicitly ask the user for the NEXT missing field in "spokenText" (e.g., "Got it. What is the mobile number?"). DO NOT ask the same question twice in a row. If they provided ANY answer, accept it into the draft and move on.
-6. If ALL 9 fields are filled (or marked as skip), set intent to "SUBMIT_ENQUIRY" and say "All details captured. Submitting the enquiry now."
+2. ALWAYS preserve the existing "draft" fields from the Conversation Context. If starting a new draft, IMMEDIATELY set "priority", "source", and "assignedTo" to "skip" by default so you don't ask for them.
+3. Look at the user's message. If they provided MULTIPLE enquiries (like a table or list of multiple people), extract ALL of them into a "drafts" array in the context JSON, where each item has {name, mobile, email, product, cost, address}.
+4. If they provided a single enquiry's details in a sentence or form, extract ALL of them at once and save them into the single "draft" object. If they say "skip", save "skip".
+5. Check the "draft" for missing fields in this exact strict order: name -> mobile -> email -> product -> cost -> address.
+6. If there are missing fields, set intent to "GATHER_ENQUIRY_FIELD".
+7. IMPORTANT: When asking for missing fields for the VERY FIRST TIME, provide this exact copy-paste form in your spokenText so the user can optionally fill everything at once:
+"I can help with that! Please provide the details, or simply copy and fill this form:
+Full name: 
+Phone: 
+Email: 
+Product/Service: 
+Estimate amount: 
+Address: "
+8. For subsequent turns, explicitly ask the user for the NEXT missing field in "spokenText" (e.g. "What is the phone number?"). DO NOT ask the same question twice in a row.
+9. If ALL 9 fields are filled (or marked as skip), OR if you extracted multiple records into the "drafts" array, set intent to "SUBMIT_ENQUIRY" and say "All details captured. Submitting the enquiries now."
+
+DATA ENGINE INSTRUCTIONS:
+If the user asks for specific enquiries (e.g., "particular enq name", "today enquiries", "yesterday", "any date"):
+- Set intent to "QUERY_ENQUIRIES".
+- Add "queryParams": { "dateFilter": "today" | "yesterday" | "all" | "YYYY-MM-DD", "nameQuery": "optional name" } to the JSON.
+If the user asks for "staff performance" or "leads pie chart" or "pie chart":
+- Set intent to "SHOW_PIE_CHART".
+- Add "chartTarget": "staff" (for staff performance) or "leads" (for lead status) to the JSON.
+If the user asks to "send pdf", "export to excel", "give record for pdf/excel":
+- Set intent to "EXPORT_DATA".
+- Add "exportFormat": "pdf" | "excel" and "exportTarget": "enquiries" | "staff" to the JSON.
 
 OTHER INSTRUCTIONS:
 6. If they ask how to schedule/make a follow-up, explain: "Open any enquiry, click 'Schedule Follow-up', choose the date and time, and save." (or in Tamil).
-7. If they say "Good morning" or other greetings, respond warmly and professionally.
-8. If they ask funny or playful questions, respond with a lighthearted, humorous, yet professional AI-themed reply.
-9. If the user spoke in Tamil (e.g., uses Tamil text or words like "இன்று", "தவறவிட்ட"), reply in perfect, friendly, natural spoken Tamil. 
-10. If they spoke in English, reply in English.
-11. Keep the numbers and names 100% aligned with the stats provided above. Do not hallucinate.
+7. If they ask what your name is (e.g. "tumhara naam Kaise" or "who are you"), politely reply that you are the NeoGroww Voice Assistant.
+8. If they say "Good morning" or other greetings, respond warmly and professionally.
+9. If they ask funny or playful questions, respond with a lighthearted, humorous, yet professional AI-themed reply.
+10. LANGUAGE SUPPORT: If the user spoke in Tamil, reply in perfect Tamil. If they spoke in Hindi (e.g. "tumhara naam kya hai"), reply in Hindi. If English, reply in English.
+11. BACKGROUND NOISE FILTER: If the user's transcript appears to be random background noise, gibberish, or incomplete fragments without a clear question (e.g. just "what this" or "hmm" or "come check"), do NOT try to answer. Set intent to "UNKNOWN" and spokenText to "I am listening, how can I help?"
+12. Keep the numbers and names 100% aligned with the stats provided above. Do not hallucinate.
 
 You MUST respond with a JSON object in this exact structure:
 {
   "spokenText": "The spoken answer text goes here.",
-  "intent": "GET_GENERAL_STATS" or "GATHER_ENQUIRY_FIELD" or "SUBMIT_ENQUIRY" or "GET_COMPANY_PLAN" or "UNKNOWN",
+  "intent": "GET_GENERAL_STATS" or "GATHER_ENQUIRY_FIELD" or "SUBMIT_ENQUIRY" or "QUERY_ENQUIRIES" or "SHOW_PIE_CHART" or "EXPORT_DATA" or "UNKNOWN",
   "language": "en" or "ta",
-  "context": { "mode": "ADD_ENQUIRY", "draft": { "priority": "...", "source": "...", "assignedTo": "...", "name": "...", "mobile": "...", "email": "...", "product": "...", "cost": "...", "address": "..." } }
+  "context": { "mode": "ADD_ENQUIRY", "draft": { "priority": "...", "source": "...", "assignedTo": "...", "name": "...", "mobile": "...", "email": "...", "product": "...", "cost": "...", "address": "..." } },
+  "queryParams": { "dateFilter": "today", "nameQuery": "" },
+  "chartTarget": "staff",
+  "exportFormat": "pdf",
+  "exportTarget": "enquiries"
 }
 `;
 
@@ -642,14 +1081,20 @@ You MUST respond with a JSON object in this exact structure:
                 lastError = err;
 
                 const status = err.response?.status;
-                if (status === 403 || status === 400 || status === 404) {
+                if (status === 400) {
                     console.log(`[Gemini Text API] Aborting candidacy early due to status ${status}`);
                     throw err; // Fail-fast to local stats fallback instantly!
+                }
+                
+                // If model not found or rate limited, don't waste time retrying it, jump to next candidate!
+                if (status === 404 || status === 429) {
+                    console.log(`[Gemini Text API] Skipping model ${model} immediately due to status ${status}`);
+                    break;
                 }
 
                 retries -= 1;
                 if (retries > 0) {
-                    await new Promise((resolve) => setTimeout(resolve, 500));
+                    await new Promise((resolve) => setTimeout(resolve, 300));
                 }
             }
         }
@@ -672,11 +1117,11 @@ Real-time CRM Stats:
 - Converted Leads: ${stats.convertedEnquiries}
 - Today's Scheduled Follow-ups: ${stats.todayScheduledFollowups}
 - Overall Missed Follow-ups: ${stats.overallMissedFollowups}
+- Upcoming Follow-ups (Next 7 Days): ${stats.upcomingFollowupsList ? JSON.stringify(stats.upcomingFollowupsList) : "None"}
 
 User command: "${transcript}"
 
-Generate a natural reply. If they speak Tamil, speak back in Tamil. If English, answer in English. 1-2 sentences max.
-`;
+Generate a natural reply. If they speak Tamil, speak back in Tamil. If English, answer in English. 1-2 sentences max, UNLESS the user explicitly asks for full details or specific fields (address, mobile, etc.), in which case provide all requested details clearly.`;
 
     const response = await axios.post(
         url,
@@ -711,8 +1156,81 @@ Generate a natural reply. If they speak Tamil, speak back in Tamil. If English, 
 /**
  * Smart Regex Local Fallback (zero-cost, runs offline if no AI API key is set)
  */
-function handleLocalFallback(transcript, stats) {
-    const t = transcript.toLowerCase();
+function handleLocalFallback(transcript, stats, history = [], context = null) {
+    let t = transcript.toLowerCase();
+
+    // --- Auto-detect Bulk Enquiries from Table or Context ---
+    const isAddIntent = t.includes("add enq") || t.includes("add lead") || t.includes("bulk assign");
+    const hasTable = transcript.includes("|") && transcript.split("\n").length >= 2;
+    
+    if (hasTable || isAddIntent || (context && context.mode === "ADD_ENQUIRY")) {
+        let drafts = [];
+        const lines = transcript.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+        
+        if (hasTable || lines.some(l => l.includes("|"))) {
+            const tableLines = lines.filter(l => l.includes("|") && !l.includes("---") && !l.toLowerCase().includes("full name"));
+            for (const line of tableLines) {
+                const cols = line.split("|").map(c => c.trim()).filter(Boolean);
+                if (cols.length >= 2) {
+                    drafts.push({
+                        name: cols[0] || "Unknown",
+                        mobile: cols[1] || "0000000000",
+                        email: (cols[2] || "").replace(/\[.*?\]\(.*?\)/g, (match) => match.split("]")[0].replace("[", "")) || "",
+                        product: cols[3] || "",
+                        cost: (cols[4] || "").replace(/[^0-9]/g, "") || "0",
+                        address: cols[5] || ""
+                    });
+                }
+            }
+        } else if (lines.length >= 2 && !t.includes("full name:")) {
+            // Simple line-by-line fallback for a single enquiry
+            drafts.push({
+                name: lines[0] || "Unknown",
+                mobile: lines[1] || "0000000000",
+                email: lines[2] || "",
+                product: lines[3] || "",
+                cost: (lines[4] || "").replace(/[^0-9]/g, "") || "0",
+                address: lines[5] || ""
+            });
+        }
+
+        if (drafts.length > 0) {
+            return {
+                spokenText: `Offline Mode: Extracted ${drafts.length} enquiries from text. Adding them now.`,
+                intent: "SUBMIT_ENQUIRY",
+                language: "en",
+                context: { mode: "ADD_ENQUIRY", drafts }
+            };
+        }
+
+        // If no drafts could be parsed but they want to add
+        return {
+            spokenText: "Offline Mode: I understand you want to add enquiries, but I couldn't parse the details. Please provide them clearly.",
+            intent: "GATHER_ENQUIRY_FIELD",
+            language: "en",
+            context: { mode: "ADD_ENQUIRY" }
+        };
+    }
+
+    // --- Contextual Follow-up Processing ---
+    if (history && history.length > 0) {
+        const lastMsg = history[history.length - 1];
+        if (lastMsg && lastMsg.role === "assistant") {
+            const lastText = lastMsg.text.toLowerCase();
+            const isFollowup = t.includes("address") || t.includes("detail") || t.includes("number") || t.includes("who") || t.includes("what") || t.includes("full") || t.includes("விவரம்") || t.includes("முகவரி");
+            
+            if (isFollowup) {
+                if (lastText.includes("upcoming") || lastText.includes("this week") || lastText.includes("வாரம்")) {
+                    t = "upcoming full detail " + t;
+                } else if (lastText.includes("today") || lastText.includes("இன்று")) {
+                    t = "today schedule full detail " + t;
+                } else if (lastText.includes("miss") || lastText.includes("தவறவிட்ட")) {
+                    t = "missed full detail " + t;
+                }
+            }
+        }
+    }
+
 
     // Tamil indicators (including Tamil Unicode block + colloquial terms)
     const isTamil = /[\u0B80-\u0BFF]/.test(t) || t.includes("இன்று") || t.includes("இன்னைக்கு") || t.includes("தவறவிட்ட") || t.includes("மிஸ்") || t.includes("வணக்கம்") || t.includes("யாரு") || t.includes("டாஸ்க்") || t.includes("ஸ்டாஃப்") || t.includes("பிளான்") || t.includes("டார்கெட்") || t.includes("டெம்ப்ளேட்") || t.includes("சேட்") || t.includes("சோர்ஸ்") || t.includes("லீட்") || t.includes("லிஸ்ட்") || t.includes("யார்") || t.includes("பெயர்") || t.includes("காலை");
@@ -728,7 +1246,7 @@ function handleLocalFallback(transcript, stats) {
         };
     }
 
-    if (t.includes("hello") || t.includes("hi") || t.includes("hey") || t.includes("வணக்கம்")) {
+    if (/\b(hello|hi|hey)\b/.test(t) || t.includes("வணக்கம்")) {
         return {
             spokenText: isTamil
                 ? "வணக்கம்! நான் உங்கள் NeoGroww உதவி மென்பொருள். இன்று உங்களுக்கு எவ்வாறு உதவட்டும்?"
@@ -739,7 +1257,7 @@ function handleLocalFallback(transcript, stats) {
     }
 
     // Intent: How to create Enquiry
-    if ((t.includes("enquiry") && (t.includes("create") || t.includes("add") || t.includes("new") || t.includes("how"))) || t.includes("கோரிக்கை") || t.includes("உருவாக்கு") || t.includes("லீட் போட") || t.includes("லீடு")) {
+    if ((t.includes("enquiry") || t.includes("lead") || t.includes("கோரிக்கை") || t.includes("லீடு")) && (t.includes("create") || t.includes("add") || t.includes("new") || t.includes("how") || t.includes("உருவாக்கு") || t.includes("போட") || t.includes("எப்படி"))) {
         return {
             spokenText: isTamil
                 ? "புதிய கோரிக்கையை உருவாக்க, திரையின் மேலே உள்ள 'பிளஸ்' (+) அல்லது 'கோரிக்கை சேர்' பொத்தானை அழுத்தி, விவரங்களை நிரப்பி சேமிக்கவும்."
@@ -750,7 +1268,7 @@ function handleLocalFallback(transcript, stats) {
     }
 
     // Intent: How to schedule Follow-up
-    if ((t.includes("followup") && (t.includes("make") || t.includes("schedule") || t.includes("create") || t.includes("how"))) || t.includes("ஃபாலோ அப்") || t.includes("ஃபாலோஅப்") || t.includes("தொடர்பு கொள்ள")) {
+    if ((t.includes("followup") || t.includes("ஃபாலோ அப்") || t.includes("ஃபாலோஅப்") || t.includes("தொடர்பு")) && (t.includes("make") || t.includes("schedule") || t.includes("create") || t.includes("how") || t.includes("எப்படி") || t.includes("உருவாக்கு") || t.includes("அட்டவணை"))) {
         return {
             spokenText: isTamil
                 ? "ஃபாலோ-அப் செய்ய, ஏதேனும் ஒரு கோரிக்கையை திறந்து, 'பின்தொடர்தல் அட்டவணை' பொத்தானை அழுத்தி, தேதி மற்றும் நேரத்தைத் தேர்ந்தெடுத்து சேமிக்கவும்."
@@ -1021,7 +1539,8 @@ function handleLocalFallback(transcript, stats) {
         if (t.includes("miss") || t.includes("தவறவிட்ட")) {
             const isToday = t.includes("today") || t.includes("இன்று") || t.includes("இன்னைக்கு");
             const count = isToday ? (stats.todayMissedFollowups || 0) : (stats.overallMissedFollowups || 0);
-            const names = stats.missedNames || [];
+            const details = isToday ? stats.todayDetails || [] : stats.missedDetails || [];
+            const wantsDetails = t.includes("detail") || t.includes("full") || t.includes("விவரம்") || t.includes("முழு") || t.includes("முகவரி") || t.includes("எண்");
             if (count === 0) {
                 return {
                     spokenText: isTamil
@@ -1031,16 +1550,27 @@ function handleLocalFallback(transcript, stats) {
                     language: isTamil ? "ta" : "en"
                 };
             }
-            const namesStr = names.join(", ");
+            const namesStr = wantsDetails
+                ? details.map(f => `${f.name} (Mobile: ${f.mobile}, Address: ${f.address})`).join(". ")
+                : details.map(f => f.name).join(", ");
+                
+            const namesStrTa = wantsDetails
+                ? details.map(f => `${f.name} (எண்: ${f.mobile}, முகவரி: ${f.address})`).join(". ")
+                : details.map(f => f.name).join(", ");
+                
             if (isTamil) {
                 return {
-                    spokenText: `தவறவிட்ட நபர் பெயர்கள்: ${namesStr}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`,
+                    spokenText: wantsDetails 
+                        ? `தவறவிட்ட நபர்களின் விவரங்கள்: ${namesStrTa}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`
+                        : `தவறவிட்ட நபர் பெயர்கள்: ${namesStrTa}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`,
                     intent: "GET_MISSED_NAMES",
                     language: "ta"
                 };
             } else {
                 return {
-                    spokenText: `Your missed follow-ups are with: ${namesStr}. Totaling ${count} clients.`,
+                    spokenText: wantsDetails
+                        ? `Here are the details for your missed follow-ups: ${namesStr}. Totaling ${count} clients.`
+                        : `Your missed follow-ups are with: ${namesStr}. Totaling ${count} clients.`,
                     intent: "GET_MISSED_NAMES",
                     language: "en"
                 };
@@ -1050,7 +1580,9 @@ function handleLocalFallback(transcript, stats) {
         // If they ask about today's scheduled follow-up names
         if (t.includes("today") || t.includes("schedule") || t.includes("இன்று") || t.includes("இன்னைக்கு")) {
             const count = stats.todayScheduledFollowups || 0;
-            const names = stats.todayNames || [];
+            const details = stats.todayDetails || [];
+            const wantsDetails = t.includes("detail") || t.includes("full") || t.includes("விவரம்") || t.includes("முழு") || t.includes("முகவரி") || t.includes("எண்");
+            
             if (count === 0) {
                 return {
                     spokenText: isTamil ? "இன்று திட்டமிடப்பட்டவர்கள் யாருமில்லை!" : "You have zero scheduled follow-ups today!",
@@ -1058,16 +1590,27 @@ function handleLocalFallback(transcript, stats) {
                     language: isTamil ? "ta" : "en"
                 };
             }
-            const namesStr = names.join(", ");
+            const namesStr = wantsDetails
+                ? details.map(f => `${f.name} (Mobile: ${f.mobile}, Address: ${f.address})`).join(". ")
+                : details.map(f => f.name).join(", ");
+                
+            const namesStrTa = wantsDetails
+                ? details.map(f => `${f.name} (எண்: ${f.mobile}, முகவரி: ${f.address})`).join(". ")
+                : details.map(f => f.name).join(", ");
+                
             if (isTamil) {
                 return {
-                    spokenText: `இன்று திட்டமிடப்பட்ட நபர் பெயர்கள்: ${namesStr}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`,
+                    spokenText: wantsDetails
+                        ? `இன்று திட்டமிடப்பட்டவர்களின் விவரங்கள்: ${namesStrTa}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`
+                        : `இன்று திட்டமிடப்பட்ட நபர் பெயர்கள்: ${namesStrTa}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`,
                     intent: "GET_TODAY_NAMES",
                     language: "ta"
                 };
             } else {
                 return {
-                    spokenText: `Today's scheduled follow-ups are with: ${namesStr}. Totaling ${count} clients.`,
+                    spokenText: wantsDetails
+                        ? `Here are the details for today's scheduled follow-ups: ${namesStr}. Totaling ${count} clients.`
+                        : `Today's scheduled follow-ups are with: ${namesStr}. Totaling ${count} clients.`,
                     intent: "GET_TODAY_NAMES",
                     language: "en"
                 };
@@ -1095,6 +1638,59 @@ function handleLocalFallback(transcript, stats) {
                 intent: "GET_MISSED_FOLLOWUPS",
                 language: "en"
             };
+        }
+    }
+
+    // Intent: Upcoming / This week follow-ups
+    if (t.includes("upcoming") || t.includes("this week") || t.includes("week") || t.includes("next") || t.includes("எதிர்வரும்") || t.includes("இந்த வாரம்") || t.includes("வரவிருக்கும்")) {
+        const upcomingList = stats.upcomingFollowupsList || [];
+        const count = upcomingList.length;
+        const wantsDetails = t.includes("detail") || t.includes("full") || t.includes("விவரம்") || t.includes("முழு");
+
+        if (isTamil) {
+            if (count > 0) {
+                const namesStr = wantsDetails 
+                    ? upcomingList.map(f => `${f.name} (${f.date} அன்று ${f.time || 'எந்த நேரத்திலும்'}, எண்: ${f.mobile}, முகவரி: ${f.address})`).join(". ")
+                    : upcomingList.map(f => f.name).join(", ");
+                    
+                const spokenText = wantsDetails
+                    ? `உங்களுக்கு ${count} திட்டமிடப்பட்ட தொடர்புகள் உள்ளன. விவரங்கள்: ${namesStr}.`
+                    : `இந்த வாரம் உங்களுக்கு ${count} தொடர்புகள் திட்டமிடப்பட்டுள்ளன. அவர்கள்: ${namesStr}.`;
+                    
+                return {
+                    spokenText,
+                    intent: "GET_UPCOMING_FOLLOWUPS",
+                    language: "ta"
+                };
+            } else {
+                return {
+                    spokenText: "இந்த வாரம் உங்களுக்கு திட்டமிடப்பட்ட தொடர்புகள் எதுவும் இல்லை.",
+                    intent: "GET_UPCOMING_FOLLOWUPS",
+                    language: "ta"
+                };
+            }
+        } else {
+            if (count > 0) {
+                const namesStr = wantsDetails 
+                    ? upcomingList.map(f => `${f.name} (On ${f.date} at ${f.time || 'Any time'}, Mobile: ${f.mobile}, Address: ${f.address})`).join(". ")
+                    : upcomingList.map(f => f.name).join(", ");
+                    
+                const spokenText = wantsDetails
+                    ? `You have ${count} upcoming follow-ups. Here are the details: ${namesStr}.`
+                    : `You have ${count} upcoming follow-ups this week with: ${namesStr}.`;
+                    
+                return {
+                    spokenText,
+                    intent: "GET_UPCOMING_FOLLOWUPS",
+                    language: "en"
+                };
+            } else {
+                return {
+                    spokenText: "You have zero upcoming follow-ups scheduled for this week.",
+                    intent: "GET_UPCOMING_FOLLOWUPS",
+                    language: "en"
+                };
+            }
         }
     }
 

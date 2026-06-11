@@ -271,10 +271,10 @@ export const AuthProvider = ({ children }) => {
         [billingPrompt?.alertKey, billingPrompt?.visible],
     );
 
-    const refreshBillingPlan = useCallback(async () => {
+    const refreshBillingPlan = useCallback(async (isStartup = false) => {
         try {
             setBillingLoading(true);
-            const res = await getEffectivePlan();
+            const res = await getEffectivePlan(isStartup ? { timeout: 3000 } : {});
             await syncBillingUiState(normalizeBillingInfo(res));
         } catch (e) {
             const status = e?.response?.status;
@@ -294,18 +294,21 @@ export const AuthProvider = ({ children }) => {
 
     useEffect(() => {
         const checkStatus = async () => {
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout
-                const res = await fetch(`${API_URL}/config`, { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (res.ok) {
-                    const data = await res.json();
-                    setAppConfig(data || { playStoreSafeMode: false });
+            // Run config fetch asynchronously to not block app startup if network is slow
+            (async () => {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 3000);
+                    const res = await fetch(`${API_URL}/config`, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setAppConfig(data || { playStoreSafeMode: false });
+                    }
+                } catch (err) {
+                    // Ignore config fetch error
                 }
-            } catch (err) {
-                // Ignore config fetch error
-            }
+            })();
 
             const token = await getAuthToken();
             if (token) {
@@ -563,7 +566,9 @@ export const AuthProvider = ({ children }) => {
 
     useEffect(() => {
         if (isLoggedIn) {
-            refreshBillingPlan().catch(() => { });
+            refreshBillingPlan(true).catch(() => {
+                // ignore
+            });
         }
     }, [isLoggedIn, refreshBillingPlan]);
 

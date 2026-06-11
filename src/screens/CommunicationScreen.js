@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import { Swipeable } from "react-native-gesture-handler";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,15 +39,20 @@ import {
     createCommunicationTask,
     deleteCommunicationTask,
     deleteCommunicationTaskRemark,
+    deleteCommunicationGroup,
     getCommunicationTasks,
     getCommunicationTeam,
     getCommunicationThreads,
     getConversationMessages,
+    getGroupMessages,
+    createCommunicationGroup,
+    updateCommunicationGroup,
     sendCommunicationMessage,
     updateCommunicationTask,
     updateCommunicationTaskRemark,
     updateCommunicationTaskStatus,
 } from "../services/communicationService";
+import { updateProfile } from "../services/userService";
 import { ensureSocketReady, getSocket } from "../services/socketService";
 import {
     confirmPermissionRequest,
@@ -77,8 +83,8 @@ const getIntentLauncher = () => {
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
 const T = {
     bg: "#FFFFFF",
-    bgSecondary: "#F0F2F5",
-    bgChat: "#EDE5DA",
+    bgSecondary: "#F4F7FA",
+    bgChat: "#E8EDF2",
     ink: "#111B21",
     mid: "#54656F",
     mute: "#8696A0",
@@ -362,22 +368,35 @@ const isImageAttachment = (type, ...sources) =>
     sources.some((s) => IMAGE_FILE_RE.test(String(s || "")));
 
 // ─── COMPONENTS ──────────────────────────────────────────────────────────────
-const InitialsAvatar = ({ name, size = 42 }) => (
-    <View
-        style={[
-            S.ava,
-            {
-                width: size,
-                height: size,
-                borderRadius: size / 2,
-                backgroundColor: getAvatarColor(name),
-            },
-        ]}>
-        <Text style={[S.avaTxt, { fontSize: size * 0.38 }]}>
-            {avatarText(name)}
-        </Text>
-    </View>
-);
+const InitialsAvatar = ({ name, logo, size = 42 }) => {
+    if (logo) {
+        return (
+            <View style={{ width: size, height: size, borderRadius: size / 2, overflow: "hidden", backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center" }}>
+                <Image
+                    source={{ uri: getImageUrl(logo) }}
+                    style={{ width: "100%", height: "100%" }}
+                    resizeMode="cover"
+                />
+            </View>
+        );
+    }
+    return (
+        <View
+            style={[
+                S.ava,
+                {
+                    width: size,
+                    height: size,
+                    borderRadius: size / 2,
+                    backgroundColor: getAvatarColor(name),
+                },
+            ]}>
+            <Text style={[S.avaTxt, { fontSize: size * 0.38 }]}>
+                {avatarText(name)}
+            </Text>
+        </View>
+    );
+};
 
 const AttachmentPill = ({ attachment, onClear }) => {
     if (!attachment?.name) return null;
@@ -471,7 +490,7 @@ const AttachmentPill = ({ attachment, onClear }) => {
 export default function CommunicationScreen({ navigation }) {
     const insets = useSafeAreaInsets();
     const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-    const { user } = useAuth();
+    const { user, updateUser } = useAuth();
     const selfId = String(user?.id || user?._id || "");
     const isAdminUser = String(user?.role || "").toLowerCase() === "admin";
     const isCompactHeight = windowHeight < 760;
@@ -483,6 +502,8 @@ export default function CommunicationScreen({ navigation }) {
     const [team, setTeam] = useState([]);
     const [threads, setThreads] = useState([]);
     const [selectedMemberId, setSelectedMemberId] = useState("");
+    const [selectedIsGroup, setSelectedIsGroup] = useState(false);
+    const [selectedGroup, setSelectedGroup] = useState(null);
     const [messages, setMessages] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -498,6 +519,7 @@ export default function CommunicationScreen({ navigation }) {
     const [isRecordingAudio, setIsRecordingAudio] = useState(false);
     const [recordingDurationMs, setRecordingDurationMs] = useState(0);
     const [audioDraft, setAudioDraft] = useState(null);
+    const [replyTarget, setReplyTarget] = useState(null);
     const [playingAudioId, setPlayingAudioId] = useState("");
     const [isPlayingAudio, setIsPlayingAudio] = useState(false);
     const [pendingTasks, setPendingTasks] = useState([]);
@@ -505,6 +527,21 @@ export default function CommunicationScreen({ navigation }) {
     const [tasksLoading, setTasksLoading] = useState(false);
     const [showTaskModal, setShowTaskModal] = useState(false);
     const [showTaskDetailModal, setShowTaskDetailModal] = useState(false);
+    const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+    const [groupCreateSuccess, setGroupCreateSuccess] = useState(false);
+    const [groupCreating, setGroupCreating] = useState(false);
+    const [newGroupName, setNewGroupName] = useState("");
+    const [newGroupMembers, setNewGroupMembers] = useState([]);
+    const [showGroupSettingsModal, setShowGroupSettingsModal] = useState(false);
+    const [groupSettingsName, setGroupSettingsName] = useState("");
+    const [groupSettingsMembers, setGroupSettingsMembers] = useState([]);
+    const [groupSettingsLogo, setGroupSettingsLogo] = useState(null);
+    const [groupSettingsMeetingLink, setGroupSettingsMeetingLink] = useState("");
+    const [groupSettingsBio, setGroupSettingsBio] = useState("");
+    const [editModeName, setEditModeName] = useState(false);
+    const [editModeLink, setEditModeLink] = useState(false);
+    const [editModeBio, setEditModeBio] = useState(false);
+    const [groupSettingsSaving, setGroupSettingsSaving] = useState(false);
     const [selectedTaskForDetail, setSelectedTaskForDetail] = useState(null);
     const [taskSaving, setTaskSaving] = useState(false);
     const [taskAttachment, setTaskAttachment] = useState(null);
@@ -519,7 +556,11 @@ export default function CommunicationScreen({ navigation }) {
         description: "",
         priority: "Medium",
         assignedTo: "",
+        groupId: "",
     });
+
+    const [mentionQuery, setMentionQuery] = useState(null);
+    const [cursorPosition, setCursorPosition] = useState(0);
 
     const listRef = useRef(null);
     const lastCallEventRef = useRef("");
@@ -636,30 +677,43 @@ export default function CommunicationScreen({ navigation }) {
 
     const contactList = useMemo(() => {
         const threadMap = new Map(
-            threads.map((t) => [String(t?.member?._id || ""), t]),
+            threads.map((t) => [String(t?.isGroup ? t?.group?._id : t?.member?._id || ""), t]),
         );
-        return team
+        const members = team
             .filter((m) => String(m._id) !== selfId)
             .map((m) => ({
+                isGroup: false,
                 member: m,
                 thread: threadMap.get(String(m._id)) || null,
-            }))
-            .filter(
-                (c) =>
-                    !searchQuery.trim() ||
-                    String(c.member?.name || "")
+            }));
+
+        const groups = threads
+            .filter((t) => t.isGroup)
+            .map((t) => ({
+                isGroup: true,
+                group: t.group,
+                thread: t,
+            }));
+
+        return [...groups, ...members].filter(
+            (c) => {
+                const name = c.isGroup ? c.group?.name : c.member?.name;
+                return !searchQuery.trim() ||
+                    String(name || "")
                         .toLowerCase()
-                        .includes(searchQuery.toLowerCase()),
-            );
+                        .includes(searchQuery.toLowerCase());
+            }
+        );
     }, [team, threads, selfId, searchQuery]);
 
     const groupedContacts = useMemo(
         () => ({
+            groups: contactList.filter((c) => c.isGroup === true),
             admins: contactList.filter(
-                (c) => String(c.member?.role || "").toLowerCase() === "admin",
+                (c) => !c.isGroup && String(c.member?.role || "").toLowerCase() === "admin",
             ),
             staff: contactList.filter(
-                (c) => String(c.member?.role || "").toLowerCase() !== "admin",
+                (c) => !c.isGroup && String(c.member?.role || "").toLowerCase() !== "admin",
             ),
         }),
         [contactList],
@@ -685,42 +739,70 @@ export default function CommunicationScreen({ navigation }) {
 
     const upsertThreadFromMessage = useCallback(
         (payload, unreadIncrement = false) => {
-            const senderId = String(
-                payload?.senderId?._id || payload?.senderId || "",
-            );
-            const receiverId = String(
-                payload?.receiverId?._id || payload?.receiverId || "",
-            );
-            if (!senderId || !receiverId) return;
-            const teammateId = senderId === selfId ? receiverId : senderId;
-            setThreads((prev) => {
-                const member = teamMap.get(String(teammateId));
-                const rest = prev.filter(
-                    (i) => String(i?.member?._id || "") !== String(teammateId),
-                );
-                return [
-                    {
-                        member,
-                        lastMessage: getThreadPreview(payload),
-                        messageType: payload?.messageType || "text",
-                        callStatus: payload?.callStatus || "",
-                        lastMessageAt:
-                            payload?.callTime ||
-                            payload?.createdAt ||
-                            new Date().toISOString(),
-                        unreadCount: unreadIncrement
-                            ? Number(
-                                prev.find(
-                                    (i) =>
-                                        String(i?.member?._id || "") ===
-                                        String(teammateId),
-                                )?.unreadCount || 0,
-                            ) + 1
-                            : 0,
-                    },
-                    ...rest,
-                ];
-            });
+            const senderId = String(payload?.senderId?._id || payload?.senderId || "");
+            const receiverId = String(payload?.receiverId?._id || payload?.receiverId || "");
+            const groupId = String(payload?.groupId?._id || payload?.groupId || "");
+
+            if (!senderId) return;
+            if (!receiverId && !groupId) return;
+
+            const isGroup = Boolean(groupId);
+
+            if (isGroup) {
+                setThreads((prev) => {
+                    const existingGroupThread = prev.find(i => i.isGroup && String(i?.group?._id || "") === groupId);
+                    if (!existingGroupThread && !payload.group) {
+                        getCommunicationThreads().then(t => {
+                            if (Array.isArray(t)) setThreads(t);
+                        }).catch(() => { });
+                        return prev;
+                    }
+                    const groupToUse = existingGroupThread ? existingGroupThread.group : payload.group;
+                    const rest = prev.filter(i => !(i.isGroup && String(i?.group?._id || "") === groupId));
+                    return [
+                        {
+                            isGroup: true,
+                            group: groupToUse,
+                            lastMessage: getThreadPreview(payload),
+                            messageType: payload?.messageType || "text",
+                            callStatus: payload?.callStatus || "",
+                            lastMessageAt: payload?.createdAt || new Date().toISOString(),
+                            unreadCount: unreadIncrement ? Number(existingGroupThread?.unreadCount || 0) + 1 : 0
+                        },
+                        ...rest
+                    ];
+                });
+            } else {
+                const teammateId = senderId === selfId ? receiverId : senderId;
+                setThreads((prev) => {
+                    const member = teamMap.get(String(teammateId));
+                    const rest = prev.filter(
+                        (i) => i.isGroup || String(i?.member?._id || "") !== String(teammateId),
+                    );
+                    return [
+                        {
+                            member,
+                            lastMessage: getThreadPreview(payload),
+                            messageType: payload?.messageType || "text",
+                            callStatus: payload?.callStatus || "",
+                            lastMessageAt:
+                                payload?.callTime ||
+                                payload?.createdAt ||
+                                new Date().toISOString(),
+                            unreadCount: unreadIncrement
+                                ? Number(
+                                    prev.find(
+                                        (i) =>
+                                            !i.isGroup && String(i?.member?._id || "") ===
+                                            String(teammateId),
+                                    )?.unreadCount || 0,
+                                ) + 1
+                                : 0,
+                        },
+                        ...rest,
+                    ];
+                });
+            }
         },
         [getThreadPreview, selfId, teamMap],
     );
@@ -747,7 +829,7 @@ export default function CommunicationScreen({ navigation }) {
         }
     }, []);
 
-    const loadMessages = useCallback(async (memberId) => {
+    const loadMessages = useCallback(async (memberId, isGroup = false) => {
         if (!memberId) {
             setMessages([]);
             setHasOlderMessages(false);
@@ -757,9 +839,11 @@ export default function CommunicationScreen({ navigation }) {
         }
         setMessageLoading(true);
         try {
-            const r = await getConversationMessages(memberId, {
-                limit: MESSAGE_PAGE_SIZE,
-            });
+            const r = isGroup
+                ? await getGroupMessages(memberId, { limit: MESSAGE_PAGE_SIZE })
+                : await getConversationMessages(memberId, {
+                    limit: MESSAGE_PAGE_SIZE,
+                });
             setMessages(uniqueMessages(r?.messages));
             setHasOlderMessages(Boolean(r?.page?.hasMore));
             setOlderCursorBefore(String(r?.page?.before || ""));
@@ -790,11 +874,17 @@ export default function CommunicationScreen({ navigation }) {
         setLoadingOlderMessages(true);
         shouldAutoScrollRef.current = false;
         try {
-            const r = await getConversationMessages(memberId, {
-                limit: MESSAGE_PAGE_SIZE,
-                before: olderCursorBefore,
-                beforeId: olderCursorBeforeId || undefined,
-            });
+            const r = selectedIsGroup
+                ? await getGroupMessages(memberId, {
+                    limit: MESSAGE_PAGE_SIZE,
+                    before: olderCursorBefore,
+                    beforeId: olderCursorBeforeId || undefined,
+                })
+                : await getConversationMessages(memberId, {
+                    limit: MESSAGE_PAGE_SIZE,
+                    before: olderCursorBefore,
+                    beforeId: olderCursorBeforeId || undefined,
+                });
             const older = uniqueMessages(r?.messages);
             if (older.length) {
                 setMessages((prev) => uniqueMessages([...older, ...prev]));
@@ -814,15 +904,18 @@ export default function CommunicationScreen({ navigation }) {
         olderCursorBefore,
         olderCursorBeforeId,
         selectedMemberId,
+        selectedIsGroup,
     ]);
 
     const syncLatestMessages = useCallback(
-        async (memberId) => {
+        async (memberId, isGroup = false) => {
             if (!memberId) return;
             try {
-                const r = await getConversationMessages(memberId, {
-                    limit: MESSAGE_PAGE_SIZE,
-                });
+                const r = isGroup
+                    ? await getGroupMessages(memberId, { limit: MESSAGE_PAGE_SIZE })
+                    : await getConversationMessages(memberId, {
+                        limit: MESSAGE_PAGE_SIZE,
+                    });
                 const latest = uniqueMessages(r?.messages);
                 setMessages((prev) => uniqueMessages([...prev, ...latest]));
             } catch {
@@ -840,7 +933,7 @@ export default function CommunicationScreen({ navigation }) {
                 getCommunicationThreads(),
             ]);
             setTeam(uniqueById(teamData, (m) => m?._id));
-            setThreads(uniqueById(threadData, (t) => t?.member?._id));
+            setThreads(uniqueById(threadData, (t) => t?.isGroup ? t?.group?._id : t?.member?._id));
             await loadTasks({ silent });
         } catch (e) {
             // Only show alerts for manual refreshes to avoid annoying the user
@@ -966,14 +1059,23 @@ export default function CommunicationScreen({ navigation }) {
             const receiverId = String(
                 payload?.receiverId?._id || payload?.receiverId || "",
             );
-            if (!senderId || !receiverId) return;
-            const teammateId = senderId === selfId ? receiverId : senderId;
+            const groupId = String(
+                payload?.groupId?._id || payload?.groupId || "",
+            );
+
+            if (!senderId) return;
+            if (!receiverId && !groupId) return;
+
+            const isGroup = Boolean(groupId);
+            const teammateId = isGroup ? groupId : (senderId === selfId ? receiverId : senderId);
 
             upsertThreadFromMessage(
                 payload,
-                receiverId === selfId &&
-                String(selectedMemberId) !== String(teammateId),
+                isGroup
+                    ? senderId !== selfId && String(selectedMemberId) !== String(groupId)
+                    : receiverId === selfId && String(selectedMemberId) !== String(teammateId),
             );
+
             if (String(selectedMemberId) === String(teammateId)) {
                 shouldAutoScrollRef.current =
                     isAtBottomRef.current || senderId === selfId;
@@ -986,7 +1088,7 @@ export default function CommunicationScreen({ navigation }) {
                         clearTimeout(messageSyncTimerRef.current);
                     }
                     messageSyncTimerRef.current = setTimeout(() => {
-                        syncLatestMessages(String(selectedMemberId)).catch(
+                        syncLatestMessages(String(selectedMemberId), selectedIsGroup).catch(
                             () => { },
                         );
                     }, 250);
@@ -1175,25 +1277,192 @@ export default function CommunicationScreen({ navigation }) {
     }, []);
 
     const openChat = useCallback(
-        async (memberId) => {
+        async (memberId, isGroup = false) => {
             await unloadCurrentSound();
             setAudioDraft(null);
             setHasOlderMessages(false);
             setOlderCursorBefore("");
             setOlderCursorBeforeId("");
+            setReplyTarget(null);
             setSelectedMemberId(String(memberId));
+            setSelectedIsGroup(isGroup);
+            if (isGroup) {
+                const grp = threads.find(t => t.isGroup && String(t.group?._id) === String(memberId))?.group;
+                setSelectedGroup(prev => (String(prev?._id) === String(memberId) ? prev : (grp || null)));
+            } else {
+                setSelectedGroup(null);
+            }
             setView("chat");
-            await loadMessages(String(memberId));
+            await loadMessages(String(memberId), isGroup);
             setThreads((prev) =>
                 prev.map((t) =>
-                    String(t?.member?._id) === String(memberId)
+                    String(t?.isGroup ? t.group?._id : t?.member?._id) === String(memberId)
                         ? { ...t, unreadCount: 0 }
                         : t,
                 ),
             );
         },
-        [loadMessages, unloadCurrentSound],
+        [loadMessages, unloadCurrentSound, threads],
     );
+
+    const handleCreateGroup = async () => {
+        if (!newGroupName.trim()) {
+            Alert.alert("Error", "Group name is required");
+            return;
+        }
+        if (newGroupMembers.length === 0) {
+            Alert.alert("Error", "Please select at least one member");
+            return;
+        }
+        setGroupCreating(true);
+        try {
+            const res = await createCommunicationGroup({
+                name: newGroupName,
+                members: newGroupMembers,
+            });
+            setGroupCreateSuccess(true);
+            const t = await getCommunicationThreads();
+            setThreads(Array.isArray(t) ? t : []);
+            setTimeout(async () => {
+                setShowCreateGroupModal(false);
+                setGroupCreateSuccess(false);
+                setNewGroupName("");
+                setNewGroupMembers([]);
+                setSelectedGroup(res);
+                await openChat(res._id, true);
+            }, 1200);
+        } catch (e) {
+            Alert.alert("Error", e?.response?.data?.error || "Failed to create group");
+        } finally {
+            setGroupCreating(false);
+        }
+    };
+
+    const openGroupSettings = () => {
+        if (!selectedGroup) return;
+        setGroupSettingsName(selectedGroup.name || "");
+        setGroupSettingsMembers(selectedGroup.members || []);
+        setGroupSettingsMeetingLink(selectedGroup.meetingLink || "");
+        setGroupSettingsBio(selectedGroup.bio || "");
+        setGroupSettingsLogo(null);
+        setEditModeName(false);
+        setEditModeLink(false);
+        setEditModeBio(false);
+        setShowGroupSettingsModal(true);
+    };
+
+    const handleSaveGroupSettings = async () => {
+        if (!groupSettingsName.trim()) {
+            Alert.alert("Error", "Group name is required");
+            return;
+        }
+        if (groupSettingsMembers.length === 0) {
+            Alert.alert("Error", "Please select at least one member");
+            return;
+        }
+        setGroupSettingsSaving(true);
+        try {
+            const res = await updateCommunicationGroup(selectedGroup._id, {
+                name: groupSettingsName.trim(),
+                members: groupSettingsMembers,
+                logo: groupSettingsLogo,
+                meetingLink: groupSettingsMeetingLink.trim(),
+                bio: groupSettingsBio.trim(),
+            });
+            setSelectedGroup(res);
+            setGroupSettingsLogo(null);
+            const t = await getCommunicationThreads();
+            setThreads(Array.isArray(t) ? t : []);
+            setShowGroupSettingsModal(false);
+        } catch (e) {
+            Alert.alert("Error", e?.response?.data?.error || "Failed to update group");
+        } finally {
+            setGroupSettingsSaving(false);
+        }
+    };
+
+    const handleRemoveGroup = async () => {
+        if (!selectedGroup) return;
+        Alert.alert(
+            "Delete Group",
+            `Are you sure you want to delete "${selectedGroup.name}"? All messages will be permanently removed.`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            await deleteCommunicationGroup(selectedGroup._id);
+                            setShowGroupSettingsModal(false);
+                            setView("list");
+                            setSelectedGroup(null);
+                            const t = await getCommunicationThreads();
+                            setThreads(Array.isArray(t) ? t : []);
+                        } catch (e) {
+                            Alert.alert("Error", e?.response?.data?.error || "Failed to delete group");
+                        }
+                    },
+                },
+            ],
+        );
+    };
+
+    const handleUpdateProfileLogo = useCallback(async () => {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (perm.status !== "granted") {
+            Alert.alert("Permission needed", "Please allow photo access to update profile picture.");
+            return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            quality: 0.8,
+            allowsEditing: true,
+            aspect: [1, 1],
+        });
+        if (!result.canceled && result.assets?.[0]) {
+            const a = result.assets[0];
+            try {
+                const updatedData = await updateProfile({
+                    name: user?.name || "",
+                    mobile: user?.mobile || "",
+                    logo: {
+                        uri: a.uri,
+                        type: a.mimeType || "image/jpeg",
+                        name: a.fileName || "logo.jpg",
+                    }
+                });
+                if (updatedData?.user) {
+                    updateUser({ logo: updatedData.user.logo });
+                }
+            } catch (err) {
+                Alert.alert("Upload Failed", err?.message || "Failed to update profile logo");
+            }
+        }
+    }, [updateUser]);
+
+    const pickGroupLogo = useCallback(async () => {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (perm.status !== "granted") {
+            Alert.alert("Permission needed", "Please allow photo access.");
+            return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ["images"],
+            quality: 0.8,
+            allowsEditing: true,
+            aspect: [1, 1],
+        });
+        if (!result.canceled && result.assets?.[0]) {
+            const a = result.assets[0];
+            setGroupSettingsLogo({
+                uri: a.uri,
+                file: a.file,
+                type: a.mimeType || "image/jpeg",
+                name: a.fileName || "logo.jpg",
+            });
+        }
+    }, []);
 
     const pickMessageImage = useCallback(async () => {
         const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1202,15 +1471,57 @@ export default function CommunicationScreen({ navigation }) {
             return;
         }
         const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ["images"],
             quality: 0.9,
         });
         if (!result.canceled && result.assets?.[0]) {
             const a = result.assets[0];
             setMessageAttachment({
                 uri: a.uri,
+                file: a.file,
                 type: a.mimeType || "image/jpeg",
                 name: a.fileName || "image.jpg",
+            });
+        }
+    }, []);
+
+    const takeMessagePhoto = useCallback(async () => {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (perm.status !== "granted") {
+            Alert.alert("Permission needed", "Please allow camera access.");
+            return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            quality: 0.9,
+        });
+        if (!result.canceled && result.assets?.[0]) {
+            const a = result.assets[0];
+            setMessageAttachment({
+                uri: a.uri,
+                file: a.file,
+                type: a.mimeType || "image/jpeg",
+                name: a.fileName || "photo.jpg",
+            });
+        }
+    }, []);
+
+    const takePhoto = useCallback(async (setter) => {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (perm.status !== "granted") {
+            Alert.alert("Permission needed", "Please allow camera access.");
+            return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ["images"],
+            quality: 0.9,
+        });
+        if (!result.canceled && result.assets?.[0]) {
+            const asset = result.assets[0];
+            setter({
+                uri: asset.uri,
+                type: asset.mimeType || "image/jpeg",
+                name: asset.fileName || "photo.jpg",
             });
         }
     }, []);
@@ -1336,13 +1647,17 @@ export default function CommunicationScreen({ navigation }) {
             description: "",
             priority: "Medium",
             assignedTo: "",
+            groupId: "",
         });
     }, []);
     const openCreateTaskModal = useCallback(
-        (assignedTo = "") => {
+        (assignedTo = "", groupId = "") => {
             resetTaskComposer();
-            if (assignedTo)
-                setTaskForm((p) => ({ ...p, assignedTo: String(assignedTo) }));
+            setTaskForm((p) => ({ 
+                ...p, 
+                assignedTo: String(assignedTo),
+                groupId: String(groupId)
+            }));
             setShowTaskModal(true);
         },
         [resetTaskComposer],
@@ -1391,13 +1706,15 @@ export default function CommunicationScreen({ navigation }) {
         try {
             setSendingMessage(true);
             const sent = await sendCommunicationMessage({
-                receiverId: selectedMemberId,
+                [selectedIsGroup ? "groupId" : "receiverId"]: selectedMemberId,
                 message: messageText.trim(),
                 attachment: messageAttachment,
+                replyTo: replyTarget?._id,
             });
             setMessages((prev) => uniqueMessages([...prev, sent]));
             setMessageText("");
             setMessageAttachment(null);
+            setReplyTarget(null);
             upsertThreadFromMessage(sent);
         } catch (e) {
             Alert.alert(
@@ -1419,16 +1736,18 @@ export default function CommunicationScreen({ navigation }) {
         try {
             setSendingMessage(true);
             const sent = await sendCommunicationMessage({
-                receiverId: selectedMemberId,
+                [selectedIsGroup ? "groupId" : "receiverId"]: selectedMemberId,
                 messageType: "audio",
                 attachment: {
                     uri: audioDraft.uri,
                     type: audioDraft.type || "audio/mp4",
                     name: audioDraft.name || `voice-note-${Date.now()}.m4a`,
                 },
+                replyTo: replyTarget?._id,
             });
             setMessages((prev) => uniqueMessages([...prev, sent]));
             setAudioDraft(null);
+            setReplyTarget(null);
             upsertThreadFromMessage(sent);
         } catch (error) {
             Alert.alert(
@@ -1790,10 +2109,11 @@ export default function CommunicationScreen({ navigation }) {
     // ═══════════════════════════════════════════════════════════════════════════
     // CHAT SCREEN
     // ═══════════════════════════════════════════════════════════════════════════
-    if (view === "chat" && selectedMember) {
-        const roleLabel =
-            String(selectedMember.role || "").toLowerCase() === "admin"
-                ? adminRoleLabelMap[String(selectedMember._id)] || "Admin"
+    if (view === "chat" && (selectedMember || selectedIsGroup)) {
+        const roleLabel = selectedIsGroup
+            ? `${(selectedGroup?.members?.length ?? 0)} members`
+            : String(selectedMember?.role || "").toLowerCase() === "admin"
+                ? adminRoleLabelMap[String(selectedMember?._id)] || "Admin"
                 : "Staff Member";
 
         const renderMessageItem = ({ item }) => {
@@ -1862,132 +2182,191 @@ export default function CommunicationScreen({ navigation }) {
                     .startsWith("audio/");
             const isThisAudioPlaying =
                 playingAudioId === String(item?._id || "") && isPlayingAudio;
+            const senderName = selectedIsGroup
+                ? String(item?.senderId?.name || item?.senderId?.role || "Member")
+                : null;
             return (
-                <View style={[S.msgRow, isMine ? S.msgRowOut : S.msgRowIn]}>
-                    {!isMine && (
-                        <InitialsAvatar
-                            name={selectedMember?.name || "?"}
-                            size={30}
-                        />
-                    )}
-                    <View
-                        style={[
-                            S.msgBubble,
-                            isMine ? S.msgBubbleOut : S.msgBubbleIn,
-                        ]}>
-                        {item.attachmentUrl ? (
-                            isImageMessage ? (
-                                <TouchableOpacity
-                                    activeOpacity={0.92}
-                                    onPress={() =>
-                                        setPreviewImageUri(attachmentUri)
-                                    }>
-                                    <Image
-                                        source={{ uri: attachmentUri }}
-                                        style={S.msgImage}
-                                    />
-                                </TouchableOpacity>
-                            ) : isAudioMessage ? (
-                                <TouchableOpacity
-                                    style={[
-                                        S.audioBubble,
-                                        isMine && S.audioBubbleOut,
-                                    ]}
-                                    activeOpacity={0.88}
-                                    onPress={() => toggleAudioPlayback(item)}>
-                                    <View
-                                        style={[
-                                            S.audioPlayBtn,
-                                            isMine && S.audioPlayBtnOut,
-                                        ]}>
-                                        <Ionicons
-                                            name={
-                                                isThisAudioPlaying
-                                                    ? "pause"
-                                                    : "play"
-                                            }
-                                            size={18}
-                                            color={
-                                                isMine ? T.accentDark : T.accent
-                                            }
-                                        />
-                                    </View>
-                                    <View style={S.audioInfo}>
-                                        <Text style={S.audioTitle}>
-                                            Voice message
-                                        </Text>
-                                        <Text style={S.audioMeta}>
-                                            {item?.callDuration > 0
-                                                ? formatCallDuration(
-                                                    item.callDuration,
-                                                )
-                                                : item?.attachmentName ||
-                                                "Tap to play"}
-                                        </Text>
-                                    </View>
-                                </TouchableOpacity>
-                            ) : (
-                                <View style={S.docRow}>
-                                    <View
-                                        style={[
-                                            S.docIconWrap,
-                                            isMine && S.docIconWrapOut,
-                                        ]}>
-                                        <Ionicons
-                                            name={
-                                                String(
-                                                    item?.attachmentMimeType ||
-                                                    "",
-                                                )
-                                                    .toLowerCase()
-                                                    .startsWith("audio/")
-                                                    ? "mic-outline"
-                                                    : "document-outline"
-                                            }
-                                            size={16}
-                                            color={
-                                                isMine ? T.accentDark : T.accent
-                                            }
-                                        />
-                                    </View>
-                                    <Text style={S.docLabel} numberOfLines={1}>
-                                        {item.attachmentName || "Attachment"}
-                                    </Text>
-                                </View>
-                            )
-                        ) : null}
-                        {item.message ? (
-                            <Text style={S.msgTxt}>{item.message}</Text>
-                        ) : null}
-                        {item.taskId?.title ? (
-                            <TouchableOpacity
-                                activeOpacity={0.88}
-                                style={S.taskInlineBubble}
-                                onPress={() => openTaskFromMessage(item)}>
-                                <Text style={S.taskInlineTitle}>
-                                    {item.taskId.title}
-                                </Text>
-                                <Text style={S.taskInlineMeta}>
-                                    {item.taskId.status} ·{" "}
-                                    {item.taskId.priority}
-                                </Text>
-                            </TouchableOpacity>
-                        ) : null}
-                        <View style={S.msgMeta}>
-                            <Text style={S.msgTime}>
-                                {formatClock(item.createdAt)}
-                            </Text>
-                            {isMine && (
-                                <Ionicons
-                                    name="checkmark-done"
-                                    size={14}
-                                    color={T.accent}
-                                    style={{ marginLeft: 2 }}
-                                />
-                            )}
+                <Swipeable
+                    friction={2}
+                    leftThreshold={40}
+                    rightThreshold={40}
+                    onSwipeableOpen={() => {
+                        setReplyTarget(item);
+                        if (item._swipeableRef) item._swipeableRef.close();
+                    }}
+                    ref={(ref) => { if (ref) item._swipeableRef = ref; }}
+                    renderLeftActions={() => (
+                        <View style={{ justifyContent: "center", paddingLeft: 15, paddingRight: 10 }}>
+                            <Ionicons name="arrow-undo" size={24} color={T.mid} />
                         </View>
+                    )}
+                >
+                    <View style={[S.msgRow, isMine ? S.msgRowOut : S.msgRowIn]}>
+                        {!isMine && (
+                            <View style={{ alignItems: "center" }}>
+                                <InitialsAvatar
+                                    name={selectedIsGroup
+                                        ? String(item?.senderId?.name || "?")
+                                        : selectedMember?.name || "?"}
+                                    logo={selectedIsGroup
+                                        ? item?.senderId?.logo
+                                        : selectedMember?.logo}
+                                    size={30}
+                                />
+                            </View>
+                        )}
+                        <View style={S.msgBubbleWrap}>
+                            {!isMine && senderName ? (
+                                <Text style={S.groupSenderName}>{senderName}</Text>
+                            ) : null}
+                            <View
+                                style={[
+                                    S.msgBubble,
+                                    isMine ? S.msgBubbleOut : S.msgBubbleIn,
+                                ]}>
+                                {item.replyTo ? (
+                                    <View style={{ backgroundColor: 'rgba(0,0,0,0.05)', padding: 6, borderRadius: 4, marginBottom: 4, borderLeftWidth: 3, borderLeftColor: T.accent }}>
+                                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: T.accentDark }}>
+                                            {item.replyTo.senderId?.name || "Someone"}
+                                        </Text>
+                                        <Text style={{ fontSize: 12, color: T.mid }} numberOfLines={1}>
+                                            {item.replyTo.messageType === 'audio' ? "Voice message" :
+                                                item.replyTo.messageType === 'image' ? "Image" :
+                                                    item.replyTo.message || "Attachment"}
+                                        </Text>
+                                    </View>
+                                ) : null}
+                                {item.attachmentUrl ? (
+                                    isImageMessage ? (
+                                        <TouchableOpacity
+                                            activeOpacity={0.92}
+                                            onPress={() =>
+                                                setPreviewImageUri(attachmentUri)
+                                            }>
+                                            <Image
+                                                source={{ uri: attachmentUri }}
+                                                style={S.msgImage}
+                                            />
+                                        </TouchableOpacity>
+                                    ) : isAudioMessage ? (
+                                        <TouchableOpacity
+                                            style={[
+                                                S.audioBubble,
+                                                isMine && S.audioBubbleOut,
+                                            ]}
+                                            activeOpacity={0.88}
+                                            onPress={() => toggleAudioPlayback(item)}>
+                                            <View
+                                                style={[
+                                                    S.audioPlayBtn,
+                                                    isMine && S.audioPlayBtnOut,
+                                                ]}>
+                                                <Ionicons
+                                                    name={
+                                                        isThisAudioPlaying
+                                                            ? "pause"
+                                                            : "play"
+                                                    }
+                                                    size={18}
+                                                    color={
+                                                        isMine ? T.accentDark : T.accent
+                                                    }
+                                                />
+                                            </View>
+                                            <View style={S.audioInfo}>
+                                                <Text style={S.audioTitle}>
+                                                    Voice message
+                                                </Text>
+                                                <Text style={S.audioMeta}>
+                                                    {item?.callDuration > 0
+                                                        ? formatCallDuration(
+                                                            item.callDuration,
+                                                        )
+                                                        : item?.attachmentName ||
+                                                        "Tap to play"}
+                                                </Text>
+                                            </View>
+                                        </TouchableOpacity>
+                                    ) : (
+                                        <View style={S.docRow}>
+                                            <View
+                                                style={[
+                                                    S.docIconWrap,
+                                                    isMine && S.docIconWrapOut,
+                                                ]}>
+                                                <Ionicons
+                                                    name={
+                                                        String(
+                                                            item?.attachmentMimeType ||
+                                                            "",
+                                                        )
+                                                            .toLowerCase()
+                                                            .startsWith("audio/")
+                                                            ? "mic-outline"
+                                                            : "document-outline"
+                                                    }
+                                                    size={16}
+                                                    color={
+                                                        isMine ? T.accentDark : T.accent
+                                                    }
+                                                />
+                                            </View>
+                                            <Text style={S.docLabel} numberOfLines={1}>
+                                                {item.attachmentName || "Attachment"}
+                                            </Text>
+                                        </View>
+                                    )
+                                ) : null}
+                                {item.message ? (
+                                    <Text style={S.msgTxt}>
+                                        {item.message.split(/(@[\w]+)/g).map((part, index) => {
+                                            if (part.startsWith('@')) {
+                                                return <Text key={index} style={{ color: T.accent, fontWeight: '700' }}>{part}</Text>;
+                                            }
+                                            return <Text key={index}>{part}</Text>;
+                                        })}
+                                    </Text>
+                                ) : null}
+                                {item.taskId?.title ? (
+                                    <TouchableOpacity
+                                        activeOpacity={0.88}
+                                        style={S.taskInlineBubble}
+                                        onPress={() => openTaskFromMessage(item)}>
+                                        <Text style={S.taskInlineTitle}>
+                                            {item.taskId.title}
+                                        </Text>
+                                        <Text style={S.taskInlineMeta}>
+                                            {item.taskId.status} ·{" "}
+                                            {item.taskId.priority}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ) : null}
+                                <View style={S.msgMeta}>
+                                    <Text style={S.msgTime}>
+                                        {formatClock(item.createdAt)}
+                                    </Text>
+                                    {isMine && (
+                                        <Ionicons
+                                            name="checkmark-done"
+                                            size={14}
+                                            color={T.accent}
+                                            style={{ marginLeft: 2 }}
+                                        />
+                                    )}
+                                </View>
+                            </View>
+                        </View>
+                        {isMine && (
+                            <View style={{ alignItems: "center", marginLeft: 8 }}>
+                                <InitialsAvatar
+                                    name={user?.name || "?"}
+                                    logo={user?.logo}
+                                    size={30}
+                                />
+                            </View>
+                        )}
                     </View>
-                </View>
+                </Swipeable>
             );
         };
 
@@ -2014,14 +2393,41 @@ export default function CommunicationScreen({ navigation }) {
                         style={S.chatBackBtn}>
                         <Ionicons name="arrow-back" size={22} color={T.ink} />
                     </TouchableOpacity>
-                    <View style={S.chatHeaderInfo}>
-                        <Text style={S.chatHeaderName}>
-                            {selectedMember.name}
-                        </Text>
-                        <Text style={S.chatHeaderRole}>{roleLabel}</Text>
-                    </View>
+                    <TouchableOpacity 
+                        style={[S.chatHeaderInfo, { flexDirection: "row", alignItems: "center" }]}
+                        activeOpacity={selectedIsGroup ? 0.7 : 1}
+                        onPress={() => {
+                            if (selectedIsGroup) {
+                                openGroupSettings();
+                            }
+                        }}
+                    >
+                        <View style={{ marginRight: 10 }}>
+                            <InitialsAvatar
+                                name={selectedIsGroup ? selectedGroup?.name || "?" : selectedMember?.name || "?"}
+                                logo={selectedIsGroup ? selectedGroup?.logo : selectedMember?.logo}
+                                size={36}
+                            />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={S.chatHeaderName}>
+                                {selectedIsGroup ? selectedGroup?.name : selectedMember?.name}
+                            </Text>
+                            <Text style={S.chatHeaderRole}>{roleLabel}</Text>
+                        </View>
+                    </TouchableOpacity>
                     <View style={S.chatHeaderActions}>
-                        {isAdminUser && (
+                        {selectedIsGroup && isAdminUser && (
+                            <View style={{ flexDirection: "row", alignItems: "center" }}>
+                                <TouchableOpacity
+                                    style={[S.chatHeaderIcon, S.chatHeaderIconPrimary]}
+                                    onPress={() => openCreateTaskModal("", String(selectedGroup?._id))}>
+                                    <Ionicons name="create-outline" size={16} color={T.accentDark} />
+                                    <Text style={[S.chatHeaderIconText, { color: T.accentDark }]}>Task</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                        {isAdminUser && !selectedIsGroup && (
                             <TouchableOpacity
                                 style={[
                                     S.chatHeaderIcon,
@@ -2029,25 +2435,29 @@ export default function CommunicationScreen({ navigation }) {
                                 ]}
                                 onPress={() =>
                                     openCreateTaskModal(
-                                        String(selectedMember._id),
+                                        String(selectedMember?._id),
                                     )
                                 }>
                                 <Ionicons
                                     name="create-outline"
-                                    size={22}
+                                    size={16}
                                     color={T.accentDark}
                                 />
+                                <Text style={[S.chatHeaderIconText, { color: T.accentDark }]}>Task</Text>
                             </TouchableOpacity>
                         )}
-                        <TouchableOpacity
-                            style={S.chatHeaderIcon}
-                            onPress={() => handleInitiateCall(selectedMember)}>
-                            <Ionicons
-                                name="call-outline"
-                                size={20}
-                                color={T.ink}
-                            />
-                        </TouchableOpacity>
+                        {!selectedIsGroup && (
+                            <TouchableOpacity
+                                style={S.chatHeaderIcon}
+                                onPress={() => handleInitiateCall(selectedMember)}>
+                                <Ionicons
+                                    name="call-outline"
+                                    size={16}
+                                    color={T.ink}
+                                />
+                                <Text style={S.chatHeaderIconText}>Call</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 </View>
 
@@ -2220,10 +2630,52 @@ export default function CommunicationScreen({ navigation }) {
            When keyboard is open, kbOffset (on the parent) already lifts us above it,
            so insets.bottom here is effectively unreachable by the keyboard — correct.
           */}
+                    {mentionQuery !== null && selectedIsGroup && (
+                        <View style={{ backgroundColor: '#fff', borderTopWidth: 1, borderColor: T.border, maxHeight: 150 }}>
+                            <FlatList
+                                data={team?.filter(t => selectedGroup?.members?.includes(String(t._id))).filter(m => String(m.name).toLowerCase().replace(/\s+/g, '').includes(mentionQuery)) || []}
+                                keyExtractor={item => String(item._id || item.id || Math.random())}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        style={{ flexDirection: 'row', alignItems: 'center', padding: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: T.border }}
+                                        onPress={() => {
+                                            const textBeforeCursor = messageText.slice(0, cursorPosition);
+                                            const textAfterCursor = messageText.slice(cursorPosition);
+                                            const newTextBeforeCursor = textBeforeCursor.replace(/@\w*$/, `@${String(item.name).replace(/\s+/g, '')} `);
+                                            setMessageText(newTextBeforeCursor + textAfterCursor);
+                                            setMentionQuery(null);
+                                        }}
+                                        keyboardShouldPersistTaps="always">
+                                        <InitialsAvatar name={item.name} logo={item.logo} size={24} />
+                                        <Text style={{ marginLeft: 10, fontSize: 14, color: T.ink, fontWeight: '500' }}>{item.name}</Text>
+                                    </TouchableOpacity>
+                                )}
+                                keyboardShouldPersistTaps="always"
+                            />
+                        </View>
+                    )}
+                    {replyTarget && (
+                        <View style={{ flexDirection: 'row', backgroundColor: '#F4F7FA', padding: 8, marginHorizontal: 12, marginTop: 5, borderTopLeftRadius: 8, borderTopRightRadius: 8, borderLeftWidth: 4, borderLeftColor: T.accent, alignItems: 'center' }}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={{ fontSize: 13, fontWeight: 'bold', color: T.accentDark }}>
+                                    Replying to {replyTarget.senderId?.name || (selectedIsGroup ? selectedGroup?.name : selectedMember?.name) || "Message"}
+                                </Text>
+                                <Text style={{ fontSize: 13, color: T.mid }} numberOfLines={1}>
+                                    {replyTarget.messageType === 'audio' ? "Voice message" :
+                                        replyTarget.messageType === 'image' ? "Image" :
+                                            replyTarget.message || "Attachment"}
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setReplyTarget(null)} style={{ padding: 4 }}>
+                                <Ionicons name="close" size={20} color={T.mid} />
+                            </TouchableOpacity>
+                        </View>
+                    )}
                     <View
                         style={[
                             S.composer,
                             { paddingBottom: Math.max(insets.bottom, 8) },
+                            replyTarget ? { borderTopLeftRadius: 0, borderTopRightRadius: 0, marginTop: 0 } : {}
                         ]}>
                         <View style={S.composerInputWrap}>
 
@@ -2232,7 +2684,32 @@ export default function CommunicationScreen({ navigation }) {
                                 placeholder="Message"
                                 placeholderTextColor={T.mute}
                                 value={messageText}
-                                onChangeText={setMessageText}
+                                onChangeText={(text) => {
+                                    setMessageText(text);
+                                    if (!selectedIsGroup) {
+                                        setMentionQuery(null);
+                                        return;
+                                    }
+                                    const textBeforeCursor = text.slice(0, cursorPosition);
+                                    const match = textBeforeCursor.match(/@(\w*)$/);
+                                    if (match) {
+                                        setMentionQuery(match[1].toLowerCase());
+                                    } else {
+                                        setMentionQuery(null);
+                                    }
+                                }}
+                                onSelectionChange={(e) => {
+                                    const pos = e.nativeEvent.selection.start;
+                                    setCursorPosition(pos);
+                                    if (!selectedIsGroup) return;
+                                    const textBeforeCursor = messageText.slice(0, pos);
+                                    const match = textBeforeCursor.match(/@(\w*)$/);
+                                    if (match) {
+                                        setMentionQuery(match[1].toLowerCase());
+                                    } else {
+                                        setMentionQuery(null);
+                                    }
+                                }}
                                 multiline
                                 selectionColor={T.accent}
                                 onFocus={() => scrollToEnd(true)}
@@ -2251,6 +2728,15 @@ export default function CommunicationScreen({ navigation }) {
                             </TouchableOpacity>
                             <TouchableOpacity
                                 onPress={pickMessageImage}
+                                style={S.composerIconBtn}>
+                                <Ionicons
+                                    name="image-outline"
+                                    size={22}
+                                    color={T.mute}
+                                />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={takeMessagePhoto}
                                 style={S.composerIconBtn}>
                                 <Ionicons
                                     name="camera-outline"
@@ -2293,12 +2779,13 @@ export default function CommunicationScreen({ navigation }) {
                 </KeyboardAvoidingView>
 
                 {renderTaskModal()}
+                {renderGroupSettingsModal()}
 
                 <Modal statusBarTranslucent
                     visible={Boolean(previewImageUri)}
                     transparent
                     animationType="fade"
-                    onRequestClose={closeImagePreview}>
+                    onRequestClose={closeImagePreview}>
                     <View style={S.imagePreviewOverlay}>
                         <TouchableOpacity
                             style={S.imagePreviewBackdrop}
@@ -2329,40 +2816,97 @@ export default function CommunicationScreen({ navigation }) {
     // ═══════════════════════════════════════════════════════════════════════════
     const currentTaskList = tab === "Completed" ? completedTasks : pendingTasks;
 
-    const renderContactRow = ({ item: { member, thread } }) => {
-        const isAdmin = String(member?.role || "").toLowerCase() === "admin";
-        const roleLabel = isAdmin
-            ? adminRoleLabelMap[String(member._id)] || "Admin"
-            : "Staff Member";
+    const renderContactRow = ({ item }) => {
+        const isGroup = item.isGroup === true;
+        const member = item.member;
+        const group = item.group;
+        const thread = item.thread;
+        const entity = isGroup ? group : member;
+
+        const isAdmin = !isGroup && String(member?.role || "").toLowerCase() === "admin";
+        const roleLabel = isGroup
+            ? `Group · ${group?.members?.length ?? 0} members`
+            : isAdmin
+                ? adminRoleLabelMap[String(member?._id)] || "Admin"
+                : "Staff Member";
+
         const unread = Number(thread?.unreadCount || 0);
         const lastMsg = thread?.lastMessage || getThreadPreview(thread);
         const lastTime = formatThreadTime(thread?.lastMessageAt);
-        const counts = memberTaskCounts[String(member?._id)] || { pending: 0, inProgress: 0, completed: 0 };
+        const counts = memberTaskCounts[String(entity?._id)] || { pending: 0, inProgress: 0, completed: 0 };
+
         return (
             <TouchableOpacity
                 style={S.contactRow}
-                onPress={() => openChat(member._id)}
+                onLongPress={() => {
+                    if (isGroup && isAdminUser) {
+                        Alert.alert(
+                            "🗑️ Delete Group",
+                            `Delete "${entity?.name}"? All messages will be permanently removed.`,
+                            [
+                                { text: "Cancel", style: "cancel" },
+                                {
+                                    text: "Delete",
+                                    style: "destructive",
+                                    onPress: async () => {
+                                        try {
+                                            await deleteCommunicationGroup(entity._id);
+                                            await loadOverview({ silent: false });
+                                        } catch (e) {
+                                            Alert.alert("Error", e?.response?.data?.error || "Failed to delete group");
+                                        }
+                                    },
+                                },
+                            ],
+                        );
+                    }
+                }}
+                onPress={() => openChat(entity?._id, isGroup)}
                 activeOpacity={0.7}>
                 <View style={S.contactAvaWrap}>
-                    <InitialsAvatar name={member.name} size={50} />
-                    <View style={S.onlineDot} />
+                    {isGroup ? (
+                        entity?.logo ? (
+                            <Image source={{ uri: getImageUrl(entity.logo) }} style={S.groupAvatarLg} />
+                        ) : (
+                            <View style={[S.groupAvatarLg, { backgroundColor: getAvatarColor(entity?.name || "G") }]}>
+                                <Ionicons name="people" size={22} color="#fff" />
+                            </View>
+                        )
+                    ) : (
+                        <InitialsAvatar name={entity?.name || "?"} logo={entity?.logo} size={50} />
+                    )}
+                    {!isGroup && <View style={S.onlineDot} />}
+                    {isGroup && (
+                        <View style={S.groupBadge}>
+                            <Ionicons name="people" size={9} color="#fff" />
+                        </View>
+                    )}
                 </View>
                 <View style={S.contactInfo}>
                     <View style={S.contactTopRow}>
                         <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginRight: 8, gap: 6 }}>
-                            <Text style={[S.contactName, { flex: undefined, maxWidth: "60%" }]} numberOfLines={1}>
-                                {member.name}
+                            <Text style={S.contactName} numberOfLines={1}>
+                                {entity?.name}
                             </Text>
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <View style={{ backgroundColor: "#F9FAFB", borderColor: "#E5E7EB", borderWidth: 0.8, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
-                                    <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#6B7280" }}>P {counts.pending}</Text>
+                            {isGroup && (
+                                <View style={S.groupTagChip}>
+                                    <Text style={S.groupTagChipTxt}>GROUP</Text>
                                 </View>
-                                <View style={{ backgroundColor: "#FFFBEB", borderColor: "#FDE68A", borderWidth: 0.8, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
-                                    <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#D97706" }}>I {counts.inProgress}</Text>
-                                </View>
-                                <View style={{ backgroundColor: "#ECFDF5", borderColor: "#A7F3D0", borderWidth: 0.8, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
-                                    <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#10B981" }}>C {counts.completed}</Text>
-                                </View>
+                            )}
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginLeft: "auto" }}>
+                                {!isGroup && (
+                                    <>
+                                        <View style={{ backgroundColor: "#F9FAFB", borderColor: "#E5E7EB", borderWidth: 0.8, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
+                                            <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#6B7280" }}>P {counts.pending}</Text>
+                                        </View>
+                                        <View style={{ backgroundColor: "#FFFBEB", borderColor: "#FDE68A", borderWidth: 0.8, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
+                                            <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#D97706" }}>I {counts.inProgress}</Text>
+                                        </View>
+                                        <View style={{ backgroundColor: "#ECFDF5", borderColor: "#A7F3D0", borderWidth: 0.8, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
+                                            <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#10B981" }}>C {counts.completed}</Text>
+                                        </View>
+                                    </>
+                                )}
                             </View>
                         </View>
                         {lastTime ? (
@@ -2411,6 +2955,7 @@ export default function CommunicationScreen({ navigation }) {
             <TouchableOpacity
                 key={item._id}
                 activeOpacity={0.85}
+                onLongPress={() => deleteTask(item)}
                 onPress={() => {
                     setSelectedTaskForDetail(item);
                     setView("taskDetail");
@@ -2480,73 +3025,39 @@ export default function CommunicationScreen({ navigation }) {
         return (
             <Modal
                 visible={showTaskModal}
-                transparent
+                transparent={false}
                 statusBarTranslucent
-                animationType="fade"
-                onRequestClose={() => {
+                animationType="slide"
+                onRequestClose={() => {
                     if (taskSaving) return;
                     setShowTaskModal(false);
                     resetTaskComposer();
                 }}>
-                <View style={S.taskModalOverlay}>
-                    <TouchableOpacity
-                        style={S.modalBackdrop}
-                        activeOpacity={1}
-                        onPress={() => {
-                            if (taskSaving) return;
-                            setShowTaskModal(false);
-                            resetTaskComposer();
-                        }}
-                    />
+                <SafeAreaView style={{ flex: 1, backgroundColor: T.bg }} edges={["bottom", "left", "right"]}>
+                    <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+                    <View style={[S.taskDetailFsHeader, { paddingTop: insets?.top ? insets.top + 10 : 40 }]}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                if (taskSaving) return;
+                                setShowTaskModal(false);
+                                resetTaskComposer();
+                            }}
+                            style={S.listBackBtn}
+                            activeOpacity={0.85}>
+                            <Ionicons name="arrow-back" size={22} color={T.ink} />
+                        </TouchableOpacity>
+                        <View style={S.taskDetailFsHeaderCenter}>
+                            <Text style={S.taskDetailFsTitle}>
+                                {isEditingTask ? "Edit Task" : "Create Task"}
+                            </Text>
+                        </View>
+                        <View style={{ width: 38 }} />
+                    </View>
                     <KeyboardAvoidingView
-                        style={S.taskModalKav}
-                        behavior={Platform.OS === "ios" ? "padding" : "height"}
-                        keyboardVerticalOffset={
-                            Platform.OS === "ios" ? insets.top + 8 : 0
-                        }>
-                        <View
-                            style={[
-                                S.taskModalSheet,
-                                isWideLayout && S.taskModalSheetWide,
-                                { height: sheetHeight, paddingBottom: insets.bottom + 14 },
-                            ]}>
-                            <View
-                                style={[
-                                    S.taskModalCard,
-                                    isWideLayout
-                                        ? S.taskModalCardWide
-                                        : S.taskModalCardPhone,
-                                ]}>
-                                <View style={S.modalHdr}>
-                                    <View style={S.modalHdrText}>
-                                        <Text style={S.modalEye}>
-                                            {isEditingTask
-                                                ? "EDIT TASK"
-                                                : "NEW TASK"}
-                                        </Text>
-                                        <Text style={S.modalTitle}>
-                                            {isEditingTask
-                                                ? "Edit Task"
-                                                : "Create Task"}
-                                        </Text>
-                                    </View>
-                                    <TouchableOpacity
-                                        onPress={() => {
-                                            if (taskSaving) return;
-                                            setShowTaskModal(false);
-                                            resetTaskComposer();
-                                        }}
-                                        style={S.modalClose}>
-                                        <Ionicons
-                                            name="close"
-                                            size={18}
-                                            color={T.mid}
-                                        />
-                                    </TouchableOpacity>
-                                </View>
-                                <View style={S.modalDivider} />
-                                <ScrollView
-                                    style={S.taskModalScroll}
+                        style={{ flex: 1 }}
+                        behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                        <ScrollView
+                            style={S.taskModalScroll}
                                     contentContainerStyle={[
                                         S.taskModalBody,
                                         isCompactHeight && S.modalBodyCompact,
@@ -2684,20 +3195,32 @@ export default function CommunicationScreen({ navigation }) {
                                         </View>
                                     </ScrollView>
                                     <Text style={S.fLbl}>ATTACHMENT</Text>
-                                    <TouchableOpacity
-                                        style={S.fFilePicker}
-                                        onPress={() =>
-                                            pickDocument(setTaskAttachment)
-                                        }>
-                                        <Ionicons
-                                            name="attach-outline"
-                                            size={16}
-                                            color={T.mid}
-                                        />
-                                        <Text style={S.fFilePickerTxt}>
-                                            Photo or PDF
-                                        </Text>
-                                    </TouchableOpacity>
+                                    <View style={{ flexDirection: "row", gap: 10 }}>
+                                        <TouchableOpacity
+                                            style={[S.fFilePicker, { flex: 1 }]}
+                                            onPress={() => takePhoto(setTaskAttachment)}>
+                                            <Ionicons
+                                                name="camera-outline"
+                                                size={16}
+                                                color={T.mid}
+                                            />
+                                            <Text style={S.fFilePickerTxt}>
+                                                Camera
+                                            </Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[S.fFilePicker, { flex: 1 }]}
+                                            onPress={() => pickDocument(setTaskAttachment)}>
+                                            <Ionicons
+                                                name="attach-outline"
+                                                size={16}
+                                                color={T.mid}
+                                            />
+                                            <Text style={S.fFilePickerTxt}>
+                                                File / Photo
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
                                     {showTaskAttachmentImage &&
                                         taskAttachment?.uri ? (
                                         <View style={S.taskAttachmentPreviewWrap}>
@@ -2733,10 +3256,8 @@ export default function CommunicationScreen({ navigation }) {
                                         )}
                                     </TouchableOpacity>
                                 </ScrollView>
-                            </View>
-                        </View>
                     </KeyboardAvoidingView>
-                </View>
+                </SafeAreaView>
             </Modal>
         );
     }
@@ -2749,7 +3270,7 @@ export default function CommunicationScreen({ navigation }) {
                 transparent
                 statusBarTranslucent
                 animationType="fade"
-                onRequestClose={closeTaskRemarkModal}>
+                onRequestClose={closeTaskRemarkModal}>
                 <View style={S.taskRemarkOverlay}>
                     <TouchableOpacity
                         style={S.modalBackdrop}
@@ -2885,7 +3406,7 @@ export default function CommunicationScreen({ navigation }) {
                 visible={showTaskDetailModal}
                 transparent
                 animationType="fade"
-                onRequestClose={() => {
+                onRequestClose={() => {
                     setShowTaskDetailModal(false);
                     setSelectedTaskForDetail(null);
                 }}>
@@ -3267,6 +3788,375 @@ export default function CommunicationScreen({ navigation }) {
                         </View>
                     </View>
                 </View>
+            </Modal>
+        );
+    }
+
+
+    function renderCreateGroupModal() {
+        if (!showCreateGroupModal) return null;
+        return (
+            <Modal
+                visible={showCreateGroupModal}
+                transparent={false}
+                animationType="slide"
+                statusBarTranslucent
+                onRequestClose={() => {
+                    if (groupCreating) return;
+                    setShowCreateGroupModal(false);
+                    setGroupCreateSuccess(false);
+                    setNewGroupName("");
+                    setNewGroupMembers([]);
+                }}>
+                <SafeAreaView style={{ flex: 1, backgroundColor: T.bg }} edges={["bottom", "left", "right"]}>
+                    <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+                    <View style={[S.taskDetailFsHeader, { paddingTop: insets?.top ? insets.top + 10 : 40 }]}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                if (groupCreating) return;
+                                setShowCreateGroupModal(false);
+                                setGroupCreateSuccess(false);
+                                setNewGroupName("");
+                                setNewGroupMembers([]);
+                            }}
+                            style={S.listBackBtn}
+                            activeOpacity={0.85}>
+                            <Ionicons name="arrow-back" size={22} color={T.ink} />
+                        </TouchableOpacity>
+                        <View style={S.taskDetailFsHeaderCenter}>
+                            <Text style={S.taskDetailFsTitle}>Create Group</Text>
+                        </View>
+                        <View style={{ width: 38 }} />
+                    </View>
+                    <KeyboardAvoidingView
+                        style={{ flex: 1 }}
+                        behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                            {groupCreateSuccess ? (
+                                <View style={S.groupSuccessWrap}>
+                                    <View style={S.groupSuccessIcon}>
+                                        <Ionicons name="checkmark-circle" size={64} color={T.accent} />
+                                    </View>
+                                    <Text style={S.groupSuccessTitle}>Group Created!</Text>
+                                    <Text style={S.groupSuccessSub}>
+                                        {newGroupName} has been created.\nOpening chat now…
+                                    </Text>
+                                </View>
+                            ) : (
+                                    <ScrollView
+                                        style={{ flex: 1 }}
+                                        contentContainerStyle={S.modalBody}
+                                        keyboardShouldPersistTaps="handled"
+                                        showsVerticalScrollIndicator={false}>
+                                        <Text style={S.fLbl}>GROUP NAME</Text>
+                                        <TextInput
+                                            style={S.fInput}
+                                            placeholder="e.g. Sales Team, Support Squad..."
+                                            placeholderTextColor={T.mute}
+                                            value={newGroupName}
+                                            onChangeText={setNewGroupName}
+                                            autoFocus
+                                            editable={!groupCreating}
+                                        />
+                                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 18, marginBottom: 4 }}>
+                                            <Text style={S.fLbl}>SELECT STAFF</Text>
+                                            <Text style={{ fontSize: 12, color: T.accent, fontWeight: "700" }}>
+                                                {newGroupMembers.length} selected
+                                            </Text>
+                                        </View>
+                                        {team.filter(m => String(m._id) !== selfId).map(member => {
+                                            const isSelected = newGroupMembers.includes(String(member._id));
+                                            return (
+                                                <TouchableOpacity
+                                                    key={String(member._id)}
+                                                    style={[
+                                                        S.groupMemberRow,
+                                                        isSelected && S.groupMemberRowSelected,
+                                                    ]}
+                                                    onPress={() => {
+                                                        if (groupCreating) return;
+                                                        setNewGroupMembers(prev =>
+                                                            isSelected
+                                                                ? prev.filter(id => id !== String(member._id))
+                                                                : [...prev, String(member._id)]
+                                                        );
+                                                    }}
+                                                    activeOpacity={0.7}>
+                                                    <View style={[
+                                                        S.groupMemberCheck,
+                                                        isSelected && S.groupMemberCheckActive,
+                                                    ]}>
+                                                        {isSelected && (
+                                                            <Ionicons name="checkmark" size={14} color="#fff" />
+                                                        )}
+                                                    </View>
+                                                    <InitialsAvatar name={member.name} logo={member.logo} size={38} />
+                                                    <View style={{ marginLeft: 12, flex: 1 }}>
+                                                        <Text style={S.groupMemberName}>{member.name}</Text>
+                                                        <Text style={S.groupMemberRole}>{member.role}</Text>
+                                                    </View>
+                                                    {isSelected && (
+                                                        <View style={S.groupMemberSelectedDot} />
+                                                    )}
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                        <TouchableOpacity
+                                            style={[
+                                                S.submitBtn,
+                                                { marginTop: 24, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+                                                groupCreating && { opacity: 0.6 },
+                                            ]}
+                                            onPress={handleCreateGroup}
+                                            disabled={groupCreating}>
+                                            {groupCreating ? (
+                                                <ActivityIndicator size="small" color="#fff" />
+                                            ) : (
+                                                <>
+                                                    <Ionicons name="people-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+                                                    <Text style={S.submitBtnTxt}>Create Group</Text>
+                                                </>
+                                            )}
+                                        </TouchableOpacity>
+                                    </ScrollView>
+                            )}
+                    </KeyboardAvoidingView>
+                </SafeAreaView>
+            </Modal>
+        );
+    }
+
+    function renderGroupSettingsModal() {
+        if (!showGroupSettingsModal || !selectedGroup) return null;
+        return (
+            <Modal
+                visible={showGroupSettingsModal}
+                transparent={false}
+                animationType="slide"
+                statusBarTranslucent
+                onRequestClose={() => {
+                    if (groupSettingsSaving) return;
+                    setShowGroupSettingsModal(false);
+                }}>
+                <SafeAreaView style={{ flex: 1, backgroundColor: T.bg }} edges={["bottom", "left", "right"]}>
+                    <StatusBar barStyle="dark-content" backgroundColor={T.bg} />
+                    <View style={[S.taskDetailFsHeader, { paddingTop: insets?.top ? insets.top + 10 : 40 }]}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                if (groupSettingsSaving) return;
+                                setShowGroupSettingsModal(false);
+                            }}
+                            style={S.listBackBtn}
+                            activeOpacity={0.85}>
+                            <Ionicons name="arrow-back" size={22} color={T.ink} />
+                        </TouchableOpacity>
+                        <View style={S.taskDetailFsHeaderCenter}>
+                            <Text style={S.taskDetailFsTitle}>Group Settings</Text>
+                        </View>
+                    </View>
+                    <KeyboardAvoidingView
+                        style={{ flex: 1 }}
+                        behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                            <ScrollView
+                                style={{ flex: 1 }}
+                                contentContainerStyle={S.modalBody}
+                                keyboardShouldPersistTaps="handled"
+                                showsVerticalScrollIndicator={false}>
+
+                                <View style={{ alignItems: "center", marginBottom: 20 }}>
+                                    <TouchableOpacity onPress={isAdminUser ? pickGroupLogo : null} style={{ position: "relative" }} activeOpacity={isAdminUser ? 0.7 : 1}>
+                                        {groupSettingsLogo?.uri || selectedGroup.logo ? (
+                                            <Image
+                                                source={{ uri: groupSettingsLogo?.uri || getImageUrl(selectedGroup.logo) }}
+                                                style={{ width: 80, height: 80, borderRadius: 40, borderWidth: 1, borderColor: T.line }}
+                                            />
+                                        ) : (
+                                            <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: T.bgSecondary, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: T.line }}>
+                                                <Ionicons name="camera-outline" size={32} color={T.mute} />
+                                            </View>
+                                        )}
+                                        {isAdminUser && (
+                                            <View style={{ position: "absolute", bottom: 0, right: 0, backgroundColor: T.accent, borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: T.bg }}>
+                                                <Ionicons name="pencil" size={12} color="#fff" />
+                                            </View>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+
+                                <Text style={S.fLbl}>GROUP NAME</Text>
+                                {(!groupSettingsName || editModeName) && isAdminUser ? (
+                                    <TextInput
+                                        style={S.fInput}
+                                        placeholder="Group Name"
+                                        placeholderTextColor={T.mute}
+                                        value={groupSettingsName}
+                                        onChangeText={setGroupSettingsName}
+                                        editable={!groupSettingsSaving}
+                                    />
+                                ) : (
+                                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 16, color: T.ink, flex: 1, paddingVertical: 8 }}>
+                                            {groupSettingsName || "Not provided"}
+                                        </Text>
+                                        {isAdminUser && (
+                                            <View style={{ flexDirection: "row", gap: 12 }}>
+                                                <TouchableOpacity onPress={() => setEditModeName(true)}>
+                                                    <Ionicons name="pencil" size={18} color={T.accent} />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity onPress={() => { setGroupSettingsName(""); setEditModeName(true); }}>
+                                                    <Ionicons name="trash-outline" size={18} color={T.danger} />
+                                                </TouchableOpacity>
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
+
+                                <Text style={S.fLbl}>MEETING LINK</Text>
+                                {(!groupSettingsMeetingLink || editModeLink) && isAdminUser ? (
+                                    <TextInput
+                                        style={S.fInput}
+                                        placeholder="https://zoom.us/j/..."
+                                        placeholderTextColor={T.mute}
+                                        value={groupSettingsMeetingLink}
+                                        onChangeText={setGroupSettingsMeetingLink}
+                                        editable={!groupSettingsSaving}
+                                        autoCapitalize="none"
+                                    />
+                                ) : (
+                                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                                        <Text 
+                                            style={{ fontSize: 16, color: groupSettingsMeetingLink ? T.accent : T.ink, flex: 1, paddingVertical: 8, textDecorationLine: groupSettingsMeetingLink ? "underline" : "none" }}
+                                            onPress={() => {
+                                                if (groupSettingsMeetingLink) {
+                                                    let url = groupSettingsMeetingLink;
+                                                    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                                                        url = 'https://' + url;
+                                                    }
+                                                    Linking.openURL(url).catch(() => Alert.alert("Error", "Could not open link"));
+                                                }
+                                            }}
+                                        >
+                                            {groupSettingsMeetingLink || "Not provided"}
+                                        </Text>
+                                        {isAdminUser && (
+                                            <View style={{ flexDirection: "row", gap: 12 }}>
+                                                <TouchableOpacity onPress={() => setEditModeLink(true)}>
+                                                    <Ionicons name="pencil" size={18} color={T.accent} />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity onPress={() => { setGroupSettingsMeetingLink(""); setEditModeLink(true); }}>
+                                                    <Ionicons name="trash-outline" size={18} color={T.danger} />
+                                                </TouchableOpacity>
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
+
+                                <Text style={S.fLbl}>BIO / NOTES</Text>
+                                {(!groupSettingsBio || editModeBio) && isAdminUser ? (
+                                    <TextInput
+                                        style={[S.fInput, S.fInputArea]}
+                                        placeholder="Group bio or notes..."
+                                        placeholderTextColor={T.mute}
+                                        value={groupSettingsBio}
+                                        onChangeText={setGroupSettingsBio}
+                                        editable={!groupSettingsSaving}
+                                        multiline
+                                        textAlignVertical="top"
+                                    />
+                                ) : (
+                                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 15, color: T.ink, flex: 1, paddingVertical: 8, lineHeight: 22 }}>
+                                            {groupSettingsBio || "Not provided"}
+                                        </Text>
+                                        {isAdminUser && (
+                                            <View style={{ flexDirection: "row", gap: 12, paddingTop: 8, paddingLeft: 12 }}>
+                                                <TouchableOpacity onPress={() => setEditModeBio(true)}>
+                                                    <Ionicons name="pencil" size={18} color={T.accent} />
+                                                </TouchableOpacity>
+                                                <TouchableOpacity onPress={() => { setGroupSettingsBio(""); setEditModeBio(true); }}>
+                                                    <Ionicons name="trash-outline" size={18} color={T.danger} />
+                                                </TouchableOpacity>
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
+                                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 18, marginBottom: 4 }}>
+                                    <Text style={S.fLbl}>STAFF MEMBERS</Text>
+                                    <Text style={{ fontSize: 12, color: T.accent, fontWeight: "700" }}>
+                                        {groupSettingsMembers.length} selected
+                                    </Text>
+                                </View>
+                                {team.filter(m => String(m._id) !== selfId).map(member => {
+                                    const isSelected = groupSettingsMembers.includes(String(member._id));
+                                    // Non-admins only see selected members
+                                    if (!isAdminUser && !isSelected) return null;
+
+                                    return (
+                                        <TouchableOpacity
+                                            key={String(member._id)}
+                                            style={[
+                                                S.groupMemberRow,
+                                                isSelected && isAdminUser && S.groupMemberRowSelected,
+                                            ]}
+                                            onPress={() => {
+                                                if (!isAdminUser || groupSettingsSaving) return;
+                                                setGroupSettingsMembers(prev =>
+                                                    isSelected
+                                                        ? prev.filter(id => id !== String(member._id))
+                                                        : [...prev, String(member._id)]
+                                                );
+                                            }}
+                                            activeOpacity={isAdminUser ? 0.7 : 1}>
+                                            <View style={[
+                                                S.groupMemberCheck,
+                                                isSelected && S.groupMemberCheckActive,
+                                                !isAdminUser && { opacity: 0 } // Hide checkbox for non-admins
+                                            ]}>
+                                                {isSelected && isAdminUser && (
+                                                    <Ionicons name="checkmark" size={14} color="#fff" />
+                                                )}
+                                            </View>
+                                            <InitialsAvatar name={member.name} logo={member.logo} size={38} />
+                                            <View style={{ marginLeft: 12, flex: 1 }}>
+                                                <Text style={S.groupMemberName}>{member.name}</Text>
+                                                <Text style={S.groupMemberRole}>{member.role}</Text>
+                                            </View>
+                                            {isSelected && isAdminUser && (
+                                                <View style={S.groupMemberSelectedDot} />
+                                            )}
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                                {isAdminUser && (
+                                    <TouchableOpacity
+                                        style={[
+                                            S.submitBtn,
+                                            { marginTop: 24, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+                                            groupSettingsSaving && { opacity: 0.6 },
+                                        ]}
+                                        onPress={handleSaveGroupSettings}
+                                        disabled={groupSettingsSaving}>
+                                        {groupSettingsSaving ? (
+                                            <ActivityIndicator size="small" color="#fff" />
+                                        ) : (
+                                            <>
+                                                <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+                                                <Text style={S.submitBtnTxt}>Save Changes</Text>
+                                            </>
+                                        )}
+                                    </TouchableOpacity>
+                                )}
+
+                                {isAdminUser && (
+                                    <TouchableOpacity
+                                        style={{ marginTop: 16, alignItems: "center", paddingVertical: 12 }}
+                                        onPress={handleRemoveGroup}
+                                        disabled={groupSettingsSaving}>
+                                        <Text style={{ color: "#EF4444", fontSize: 14, fontWeight: "600" }}>Delete Group</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </ScrollView>
+                    </KeyboardAvoidingView>
+                </SafeAreaView>
             </Modal>
         );
     }
@@ -3676,6 +4566,7 @@ export default function CommunicationScreen({ navigation }) {
         return (
             <>
                 {renderTaskDetailFullScreen()}
+                {renderCreateGroupModal()}
                 {renderTaskRemarkModal()}
             </>
         );
@@ -3691,16 +4582,16 @@ export default function CommunicationScreen({ navigation }) {
                     style={[S.listBackBtn, { paddingLeft: 0, marginRight: 4 }]}>
                     <Ionicons name="arrow-back" size={24} color={T.ink} />
                 </TouchableOpacity>
-                
+
                 <View style={{ flexDirection: "row", alignItems: "center", flex: 1, gap: 10 }}>
-                    <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: T.accentSoft, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: T.accentBorder }}>
-                        <Ionicons name="people" size={18} color={T.accentDark} />
-                    </View>
-                    <View style={{ flexDirection: "column" }}>
-                        <Text style={{ fontSize: 17, fontWeight: "800", color: T.ink }}>
+                    <TouchableOpacity onPress={handleUpdateProfileLogo} activeOpacity={0.85}>
+                        <InitialsAvatar name={user?.name || "?"} logo={user?.logo} size={36} />
+                    </TouchableOpacity>
+                    <View style={{ flexDirection: "column", flex: 1 }}>
+                        <Text style={{ fontSize: 17, fontWeight: "800", color: T.ink }} numberOfLines={1}>
                             Team Chat
                         </Text>
-                        <Text style={{ fontSize: 11, fontWeight: "500", color: "#6B7280" }}>
+                        <Text style={{ fontSize: 11, fontWeight: "500", color: "#6B7280" }} numberOfLines={1}>
                             {totalUnread > 0 ? `${totalUnread} unread messages` : "Active workspace"}
                         </Text>
                     </View>
@@ -3708,34 +4599,36 @@ export default function CommunicationScreen({ navigation }) {
 
                 <View style={S.listHeaderRight}>
                     <TouchableOpacity
-                        style={[S.listHeaderIcon, { marginRight: isAdminUser ? 8 : 0 }]}
+                        style={[S.listHeaderIcon, { marginRight: 8, paddingHorizontal: 0 }]}
                         onPress={async () => {
                             await loadOverview({ silent: false });
                         }}
                         activeOpacity={0.85}>
-                        <Ionicons
-                            name="sync-outline"
-                            size={18}
-                            color={T.mid}
-                        />
+                        <Ionicons name="sync-outline" size={18} color={T.mid} />
                     </TouchableOpacity>
+                    {isAdminUser && (
+                        <TouchableOpacity
+                            style={[S.listHeaderIcon, S.listHeaderIconGroup]}
+                            onPress={() => setShowCreateGroupModal(true)}
+                            activeOpacity={0.85}>
+                            <Ionicons name="people-outline" size={16} color="#7C3AED" />
+                            <Text style={[S.listHeaderIconText, { color: "#7C3AED" }]}>Group</Text>
+                        </TouchableOpacity>
+                    )}
                     {isAdminUser && (
                         <TouchableOpacity
                             style={[S.listHeaderIcon, S.listHeaderIconPrimary]}
                             onPress={() => openCreateTaskModal()}
                             activeOpacity={0.85}>
-                            <Ionicons
-                                name="create-outline"
-                                size={20}
-                                color={T.accentDark}
-                            />
+                            <Ionicons name="create-outline" size={16} color={T.accentDark} />
+                            <Text style={[S.listHeaderIconText, { color: T.accentDark }]}>Task</Text>
                         </TouchableOpacity>
                     )}
                 </View>
             </View>
 
             <View style={S.tabBar}>
-                {["Chats", "Pending", "Completed"].map((item) => (
+                {["Chats", "Pend / In-Pro", "Completed"].map((item) => (
                     <TouchableOpacity
                         key={item}
                         style={[S.tabBtn, tab === item && S.tabBtnActive]}
@@ -3807,7 +4700,23 @@ export default function CommunicationScreen({ navigation }) {
                                 colors={[T.accent]}
                             />
                         }>
-                        {groupedContacts.admins.length > 0 && (
+                        {/* ── Groups Section ── */}
+                        {groupedContacts.groups && groupedContacts.groups.length > 0 && (
+                            <>
+                                {renderSectionHeader("GROUPS", groupedContacts.groups.length)}
+                                <FlatList
+                                    data={groupedContacts.groups}
+                                    keyExtractor={(item) => `group-${String(item.group?._id || "")}`}
+                                    renderItem={renderContactRow}
+                                    scrollEnabled={false}
+                                    ItemSeparatorComponent={() => (
+                                        <View style={S.separator} />
+                                    )}
+                                />
+                            </>
+                        )}
+                        {/* ── Admins Section ── */}
+                        {groupedContacts.admins && groupedContacts.admins.length > 0 && (
                             <>
                                 {renderSectionHeader(
                                     "ADMINS",
@@ -3933,12 +4842,14 @@ export default function CommunicationScreen({ navigation }) {
 
             {renderTaskModal()}
             {renderTaskDetailModal()}
+            {renderCreateGroupModal()}
+            {renderGroupSettingsModal()}
             {renderTaskRemarkModal()}
             <Modal statusBarTranslucent
                 visible={Boolean(previewImageUri)}
                 transparent
                 animationType="fade"
-                onRequestClose={closeImagePreview}>
+                onRequestClose={closeImagePreview}>
                 <View style={S.imagePreviewOverlay}>
                     <TouchableOpacity
                         style={S.imagePreviewBackdrop}
@@ -3990,20 +4901,52 @@ const S = StyleSheet.create({
     listHeaderUnread: { color: T.accent, fontSize: 16, fontWeight: "700" },
     listHeaderRight: { flexDirection: "row", alignItems: "center" },
     listHeaderIcon: {
-        width: 38,
-        height: 38,
+        minWidth: 38,
+        height: 34,
         borderRadius: 12,
         backgroundColor: T.bgSecondary,
         borderWidth: 1,
         borderColor: T.line,
         alignItems: "center",
         justifyContent: "center",
+        flexDirection: "row",
+        paddingHorizontal: 10,
         marginLeft: 8,
+        gap: 6,
+    },
+    listHeaderIconText: {
+        fontSize: 12,
+        fontWeight: "700",
+        color: T.ink,
     },
     listHeaderIconPrimary: {
         backgroundColor: T.accentSoft,
         borderColor: T.accentBorder,
     },
+    listHeaderIconGroup: {
+        backgroundColor: "#F3E8FF",
+        borderColor: "#D8B4FE",
+        marginLeft: 8,
+    },
+    groupAvatarLg: { width: 50, height: 50, borderRadius: 25, alignItems: "center", justifyContent: "center" },
+    groupAvatarSm: { width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+    groupBadge: { position: "absolute", bottom: -2, right: -2, width: 18, height: 18, borderRadius: 9, backgroundColor: "#7C3AED", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: T.bg },
+    groupTagChip: { backgroundColor: "#F3E8FF", borderColor: "#D8B4FE", borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+    groupTagChipTxt: { fontSize: 9, fontWeight: "800", color: "#7C3AED", letterSpacing: 0.5 },
+    msgBubbleWrap: { flex: 1, flexDirection: "column" },
+    groupSenderName: { fontSize: 11, fontWeight: "700", color: T.accent, marginBottom: 2, marginLeft: 2 },
+    groupModalIconWrap: { width: 40, height: 40, borderRadius: 20, backgroundColor: T.accentSoft, borderWidth: 1, borderColor: T.accentBorder, alignItems: "center", justifyContent: "center" },
+    groupMemberRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 4, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: T.line },
+    groupMemberRowSelected: { backgroundColor: "#F0FDF4" },
+    groupMemberCheck: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: T.line, marginRight: 12, alignItems: "center", justifyContent: "center", backgroundColor: T.bg },
+    groupMemberCheckActive: { backgroundColor: T.accent, borderColor: T.accent },
+    groupMemberName: { fontSize: 15, fontWeight: "600", color: T.ink },
+    groupMemberRole: { fontSize: 12, color: T.mute, marginTop: 1 },
+    groupMemberSelectedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: T.accent, marginLeft: 8 },
+    groupSuccessWrap: { alignItems: "center", justifyContent: "center", paddingVertical: 48, paddingHorizontal: 24 },
+    groupSuccessIcon: { width: 100, height: 100, borderRadius: 50, backgroundColor: T.accentSoft, alignItems: "center", justifyContent: "center", marginBottom: 20, borderWidth: 2, borderColor: T.accentBorder },
+    groupSuccessTitle: { fontSize: 22, fontWeight: "800", color: T.ink, marginBottom: 8 },
+    groupSuccessSub: { fontSize: 14, color: T.mid, textAlign: "center", lineHeight: 20 },
 
     taskCountRow: {
         flexDirection: "row",
@@ -4112,7 +5055,7 @@ const S = StyleSheet.create({
         alignItems: "center",
         marginBottom: 3,
     },
-    contactName: { flex: 1, fontSize: 16, fontWeight: "600", color: T.ink },
+    contactName: { flexShrink: 1, fontSize: 16, fontWeight: "600", color: T.ink },
     contactTime: { fontSize: 12, color: T.mute, marginLeft: 6 },
     contactTimeUnread: { color: T.accent, fontWeight: "700" },
     contactBottomRow: {
@@ -4170,19 +5113,36 @@ const S = StyleSheet.create({
     },
     chatBackBtn: { padding: 8 },
     chatHeaderInfo: { flex: 1 },
+    chatHeaderAvatar: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        marginRight: 10,
+        backgroundColor: T.bgSecondary,
+        borderWidth: 1,
+        borderColor: T.line,
+    },
     chatHeaderName: { fontSize: 16, fontWeight: "700", color: T.ink },
     chatHeaderRole: { fontSize: 12, color: T.mute, marginTop: 1 },
     chatHeaderActions: { flexDirection: "row" },
     chatHeaderIcon: {
-        width: 38,
-        height: 38,
+        minWidth: 38,
+        height: 34,
         borderRadius: 12,
         backgroundColor: T.bgSecondary,
         borderWidth: 1,
         borderColor: T.line,
         alignItems: "center",
         justifyContent: "center",
+        flexDirection: "row",
+        paddingHorizontal: 10,
         marginLeft: 8,
+        gap: 6,
+    },
+    chatHeaderIconText: {
+        fontSize: 12,
+        fontWeight: "700",
+        color: T.ink,
     },
     chatHeaderIconPrimary: {
         backgroundColor: T.accentSoft,
@@ -4497,22 +5457,25 @@ const S = StyleSheet.create({
     composer: {
         flexDirection: "row",
         alignItems: "flex-end",
-        gap: 8,
-        paddingHorizontal: 8,
-        paddingTop: 8,
-        backgroundColor: T.bgSecondary,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: T.line,
+        gap: 10,
+        paddingHorizontal: 12,
+        paddingTop: 10,
+        backgroundColor: T.bg,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+        elevation: 5,
     },
     composerInputWrap: {
         flex: 1,
         flexDirection: "row",
         alignItems: "flex-end",
-        backgroundColor: T.bg,
+        backgroundColor: "#F2F5F8",
         borderRadius: 24,
-        borderWidth: 1,
-        borderColor: T.line,
-        paddingRight: 4,
+        borderWidth: 0,
+        paddingRight: 6,
+        paddingLeft: 4,
     },
     composerIconBtn: {
         width: 40,
@@ -4522,20 +5485,21 @@ const S = StyleSheet.create({
     },
     composerInput: {
         flex: 1,
-        minHeight: 42,
+        minHeight: 44,
         maxHeight: 120,
-        paddingVertical: 10,
-        paddingHorizontal: 4,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
         color: T.ink,
-        fontSize: 15,
+        fontSize: 16,
     },
     composerSend: {
-        width: 46,
-        height: 46,
-        borderRadius: 23,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
         backgroundColor: T.mute,
         alignItems: "center",
         justifyContent: "center",
+        marginBottom: 2,
     },
     composerSendActive: { backgroundColor: T.accent },
     composerSendRecording: { backgroundColor: "#DC2626" },

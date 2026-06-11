@@ -3,7 +3,7 @@
     "name": "NeoGroww",
     "slug": "neoapp-manibro27",
     "owner": "manibro27",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "./src/assets/app-icon.png",
     "orientation": "portrait",
     "scheme": [
@@ -29,7 +29,7 @@
     },
     "android": {
       "package": "com.neogroww.crm",
-      "versionCode": 8,
+      "versionCode": 9,
       "googleServicesFile": "./google-services.json",
       "blockedPermissions": [],
       "adaptiveIcon": {

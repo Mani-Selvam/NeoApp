@@ -261,7 +261,7 @@ const PlanCard = React.memo(
                     ) : (
                         <>
                             <Text style={PC.planName} numberOfLines={1}>
-                                {planError ? "Error loading plan" : planName}
+                                {planError ? (planError === "No active subscription" ? "Plan Expired" : planError) : planName}
                             </Text>
                             {!planError && (subStatus || expiry) ? (
                                 <Text style={PC.planSub} numberOfLines={1}>
@@ -868,6 +868,24 @@ export default function AppSideMenu({
                                         !hasPlanFeature(
                                             billingInfo?.plan,
                                             "targets",
+                                        )
+                                    }
+                                />
+                                <MenuItem
+                                    icon="pie-chart-outline"
+                                    label="Usage Limits"
+                                    onPress={() =>
+                                        navWithFeature(
+                                            "UsageLimitScreen",
+                                            "voice_assistant", // Limit viewing it to plans that have the assistant
+                                            "Usage Limits",
+                                        )
+                                    }
+                                    active={isActive("UsageLimitScreen")}
+                                    locked={
+                                        !hasPlanFeature(
+                                            billingInfo?.plan,
+                                            "voice_assistant",
                                         )
                                     }
                                 />

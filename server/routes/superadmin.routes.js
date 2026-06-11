@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const {
@@ -52,6 +52,8 @@ router.delete("/subscriptions/:subscriptionId", superadminController.deleteSubsc
 
 router.get("/revenue", superadminController.getRevenue);
 router.get("/logs", superadminController.getLogs);
+
+router.get("/website-leads", superadminController.getWebsiteLeads);
 
 router.get("/support/tickets", superadminController.getSupportTickets);
 router.post("/support/tickets/:ticketId/respond", superadminController.respondSupportTicket);

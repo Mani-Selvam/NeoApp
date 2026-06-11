@@ -1,4 +1,4 @@
-﻿import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import {
     DefaultTheme,
@@ -56,6 +56,7 @@ import WhatsAppSettingsScreen from "../screens/WhatsAppSettingsScreen";
 import WhatsAppTemplateScreen from "../screens/WhatsAppTemplateScreen";
 import BulkWhatsAppScreen from "../screens/BulkWhatsAppScreen";
 import TargetsScreen from "../screens/TargetsScreen";
+import UsageLimitScreen from "../screens/UsageLimitScreen";
 import EmailScreen from "../screens/EmailScreen";
 import EmailSettingsScreen from "../screens/EmailSettingsScreen";
 import { getCommunicationThreads } from "../services/communicationService";
@@ -490,6 +491,11 @@ function MainTabNavigator() {
                 options={hiddenTabOptions}
             />
             <Tab.Screen
+                name="UsageLimitScreen"
+                component={UsageLimitAccessScreen}
+                options={hiddenTabOptions}
+            />
+            <Tab.Screen
                 name="EmailScreen"
                 component={EmailAccessScreen}
                 options={hiddenTabOptions}
@@ -672,7 +678,6 @@ function GlobalVoiceAssistantFab({
     return (
         <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
             <VoiceAssistantOverlay
-                compact
                 visible={assistantOpen}
                 onClose={() => setAssistantOpen(false)}
             />
@@ -890,6 +895,11 @@ const TargetsAccessScreen = createPlanRestrictedScreen(
     TargetsScreen as any,
     "targets",
     "Targets",
+);
+const UsageLimitAccessScreen = createAdminPlanRestrictedScreen(
+    UsageLimitScreen as any,
+    "voice_assistant",
+    "Usage Limits",
 );
 const EmailAccessScreen = createPlanRestrictedScreen(
     EmailScreen as any,

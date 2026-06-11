@@ -54,6 +54,9 @@ const resolveEffectivePlan = async (companyId) => {
           finalPrice: 0,
           discountAmount: 0,
           couponCode: null,
+          aiVoiceLimitYearly: 3000,
+          aiVoiceExtraPrice: 500,
+          aiVoiceExtraRequests: 1000,
         },
         subscription: {
           id: "mock_sub_id",
@@ -194,6 +197,9 @@ const resolveEffectivePlan = async (companyId) => {
       finalPrice,
       discountAmount,
       couponCode: coupon?.code || null,
+      aiVoiceLimitYearly: Number(plan.aiVoiceLimitYearly || 3000),
+      aiVoiceExtraPrice: Number(plan.aiVoiceExtraPrice || 500),
+      aiVoiceExtraRequests: Number(plan.aiVoiceExtraRequests || 1000),
     },
     subscription: {
       id: subscription._id,

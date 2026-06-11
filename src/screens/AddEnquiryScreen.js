@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import * as Contacts from "expo-contacts";
@@ -1090,6 +1091,68 @@ export default function AddEnquiryScreen({ route, navigation }) {
     };
 
     // ── Image ─────────────────────────────────────────────────────────────────
+    const pickDocument = async () => {
+        try {
+            const res = await DocumentPicker.getDocumentAsync({
+                type: "*/*",
+                copyToCacheDirectory: true,
+            });
+            if (!res.canceled && res.assets && res.assets.length > 0) {
+                const asset = res.assets[0];
+                set("image", asset.uri);
+                if (Platform.OS === "web") {
+                    setPickedImageFile(asset.file || null);
+                } else {
+                    setPickedImageFile(null);
+                }
+            }
+        } catch {
+            toast("Failed to pick document", "error");
+        }
+    };
+
+    const handlePhotoOptions = () => {
+        Alert.alert(
+            "Upload Photo/File",
+            "Choose a source",
+            [
+                { text: "Camera", onPress: takePhoto },
+                { text: "Gallery", onPress: pickImage },
+                { text: "File Manager", onPress: pickDocument },
+                { text: "Cancel", style: "cancel" }
+            ],
+            { cancelable: true }
+        );
+    };
+
+    const takePhoto = async () => {
+        try {
+            const perm = await ImagePicker.requestCameraPermissionsAsync();
+            if (perm.status !== "granted") {
+                Alert.alert("Permission needed", "Please allow camera access.");
+                return;
+            }
+            const res = await ImagePicker.launchCameraAsync({
+                mediaTypes: ["images"],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.6,
+                base64: false,
+            });
+            if (!res.canceled) {
+                const asset = res.assets?.[0] || null;
+                set("image", asset?.uri || null);
+                if (Platform.OS === "web") {
+                    setPickedImageFile(asset?.file || null);
+                } else {
+                    setPickedImageFile(null);
+                }
+            }
+        } catch {
+            toast("Failed to open camera", "error");
+        }
+    };
+
     const pickImage = async () => {
         try {
             const res = await ImagePicker.launchImageLibraryAsync({
@@ -2117,7 +2180,7 @@ export default function AddEnquiryScreen({ route, navigation }) {
                                         marginTop: sc.sp.lg,
                                     }}>
                                     <TouchableOpacity
-                                        onPress={pickImage}
+                                        onPress={handlePhotoOptions}
                                         activeOpacity={0.85}
                                         style={{ position: "relative" }}>
                                         <View

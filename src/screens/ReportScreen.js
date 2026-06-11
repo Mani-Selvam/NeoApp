@@ -1,4 +1,4 @@
-﻿import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSilentRefresh } from "../hooks/useSilentRefresh";
@@ -1615,13 +1615,13 @@ export default function ReportScreen({ navigation }) {
                     <Ionicons name="menu" size={24} color={C.text} />
                 </TouchableOpacity>
 
-                <View style={{ flexDirection: "row", alignItems: "center", flex: 1, gap: 10, marginLeft: 10 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", flex: 1, gap: 10, marginLeft: 10, marginRight: 8 }}>
                    
-                    <View style={{ flexDirection: "column" }}>
-                        <Text style={{ fontSize: 17, fontWeight: "800", color: C.text }}>
+                    <View style={{ flexDirection: "column", flex: 1 }}>
+                        <Text style={{ fontSize: 17, fontWeight: "800", color: C.text }} numberOfLines={1}>
                             Analytics
                         </Text>
-                        <Text style={{ fontSize: 11, fontWeight: "500", color: C.textDim }}>
+                        <Text style={{ fontSize: 11, fontWeight: "500", color: C.textDim }} numberOfLines={1}>
                             CRM Reports Hub
                         </Text>
                     </View>
@@ -1632,14 +1632,16 @@ export default function ReportScreen({ navigation }) {
                         style={[st.headerActionBtn, { backgroundColor: "#FEF3C7", borderColor: "#FDE68A" }]}
                         onPress={exportReport}
                         activeOpacity={0.85}>
-                        <Ionicons name="download-outline" size={18} color="#D97706" />
+                        <Ionicons name="download-outline" size={16} color="#D97706" />
+                        <Text style={[st.headerActionBtnText, { color: "#D97706" }]}>Leads</Text>
                     </TouchableOpacity>
                     
                     <TouchableOpacity
                         style={[st.headerActionBtn, { backgroundColor: "#F5F3FF", borderColor: "#DDD6FE" }]}
                         onPress={exportStaffActivityCsv}
                         activeOpacity={0.85}>
-                        <Ionicons name="people-outline" size={18} color="#7C3AED" />
+                        <Ionicons name="people-outline" size={16} color="#7C3AED" />
+                        <Text style={[st.headerActionBtnText, { color: "#7C3AED" }]}>Staff</Text>
                     </TouchableOpacity>
                     
                     <TouchableOpacity
@@ -1681,7 +1683,7 @@ export default function ReportScreen({ navigation }) {
                     st.scroll,
                     { paddingTop: insets.top > 0 ? 4 : 12 },
                 ]}>
-                {/* â”€â”€ HERO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+                {/* ──────────────────────────────────────────────────────────── */}
                 <FadeIn delay={0}>
                     <LinearGradient
                         colors={["#FBF7F0", "#EEE7D8", "#E8DEC9"]}
@@ -1768,7 +1770,7 @@ export default function ReportScreen({ navigation }) {
                     </LinearGradient>
                 </FadeIn>
 
-                {/* â”€â”€ FILTER CARD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+                {/* ──────────────────────────────────────────────────────────── */}
                 <FadeIn delay={70}>
                     <Card>
                         <View style={st.filterCardTop}>
@@ -2087,7 +2089,7 @@ export default function ReportScreen({ navigation }) {
                     </SkeletonPulse>
                 ) : (
                     <>
-                        {/* â”€â”€ LEAD OVERVIEW â€” Donut + Legend + Bars â”€â”€ */}
+                        {/* ────────────────── LEAD OVERVIEW ── Donut + Legend + Bars ────────────────── */}
                         <FadeIn delay={100}>
                             <Card>
                                 <CardHeader
@@ -2187,7 +2189,7 @@ export default function ReportScreen({ navigation }) {
                             </Card>
                         </FadeIn>
 
-                        {/* â”€â”€ TEAM PERFORMANCE â€” colored table â”€â”€ */}
+                        {/* ────────────────── TEAM PERFORMANCE ── colored table ────────────────── */}
                         <FadeIn delay={140}>
                             <Card>
                                 <CardHeader
@@ -2313,7 +2315,7 @@ export default function ReportScreen({ navigation }) {
                             </Card>
                         </FadeIn>
 
-                        {/* â”€â”€ REVENUE â€” gradient hero + 2 stat cards â”€â”€ */}
+                        {/* ────────────────── REVENUE ── gradient hero + 2 stat cards ────────────────── */}
                         <FadeIn delay={180}>
                             <Card>
                                 <CardHeader
@@ -2475,12 +2477,19 @@ const st = StyleSheet.create({
         gap: 10,
     },
     headerActionBtn: {
-        width: 38,
+        minWidth: 38,
         height: 38,
         borderRadius: 19,
         borderWidth: 1,
         alignItems: "center",
         justifyContent: "center",
+        flexDirection: "row",
+        paddingHorizontal: 12,
+        gap: 6,
+    },
+    headerActionBtnText: {
+        fontSize: 12,
+        fontWeight: "700",
     },
     exportHeaderBtn: {
         flexDirection: "row",

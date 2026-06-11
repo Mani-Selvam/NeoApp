@@ -169,6 +169,9 @@ export const api = {
 
     getSuperadminRevenue: () => request("/superadmin/revenue"),
     getSuperadminLogs: () => request("/superadmin/logs"),
+    getSuperadminWebsiteLeads: () => request("/superadmin/website-leads"),
+    getAIVoicePayments: () => request("/ai-payments"),
+    deleteAIVoicePayment: (id) => request(`/ai-payments/${id}`, { method: "DELETE" }),
 
     getSupportTickets: ({ status = "", q = "" } = {}) => {
         const params = new URLSearchParams();

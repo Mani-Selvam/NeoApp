@@ -10,7 +10,6 @@ const Plan = require("../models/Plan");
 const Coupon = require("../models/Coupon");
 const CompanyPlanOverride = require("../models/CompanyPlanOverride");
 const CompanySubscription = require("../models/CompanySubscription");
-const SystemLog = require("../models/SystemLog");
 const Payment = require("../models/Payment");
 const Enquiry = require("../models/Enquiry");
 const FollowUp = require("../models/FollowUp");
@@ -561,27 +560,6 @@ const activateSubscription = async ({
         });
     }
 
-    await SystemLog.create({
-        userId,
-        action: "PLAN_PURCHASED",
-        category: "billing",
-        ip,
-        metadata: {
-            companyId,
-            planId: summary.plan._id,
-            subscriptionId: subscription._id,
-            couponCode: summary.coupon?.code || null,
-            paymentReference: paymentReference || null,
-            provider,
-            finalPrice: summary.finalPrice,
-            allocatedAdmins: summary.allocatedAdmins,
-            allocatedStaff: summary.allocatedStaff,
-            extraAdminsPurchased: summary.extraAdminsPurchased,
-            extraStaffPurchased: summary.extraStaffPurchased,
-            ...paymentMeta,
-        },
-    });
-
     return subscription;
 };
 
@@ -1090,17 +1068,6 @@ router.post("/company/account/disable", verifyToken, async (req, res) => {
             // ignore socket fanout failures
         }
 
-        await SystemLog.create({
-            userId: req.userId,
-            action: "COMPANY_SELF_DISABLED",
-            category: "admin_action",
-            ip: req.ip,
-            metadata: {
-                companyId: String(companyId),
-                status: "Suspended",
-            },
-        });
-
         return res.json({
             success: true,
             message: "Company account disabled successfully",
@@ -1200,16 +1167,7 @@ router.delete("/company/account", verifyToken, async (req, res) => {
             SupportTicket.deleteMany({ companyId }),
             Target.deleteMany({ company_id: companyId }),
             WhatsAppConfig.deleteMany({ companyId }),
-            SystemLog.deleteMany({
-                $or: [
-                    { userId: { $in: companyUserIds } },
-                    { "metadata.companyId": String(companyId) },
-                    { "metadata.companyId": companyId },
-                ],
-            }),
         ]);
-
-        await User.deleteMany({ company_id: companyId });
         await Company.deleteOne({ _id: companyId });
 
         companyUserIds.forEach((userId) => clearUserCache(userId));
@@ -2240,14 +2198,6 @@ router.post("/billing/razorpay/webhook", async (req, res) => {
             );
         }
 
-        await SystemLog.create({
-            userId: null,
-            action: "RAZORPAY_WEBHOOK",
-            category: "billing",
-            ip: req.ip,
-            metadata: { event, orderId, payload },
-        });
-
         return res.json({ success: true });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
@@ -2382,21 +2332,6 @@ router.post("/billing/enterprise-contact", verifyToken, async (req, res) => {
             company = "",
             requirements = "",
         } = req.body || {};
-
-        await SystemLog.create({
-            userId: req.userId,
-            action: "ENTERPRISE_CONTACT_REQUEST",
-            category: "billing",
-            ip: req.ip,
-            metadata: {
-                name,
-                email,
-                phone,
-                company,
-                requirements,
-                companyId: req.user?.company_id || null,
-            },
-        });
 
         return res.json({
             success: true,
