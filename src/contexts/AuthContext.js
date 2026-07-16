@@ -6,7 +6,7 @@ import {
     useEffect,
     useState,
 } from "react";
-import { AppState, DeviceEventEmitter } from "react-native";
+import { AppState, DeviceEventEmitter, Alert } from "react-native";
 import notificationService, {
     showBillingPlanNotification,
     getDevicePushToken,
@@ -201,6 +201,15 @@ export const AuthProvider = ({ children }) => {
                 JSON.stringify(nextInfo),
             );
 
+            const isStaff = String(user?.role || "").toLowerCase() === "staff";
+            if (isStaff) {
+                setBillingAlert(null);
+                setBillingPrompt((prev) =>
+                    prev.visible ? { ...prev, visible: false } : prev,
+                );
+                return;
+            }
+
             const nextAlert = getBillingAlertState(nextInfo);
             if (!nextAlert) {
                 setBillingAlert(null);
@@ -268,7 +277,7 @@ export const AuthProvider = ({ children }) => {
                 });
             }
         },
-        [billingPrompt?.alertKey, billingPrompt?.visible],
+        [billingPrompt?.alertKey, billingPrompt?.visible, user],
     );
 
     const refreshBillingPlan = useCallback(async (isStartup = false) => {
@@ -507,11 +516,19 @@ export const AuthProvider = ({ children }) => {
             const text = String(message || "");
             if (code === "FEATURE_DISABLED") {
                 await refreshBillingPlan().catch(() => { });
-                setBillingPrompt({
-                    visible: true,
-                    title: "Upgrade required",
-                    message: text || "This feature is not available in your current plan.",
-                });
+                const isStaff = String(user?.role || "").toLowerCase() === "staff";
+                if (isStaff) {
+                    Alert.alert(
+                        "Access Restricted",
+                        "This feature is not enabled for your company. Please contact your administrator."
+                    );
+                } else {
+                    setBillingPrompt({
+                        visible: true,
+                        title: "Upgrade required",
+                        message: text || "This feature is not available in your current plan.",
+                    });
+                }
                 return;
             }
             if (
@@ -933,6 +950,14 @@ export const AuthProvider = ({ children }) => {
     const showUpgradePrompt = (
         message = "Please upgrade your current plan to continue.",
     ) => {
+        const isStaff = String(user?.role || "").toLowerCase() === "staff";
+        if (isStaff) {
+            Alert.alert(
+                "Feature locked",
+                "This feature is not enabled for your company. Please contact your administrator."
+            );
+            return;
+        }
         setBillingPrompt({
             visible: true,
             title: "Upgrade required",

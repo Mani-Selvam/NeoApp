@@ -140,3 +140,24 @@ export const deleteStaff = async (id) => {
         throw error;
     }
 };
+
+// ADMIN STAFF TOP UP PAYMENT
+export const createAdminStaffOrder = async (payload) => {
+    try {
+        const client = await getApiClient();
+        const response = await client.post("/admin-staff-payment/razorpay/order", payload);
+        return response.data;
+    } catch (error) {
+        throw error;
+    }
+};
+
+export const verifyAdminStaffPayment = async (payload) => {
+    try {
+        const client = await getApiClient();
+        const response = await client.post("/admin-staff-payment/razorpay/verify", payload);
+        return response.data;
+    } catch (error) {
+        throw error;
+    }
+};

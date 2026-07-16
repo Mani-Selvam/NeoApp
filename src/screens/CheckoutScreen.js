@@ -11,6 +11,7 @@ import {
     TextInput,
     TouchableOpacity,
     View,
+    Linking,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
@@ -680,32 +681,66 @@ export default function CheckoutScreen({ navigation, route }) {
                     </Text>
                 </View>
 
-                <TouchableOpacity
-                    style={[S.payBtn, paying && S.btnDisabled]}
-                    disabled={paying}
-                    onPress={onProceedPayment}
-                    activeOpacity={0.9}>
-                    <LinearGradient
-                        colors={[C.text, "#18244A"]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={S.payGrad}>
-                        {paying ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                            <>
-                                <Text style={S.payText}>
-                                    Proceed to Payment
-                                </Text>
-                                <Ionicons
-                                    name="arrow-forward"
-                                    size={18}
-                                    color="#fff"
-                                />
-                            </>
-                        )}
-                    </LinearGradient>
-                </TouchableOpacity>
+                {Platform.OS === 'ios' ? (
+                    <TouchableOpacity
+                        style={[S.payBtn, { backgroundColor: C.primary }]}
+                        activeOpacity={0.9}
+                        onPress={() => {
+                            Alert.alert(
+                                "Redirecting to Website",
+                                "You will be redirected to our website to complete your purchase. Would you like to proceed?",
+                                [
+                                    { text: "Cancel", style: "cancel" },
+                                    { 
+                                        text: "Open", 
+                                        onPress: () => Linking.openURL('http://neophrondev.in/Neogroww_Website')
+                                    }
+                                ]
+                            );
+                        }}>
+                        <LinearGradient
+                            colors={[C.text, "#18244A"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={S.payGrad}>
+                            <Text style={S.payText}>
+                                Go to Website to Checkout
+                            </Text>
+                            <Ionicons
+                                name="open-outline"
+                                size={18}
+                                color="#fff"
+                            />
+                        </LinearGradient>
+                    </TouchableOpacity>
+                ) : (
+                    <TouchableOpacity
+                        style={[S.payBtn, paying && S.btnDisabled]}
+                        disabled={paying}
+                        onPress={onProceedPayment}
+                        activeOpacity={0.9}>
+                        <LinearGradient
+                            colors={[C.text, "#18244A"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={S.payGrad}>
+                            {paying ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <>
+                                    <Text style={S.payText}>
+                                        Proceed to Payment
+                                    </Text>
+                                    <Ionicons
+                                        name="arrow-forward"
+                                        size={18}
+                                        color="#fff"
+                                    />
+                                </>
+                            )}
+                        </LinearGradient>
+                    </TouchableOpacity>
+                )}
             </View>
         </SafeAreaView>
     );

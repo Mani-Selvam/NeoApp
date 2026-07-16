@@ -76,7 +76,7 @@ export default function TrendingIntroScreen({ navigation }) {
     ringLoop.start();
 
     // --- C. Scanning Beam Animation (One time) ---
-    Animated.sequence([
+    const scanAnim = Animated.sequence([
       Animated.timing(scanLineOpacity, {
         toValue: 1,
         duration: 500,
@@ -93,11 +93,13 @@ export default function TrendingIntroScreen({ navigation }) {
         duration: 200,
         useNativeDriver: true,
       }),
-    ]).start();
+    ]);
+    scanAnim.start();
 
     // --- D. Text Entrance (Staggered) ---
-    setTimeout(() => {
-      Animated.parallel([
+    let titleAnim, taglineAnim;
+    const t1 = setTimeout(() => {
+      titleAnim = Animated.parallel([
         Animated.timing(titleY, {
           toValue: 0,
           duration: 800,
@@ -108,11 +110,12 @@ export default function TrendingIntroScreen({ navigation }) {
           duration: 800,
           useNativeDriver: true,
         }),
-      ]).start();
+      ]);
+      titleAnim.start();
     }, 600);
 
-    setTimeout(() => {
-      Animated.parallel([
+    const t2 = setTimeout(() => {
+      taglineAnim = Animated.parallel([
         Animated.timing(taglineY, {
           toValue: 0,
           duration: 800,
@@ -123,7 +126,8 @@ export default function TrendingIntroScreen({ navigation }) {
           duration: 800,
           useNativeDriver: true,
         }),
-      ]).start();
+      ]);
+      taglineAnim.start();
     }, 900);
 
     // --- E. Navigation ---
@@ -157,8 +161,13 @@ export default function TrendingIntroScreen({ navigation }) {
 
     return () => {
       clearTimeout(timer);
+      clearTimeout(t1);
+      clearTimeout(t2);
       breatheLoop.stop();
       ringLoop.stop();
+      scanAnim.stop();
+      if (titleAnim) titleAnim.stop();
+      if (taglineAnim) taglineAnim.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

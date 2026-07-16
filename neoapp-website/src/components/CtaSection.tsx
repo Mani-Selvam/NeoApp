@@ -9,7 +9,7 @@ interface CtaSectionProps {
 export function CtaSection({ onOpenModal }: CtaSectionProps) {
   return (
     <section className="py-24 relative overflow-hidden">
-      <div className="absolute inset-0 bg-primary dark:bg-primary/20"></div>
+      <div className="absolute inset-0 bg-gradient-to-br from-indigo-900 via-blue-800 to-blue-600 dark:from-indigo-950 dark:via-blue-900 dark:to-slate-900"></div>
       <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
       
       <div className="container mx-auto px-4 md:px-6 relative z-10">
@@ -17,7 +17,7 @@ export function CtaSection({ onOpenModal }: CtaSectionProps) {
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          className="max-w-4xl mx-auto text-center text-primary-foreground dark:text-foreground glass-card bg-black/10 dark:bg-card p-12 md:p-20 rounded-3xl border border-white/20 dark:border-border"
+          className="max-w-4xl mx-auto text-center text-white bg-black/30 dark:bg-black/40 backdrop-blur-xl p-12 md:p-20 rounded-3xl border border-white/20 dark:border-white/10 shadow-2xl"
         >
           <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-6 font-display">
             Ready to upgrade your operations?

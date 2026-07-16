@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "wouter";
 import { BarChart3 } from "lucide-react";
 
 export function Footer() {
@@ -39,12 +40,13 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold mb-4">Company</h4>
+            <h4 className="font-semibold mb-4 text-foreground">Company</h4>
             <ul className="space-y-3 text-sm text-muted-foreground">
-              <li><a href="#" className="hover:text-primary transition-colors">About</a></li>
+              <li><Link href="/about" className="hover:text-primary transition-colors">About</Link></li>
               <li><a href="#" className="hover:text-primary transition-colors">Contact</a></li>
-              <li><a href="#" className="hover:text-primary transition-colors">Privacy Policy</a></li>
-              <li><a href="#" className="hover:text-primary transition-colors">Terms of Service</a></li>
+              <li><Link href="/privacy" className="hover:text-primary transition-colors">Privacy Policy</Link></li>
+              <li><Link href="/deleteaccount" className="hover:text-primary transition-colors">Delete Account</Link></li>
+              <li><Link href="/terms" className="hover:text-primary transition-colors">Terms of Service</Link></li>
             </ul>
           </div>
         </div>

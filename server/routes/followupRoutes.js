@@ -119,7 +119,16 @@ const sendNotificationToUser = async (
     const pushToken =
         typeof userOrToken === "string" ? userOrToken : userOrToken.pushToken;
     if (isExpoPushToken(pushToken)) {
-        await sendExpoNotification(pushToken, message, priority, 3, channelId);
+        let resolvedUserId = userId;
+        if (!resolvedUserId) {
+            const userWithToken = await User.findOne({ pushToken }).select("_id").lean();
+            resolvedUserId = userWithToken?._id;
+        }
+        const badgeCount = resolvedUserId
+            ? await firebaseNotificationService.getUnreadBadgeCount(resolvedUserId)
+            : undefined;
+
+        await sendExpoNotification(pushToken, { ...message, badge: badgeCount }, priority, 3, channelId);
         return true;
     }
 
@@ -1728,6 +1737,18 @@ router.get("/debug-push-tokens", verifyToken, async (req, res) => {
         });
     } catch (error) {
         console.error("Debug push tokens error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// GET latest aggregated badge count for the user
+router.get("/badge-count", verifyToken, async (req, res) => {
+    try {
+        const userId = req.userId;
+        const badgeCount = await firebaseNotificationService.getUnreadBadgeCount(userId);
+        res.json({ success: true, badgeCount });
+    } catch (error) {
+        console.error("Get badge count error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 });

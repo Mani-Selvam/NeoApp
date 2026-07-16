@@ -986,16 +986,23 @@ export default function HomeScreen({ navigation }) {
     const voiceSpinAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
-        Animated.loop(
+        const pulseLoop = Animated.loop(
             Animated.sequence([
                 Animated.timing(voicePulseAnim, { toValue: 1, duration: 2500, useNativeDriver: true }),
                 Animated.timing(voicePulseAnim, { toValue: 0, duration: 0, useNativeDriver: true }),
             ])
-        ).start();
+        );
+        pulseLoop.start();
 
-        Animated.loop(
+        const spinLoop = Animated.loop(
             Animated.timing(voiceSpinAnim, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true })
-        ).start();
+        );
+        spinLoop.start();
+
+        return () => {
+            pulseLoop.stop();
+            spinLoop.stop();
+        };
     }, []);
 
     const [loading, setLoading] = useState(true);
@@ -1136,6 +1143,7 @@ export default function HomeScreen({ navigation }) {
                 conv: data.counts?.converted || 0,
                 upcomingFollowups: Number(data.upcomingFollowUps || 0),
                 upcomingList: Array.isArray(data.upcomingList) ? data.upcomingList : [],
+                unreadTeamMessagesCount: Number(data.unreadTeamMessagesCount || 0),
             });
             setTodayTasks(data.todayList || []);
             setMissedTasks(data.missedList || []);
@@ -1222,6 +1230,34 @@ export default function HomeScreen({ navigation }) {
             swipeEnabled: false,
         });
     }, [navigation]);
+
+    useEffect(() => {
+        const updateBadge = async () => {
+            try {
+                if (Platform.OS === "web") return;
+                const todayVal = Math.max(
+                    Number(stats.todayFollowup || 0),
+                    Number(todayTasks.length || 0),
+                );
+                const missedVal = Number(stats.missedFollowup || 0);
+                const chatVal = Number(stats.unreadTeamMessagesCount || 0);
+                const total = todayVal + missedVal + chatVal;
+
+                const Notifications = require("expo-notifications");
+                await Notifications.setBadgeCountAsync(total);
+                console.log(`[Badge] Synchronized app badge count to: ${total}`);
+            } catch (err) {
+                console.warn("[Badge] Failed to set badge count:", err?.message);
+            }
+        };
+        updateBadge();
+    }, [
+        stats.todayFollowup,
+        stats.missedFollowup,
+        stats.unreadTeamMessagesCount,
+        todayTasks.length,
+        missedTasks.length,
+    ]);
 
     useFocusEffect(
         useCallback(() => {
@@ -1452,10 +1488,10 @@ export default function HomeScreen({ navigation }) {
         const todayIso = toLocalIsoDate(new Date());
         const tomorrowIso = addDaysIso(todayIso, 1);
         const yesterdayIso = addDaysIso(todayIso, -1);
-        
+
         let dayLabel = isMissed ? "MISSED" : "UPCOMING";
         let dayColor = isMissed ? C.rose : C.amber;
-        
+
         if (!isMissed) {
             if (item.date === todayIso) {
                 dayLabel = "TODAY";
@@ -1474,12 +1510,12 @@ export default function HomeScreen({ navigation }) {
                 dayLabel = itemDate.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short" }).toUpperCase();
             }
         }
-        
+
         const shortDate = fmtShortDate(item.date).toUpperCase();
         const timeLabel = item.time || "Any time";
-        
+
         const initials = (item.name || "").substring(0, 2).toUpperCase();
-        
+
         const actType = String(item?.activityType || item?.type || "").trim().toLowerCase();
         let iconName = "call-outline";
         if (actType.includes("whatsapp")) iconName = "logo-whatsapp";
@@ -1525,20 +1561,20 @@ export default function HomeScreen({ navigation }) {
                     borderRadius: 16,
                     padding: 14,
                 }}>
-                
+
                 <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
                     <Text style={{ fontSize: 10, fontWeight: "900", color: dayColor, letterSpacing: 0.5 }}>{dayLabel}</Text>
                     <Text style={{ fontSize: 10, fontWeight: "600", color: C.textDim }}>{shortDate}</Text>
                 </View>
-                
+
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 10 }}>
                     <Ionicons name="time-outline" size={14} color={dayColor} />
                     <Text style={{ fontSize: 12, fontWeight: "700", color: dayColor }}>{timeLabel}</Text>
                 </View>
-                
+
                 <Text style={{ fontSize: 15, fontWeight: "800", color: C.ink, marginBottom: 4 }} numberOfLines={1}>{item.name}</Text>
                 <Text style={{ fontSize: 12, fontWeight: "500", color: C.textDim, marginBottom: 16 }} numberOfLines={1}>{item.remarks || item.product || "Follow-up"}</Text>
-                
+
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                     <View style={{
                         width: 32, height: 32, borderRadius: 16, backgroundColor: dayColor + "20",
@@ -1683,7 +1719,7 @@ export default function HomeScreen({ navigation }) {
                             • {rangeLabel}
                         </Text>
                     </TouchableOpacity>
-                    <TouchableOpacity
+                    {/* <TouchableOpacity
                         style={[S.menuBtn, { marginLeft: 6, marginRight: 6, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border }]}
                         activeOpacity={0.85}
                         onPress={() => setShowVoice(true)}>
@@ -1692,7 +1728,7 @@ export default function HomeScreen({ navigation }) {
                             size={20}
                             color={C.textSub}
                         />
-                    </TouchableOpacity>
+                    </TouchableOpacity> */}
                     <TouchableOpacity
                         style={S.avatarBtn}
                         activeOpacity={0.85}
@@ -2296,7 +2332,7 @@ export default function HomeScreen({ navigation }) {
                                 </View>
                             </View>
                         </MotiView>
-                        
+
                         {/* UPCOMING FOLLOW-UPS */}
                         <MotiView
                             from={skipAnim ? { opacity: 1 } : { opacity: 0, translateX: 14 }}
@@ -2324,7 +2360,7 @@ export default function HomeScreen({ navigation }) {
                                     </View>
                                 }
                             />
-                            
+
                             <View style={[S.activityCard, { padding: 12, paddingBottom: 16 }]}>
                                 {(!stats.upcomingList || stats.upcomingList.length === 0) ? (
                                     <View style={{ alignItems: 'center', padding: 20 }}>
@@ -2338,8 +2374,8 @@ export default function HomeScreen({ navigation }) {
                                         {stats.upcomingList.map((item, idx) => renderUpcomingCard(item, idx, false))}
                                     </ScrollView>
                                 )}
-                                
-                                <TouchableOpacity 
+
+                                <TouchableOpacity
                                     style={{ marginTop: 16, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingRight: 4 }}
                                     activeOpacity={0.8}
                                     onPress={() => setUpcomingListOpen(true)}>
@@ -2348,7 +2384,7 @@ export default function HomeScreen({ navigation }) {
                                 </TouchableOpacity>
                             </View>
                         </MotiView>
-                        
+
                         <SH
                             title="Revenue & Conversion"
                             sub={`Filtered: ${rangeType} • ${rangeLabel}`}

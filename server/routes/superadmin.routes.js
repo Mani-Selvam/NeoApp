@@ -14,6 +14,7 @@ router.get("/dashboard", superadminController.getDashboard);
 
 router.get("/companies", superadminController.getCompanies);
 router.patch("/companies/:companyId/status", superadminController.updateCompanyStatus);
+router.patch("/companies/:companyId/env-confirmation", superadminController.updateCompanyEnvConfirmation);
 router.delete("/companies/:companyId", superadminController.deleteCompany);
 router.get("/companies/:companyId/effective-plan", superadminController.getEffectivePlanByCompany);
 
@@ -35,6 +36,7 @@ router.get("/settings/security-policy", superadminController.getSecurityPolicySe
 router.patch("/settings/security-policy", superadminController.updateSecurityPolicySettings);
 router.get("/settings/razorpay", superadminController.getRazorpaySettings);
 router.patch("/settings/razorpay", superadminController.updateRazorpaySettings);
+router.put("/settings/change-password", superadminController.changeSuperadminPassword);
 
 router.get("/coupons", superadminController.getCoupons);
 router.post("/coupons", superadminController.createCoupon);
@@ -57,5 +59,7 @@ router.get("/website-leads", superadminController.getWebsiteLeads);
 
 router.get("/support/tickets", superadminController.getSupportTickets);
 router.post("/support/tickets/:ticketId/respond", superadminController.respondSupportTicket);
+
+router.get("/admin-staff-payments", superadminController.getAdminStaffPayments);
 
 module.exports = router;

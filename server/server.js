@@ -251,6 +251,7 @@ app.use("/api/superadmin", require("./routes/superadmin.routes"));
 app.use("/api/assistant", require("./routes/assistantRoutes"));
 app.use("/api/lead", require("./routes/leadRoutes"));
 app.use("/api/ai-payments", require("./routes/aiPaymentRoutes"));
+app.use("/api/admin-staff-payment", require("./routes/adminStaffPaymentRoutes"));
 
 app.get("/api/config", (req, res) => {
     res.json({
@@ -272,12 +273,14 @@ const startServer = async () => {
     const PORT = process.env.PORT || process.env.API_PORT || 5000;
 
     try {
-        await connectDB();
+        const isConnected = await connectDB();
 
-        const mongoose = require("mongoose");
-        const warmStart = Date.now();
-        await mongoose.connection.db.admin().ping();
-        console.log(`⚡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
+        if (isConnected) {
+            const mongoose = require("mongoose");
+            const warmStart = Date.now();
+            await mongoose.connection.db.admin().ping();
+            console.log(`⚡ MongoDB warm-up ping: ${Date.now() - warmStart}ms`);
+        }
 
         // Initialize reminder scheduler for background notifications
         try {

@@ -1,5 +1,7 @@
 import getApiClient from "./apiClient";
+import { buildCacheKey, getSWR } from "./appCache";
 
+const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_DASHBOARD_MS || 60000);
 const shouldSuppressAuthLog = (error) => {
     const status = error?.response?.status;
     const code = error?.response?.data?.code;
@@ -20,10 +22,25 @@ export const getDashboardSummary = async (params = {}) => {
         if (nextParams.tzOffsetMinutes == null) {
             nextParams.tzOffsetMinutes = new Date().getTimezoneOffset();
         }
-        const response = await client.get("/dashboard/summary", {
-            params: nextParams,
+        const authKey = String(client?.defaults?.headers?.Authorization || "").trim() || "no-auth";
+        const key = buildCacheKey(
+            "dashboard:summary:v1",
+            `${authKey}|${JSON.stringify(nextParams)}`,
+        );
+
+        const fetcher = async () => {
+            const response = await client.get("/dashboard/summary", {
+                params: nextParams,
+            });
+            return response.data;
+        };
+
+        const force = nextParams?.force === true;
+
+        return await getSWR(key, fetcher, DEFAULT_TTL_MS, {
+            tags: ["dashboard"],
+            force,
         });
-        return response.data;
     } catch (error) {
         if (!shouldSuppressAuthLog(error)) {
             console.error(

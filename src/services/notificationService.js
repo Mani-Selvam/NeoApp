@@ -1,11 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
-import * as IntentLauncher from "expo-intent-launcher";
 import * as Notifications from "expo-notifications";
 import * as Sharing from "expo-sharing";
 import * as Speech from "expo-speech";
 import { AppState, Platform } from "react-native";
+const IntentLauncher = Platform.OS === "android" ? require("expo-intent-launcher") : null;
 import { confirmPermissionRequest } from "../utils/appFeedback";
 import * as followupService from "./followupService";
 import firebaseNotificationService from "./firebaseNotificationService";
@@ -220,8 +220,8 @@ const scheduleForegroundFollowupAudioFallback = (data = {}, expectedMs) => {
             if (!shouldPlayFollowupAudioNow(data)) return;
             Promise.resolve(
                 showForegroundFollowupVisualNotification(data),
-            ).catch(() => {});
-            Promise.resolve(speakForNotificationData(data)).catch(() => {});
+            ).catch(() => { });
+            Promise.resolve(speakForNotificationData(data)).catch(() => { });
         }, delay);
         _foregroundFollowupAudioTimers.set(timerKey, timer);
     } catch {
@@ -240,10 +240,10 @@ const shouldPlayFollowupAudioNow = (data = {}) => {
         type === "followup-soon"
             ? FOLLOWUP_SOON_DUPLICATE_WINDOW_MS
             : type === "followup-due"
-              ? FOLLOWUP_DUE_DUPLICATE_WINDOW_MS
-              : type === "followup-missed"
-                ? FOLLOWUP_MISSED_DUPLICATE_WINDOW_MS
-                : FOLLOWUP_AUDIO_DUPLICATE_WINDOW_MS;
+                ? FOLLOWUP_DUE_DUPLICATE_WINDOW_MS
+                : type === "followup-missed"
+                    ? FOLLOWUP_MISSED_DUPLICATE_WINDOW_MS
+                    : FOLLOWUP_AUDIO_DUPLICATE_WINDOW_MS;
     const now = Date.now();
     const last = Number(_recentFollowupAudioKeys.get(key) ?? 0);
     if (last > 0 && now - last < duplicateWindowMs) return false;
@@ -432,7 +432,7 @@ const scheduleCorrectedFollowupNotification = async (
 
         const androidChannelId =
             typeof content?.android?.channelId === "string" &&
-            content.android.channelId
+                content.android.channelId
                 ? content.android.channelId
                 : resolveChannelId("followups");
 
@@ -563,7 +563,7 @@ const isEnquiryMuted = (muteMap, { enqId, enqNo, whenMs } = {}) => {
             const next = { ...(muteMap || {}) };
             delete next[key];
             AsyncStorage.setItem(ENQUIRY_MUTE_KEY, JSON.stringify(next)).catch(
-                () => {},
+                () => { },
             );
         } catch {
             /* ignore */
@@ -1087,7 +1087,7 @@ if (Platform.OS !== "web") {
                 !isForegroundFallbackVisual &&
                 Number.isFinite(deltaMsFromExpected) &&
                 Number(deltaMsFromExpected) >
-                    FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS;
+                FOLLOWUP_LATE_RECEIVED_AUDIO_SKIP_MS;
 
             // Foreground fallback already shown — skip entirely
             if (
@@ -1136,7 +1136,7 @@ if (Platform.OS !== "web") {
                         notification,
                         Number(expectedMs),
                     ),
-                ).catch(() => {});
+                ).catch(() => { });
                 console.warn(
                     `[NotifSvc] Early follow-up suppressed (${data?.type}) for ${data?.when}`,
                 );
@@ -1602,7 +1602,7 @@ const playAudioModule = async (moduleRef, retries = 3) => {
                 if (!status?.isLoaded) return;
                 if (status.didJustFinish || status.error) {
                     _isPlayingAudio = false;
-                    sound.unloadAsync().catch(() => {});
+                    sound.unloadAsync().catch(() => { });
                     if (activeFollowupSound === sound)
                         activeFollowupSound = null;
                 }
@@ -1768,9 +1768,9 @@ const selectChannelForNotification = async (
         };
         const statusKey =
             statusMap[
-                String(status ?? "")
-                    .trim()
-                    .toLowerCase()
+            String(status ?? "")
+                .trim()
+                .toLowerCase()
             ] ?? "soon";
 
         if (typeKey !== "followup") {
@@ -1993,25 +1993,12 @@ export const initializeNotifications = async (forcePrompt = false) => {
                     return false;
                 }
 
-                if (!hasExplained) {
-                    const confirmed = await confirmPermissionRequest({
-                        title: "Allow notifications?",
-                        message:
-                            "We use notifications for follow-up reminders and important app alerts. You can change this later in device settings.",
-                        confirmText: "Allow",
-                    });
-                    await AsyncStorage.setItem(
-                        NOTIFICATION_PERMISSION_EXPLAINED_KEY,
-                        "true",
-                    );
-                    if (!confirmed) return false;
-                } else {
-                    // Mark as explained anyway just to be safe
-                    await AsyncStorage.setItem(
-                        NOTIFICATION_PERMISSION_EXPLAINED_KEY,
-                        "true",
-                    );
-                }
+                // Removed redundant custom "Allow notifications?" alert to reduce clicks.
+                // The OS will automatically show its native prompt.
+                await AsyncStorage.setItem(
+                    NOTIFICATION_PERMISSION_EXPLAINED_KEY,
+                    "true",
+                );
 
                 const requestResult = await Notifications.requestPermissionsAsync({
                     ios: {
@@ -2410,8 +2397,8 @@ export const showTeamChatNotification = async (messageData = {}) => {
         if (!isNotificationSupported()) return null;
         const senderName = String(
             messageData?.senderId?.name ??
-                messageData?.senderName ??
-                "Team member",
+            messageData?.senderName ??
+            "Team member",
         ).trim();
         const messageType = String(messageData?.messageType ?? "text")
             .trim()
@@ -2446,8 +2433,8 @@ export const showTeamChatNotification = async (messageData = {}) => {
                 ),
                 receiverId: String(
                     messageData?.receiverId?._id ??
-                        messageData?.receiverId ??
-                        "",
+                    messageData?.receiverId ??
+                    "",
                 ),
                 messageId: String(messageData?._id ?? ""),
                 taskId: String(
@@ -2687,7 +2674,7 @@ export const setupNotificationListener = (callback) => {
         console.warn(
             "[NotifSvc] Response listener already registered, skipping",
         );
-        return { remove: () => {} };
+        return { remove: () => { } };
     }
 
     _responseListenerRegistered = true;
@@ -2700,20 +2687,33 @@ export const setupNotificationListener = (callback) => {
 };
 
 export const setupForegroundNotificationListener = (callback) => {
-    if (!isNotificationSupported()) return { remove: () => {} };
+    if (!isNotificationSupported()) return { remove: () => { } };
 
     // FIX: Prevent duplicate listener registration
     if (_foregroundListenerRegistered) {
         console.warn(
             "[NotifSvc] Foreground listener already registered, skipping",
         );
-        return { remove: () => {} };
+        return { remove: () => { } };
     }
 
     _foregroundListenerRegistered = true;
 
     return Notifications.addNotificationReceivedListener((notification) => {
         const data = notification.request.content.data;
+
+        // Force set badge count in foreground if present in payload data
+        const badgeFromPayload = data?.badge;
+        if (badgeFromPayload !== undefined && badgeFromPayload !== null) {
+            try {
+                const count = Math.max(0, Math.round(Number(badgeFromPayload)));
+                Notifications.setBadgeCountAsync(count);
+                console.log(`[NotifSvc] Foreground updated app badge count to ${count}`);
+            } catch (badgeErr) {
+                console.warn("[NotifSvc] Failed to update badge count in foreground:", badgeErr.message);
+            }
+        }
+
         const type = String(data?.type ?? "")
             .trim()
             .toLowerCase();
@@ -3939,7 +3939,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
     // FIX: Prevent duplicate listener registration
     if (_globalListenerRegistered) {
         console.warn("[NotifSvc] Global listener already registered, skipping");
-        return { remove: () => {} };
+        return { remove: () => { } };
     }
 
     _globalListenerRegistered = true;
@@ -3962,13 +3962,13 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                     enqNo: data?.enqNo,
                     whenMs,
                 }),
-            ).catch(() => {});
+            ).catch(() => { });
             Promise.resolve(
                 cancelNotificationsForEnquiry?.({
                     enqId: data?.enqId,
                     enqNo: data?.enqNo,
                 }),
-            ).catch(() => {});
+            ).catch(() => { });
             return;
         }
 
@@ -3976,7 +3976,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
             actionId === Notifications.DEFAULT_ACTION_IDENTIFIER ||
             actionId === "expo-notifications-default";
         if (isDefaultAction)
-            Promise.resolve(speakForNotificationData(data)).catch(() => {});
+            Promise.resolve(speakForNotificationData(data)).catch(() => { });
         if (!navigationRef.isReady()) return;
 
         if (
@@ -3988,7 +3988,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
             data.type === "followup-missed"
         ) {
             if (isDefaultAction)
-                acknowledgeHourlyFollowUpReminders().catch(() => {});
+                acknowledgeHourlyFollowUpReminders().catch(() => { });
             const enquiry = {
                 enqId: data?.enqId ?? null,
                 _id: data?.enqId ?? null,
@@ -4002,15 +4002,15 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                 params:
                     data.type === "followup-missed"
                         ? {
-                              openComposer: true,
-                              composerToken: `${Date.now()}`,
-                              enquiry,
-                              focusTab: "Missed",
-                              openMissedModal: true,
-                              autoOpenForm: true,
-                          }
+                            openComposer: true,
+                            composerToken: `${Date.now()}`,
+                            enquiry,
+                            focusTab: "Missed",
+                            openMissedModal: true,
+                            autoOpenForm: true,
+                        }
                         : data.type === "followup-due"
-                          ? {
+                            ? {
                                 openComposer: true,
                                 composerToken: `${Date.now()}`,
                                 enquiry,
@@ -4018,7 +4018,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                                 focusSearch: data?.name ?? "",
                                 autoOpenForm: true,
                             }
-                          : {
+                            : {
                                 focusTab: "Today",
                                 focusSearch: data?.name ?? "",
                             },
@@ -4030,7 +4030,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
                         enqId: data?.enqId,
                         enqNo: data?.enqNo,
                     }),
-                ).catch(() => {});
+                ).catch(() => { });
                 return;
             }
             const enquiry = {
@@ -4067,7 +4067,7 @@ export const setupGlobalNotificationListener = (navigationRef) => {
         } else if (data.type === "billing-alert") {
             navigationRef.navigate("PricingScreen");
         } else if (data.type === "report-csv-ready") {
-            Promise.resolve(openCsvFileUri(data?.uri)).catch(() => {});
+            Promise.resolve(openCsvFileUri(data?.uri)).catch(() => { });
         }
     });
 };
@@ -4162,7 +4162,7 @@ export const cancelNotificationsForEnquiry = async ({ enqId, enqNo } = {}) => {
 
         Promise.resolve(
             cancelNextFollowUpPromptForEnquiry({ enqId, enqNo }),
-        ).catch(() => {});
+        ).catch(() => { });
 
         const pending = await getPendingNotifications();
         const matches = pending.filter((notif) => {
@@ -4569,11 +4569,11 @@ export const testNotificationChannels = async () => {
             data: { type: "debug-test" },
             ...(Platform.OS === "android"
                 ? {
-                      android: {
-                          channelId: CHANNEL_IDS.default,
-                          priority: "max",
-                      },
-                  }
+                    android: {
+                        channelId: CHANNEL_IDS.default,
+                        priority: "max",
+                    },
+                }
                 : { ios: { sound: true, interruptionLevel: "active" } }),
         };
 

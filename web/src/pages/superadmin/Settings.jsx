@@ -55,7 +55,7 @@ export default function Settings() {
         const ws = res?.workspace || {};
         if (!mounted) return;
         setWorkspaceName(String(ws?.name || "NeoApp Platform"));
-        setSupportEmail(String(ws?.supportEmail || "support@neoapp.com"));
+        setSupportEmail(String(ws?.supportEmail || "info@neophrontech.com"));
         setDefaultTimezone(String(ws?.defaultTimezone || "Asia/Kolkata"));
       } catch (e) {
         if (mounted) setWorkspaceError(e.message || "Failed to load workspace settings");
@@ -306,9 +306,36 @@ export default function Settings() {
     } catch (e) {
       setWorkspaceError(e.message || "Failed to save workspace settings");
     } finally {
+      document.body.style.overflow = ""; // ensure it's not locked if settings has some effects
       setWorkspaceLoading(false);
     }
   };
+
+  const handleBottomSave = () => {
+    // Clear previous saved/error flags first
+    setWorkspaceSaved(false);
+    setSecuritySaved(false);
+    setRatesSaved(false);
+    setRzpSaved(false);
+    setWorkspaceError("");
+    setSecurityError("");
+    setRatesError("");
+    setRzpError("");
+
+    if (activeTab === "general") {
+      saveWorkspace();
+    } else if (activeTab === "security") {
+      saveSecurityPolicy();
+    } else if (activeTab === "billing") {
+      saveRates();
+    } else if (activeTab === "integrations") {
+      saveRazorpay();
+    }
+  };
+
+  const isSaving = workspaceLoading || securityLoading || ratesLoading || rzpLoading;
+  const isSaved = workspaceSaved || securitySaved || ratesSaved || rzpSaved;
+  const generalError = workspaceError || securityError || ratesError || rzpError;
 
   return (
     <div className="admin-shell">
@@ -475,17 +502,17 @@ export default function Settings() {
                 </div>
               </article>
 
-	              <article className="settings-card settings-panel">
-	                <h3>2FA (This Account)</h3>
-	                <p style={{ marginTop: 6, color: "var(--text-soft)", fontSize: 12 }}>
-	                  Status: <strong>{twoFaEnabled ? "Enabled" : "Disabled"}</strong>
-	                </p>
-	                <p style={{ marginTop: 4, color: "var(--text-soft)", fontSize: 12 }}>
-	                  Secret: <strong>{twoFaHasSecret ? "Set" : "Not set"}</strong>
-	                </p>
-	                <div className="settings-fields" style={{ marginTop: 12 }}>
-	                  <label>
-	                    OTP Code
+              <article className="settings-card settings-panel">
+                <h3>2FA (This Account)</h3>
+                <p style={{ marginTop: 6, color: "var(--text-soft)", fontSize: 12 }}>
+                  Status: <strong>{twoFaEnabled ? "Enabled" : "Disabled"}</strong>
+                </p>
+                <p style={{ marginTop: 4, color: "var(--text-soft)", fontSize: 12 }}>
+                  Secret: <strong>{twoFaHasSecret ? "Set" : "Not set"}</strong>
+                </p>
+                <div className="settings-fields" style={{ marginTop: 12 }}>
+                  <label>
+                    OTP Code
                     <input
                       type="text"
                       inputMode="numeric"
@@ -512,19 +539,19 @@ export default function Settings() {
                       Secret (Base32): <code>{twoFaSecret}</code>
                     </div>
                   ) : null}
-	                  {twoFaOtpAuthUrl ? (
-	                    <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-soft)" }}>
-	                      otpauth URL: <code style={{ wordBreak: "break-all" }}>{twoFaOtpAuthUrl}</code>
-	                    </div>
-	                  ) : null}
-	                  {twoFaHasSecret && !twoFaEnabled && !twoFaSecret ? (
-	                    <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-soft)" }}>
-	                      Secret is already stored (hidden). Use your Authenticator app code and click{" "}
-	                      <strong>Enable 2FA</strong>, or click <strong>Generate 2FA Secret</strong> to reset.
-	                    </div>
-	                  ) : null}
-	                  {twoFaError ? <div style={{ color: "#dc2626", fontWeight: 600 }}>{twoFaError}</div> : null}
-	                </div>
+                  {twoFaOtpAuthUrl ? (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-soft)" }}>
+                      otpauth URL: <code style={{ wordBreak: "break-all" }}>{twoFaOtpAuthUrl}</code>
+                    </div>
+                  ) : null}
+                  {twoFaHasSecret && !twoFaEnabled && !twoFaSecret ? (
+                    <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-soft)" }}>
+                      Secret is already stored (hidden). Use your Authenticator app code and click{" "}
+                      <strong>Enable 2FA</strong>, or click <strong>Generate 2FA Secret</strong> to reset.
+                    </div>
+                  ) : null}
+                  {twoFaError ? <div style={{ color: "#dc2626", fontWeight: 600 }}>{twoFaError}</div> : null}
+                </div>
                 <p style={{ marginTop: 10, color: "var(--text-soft)", fontSize: 12 }}>
                   Enable 2FA on this account first, then turn on <strong>Enforce 2FA</strong> above to require it at login.
                 </p>
@@ -532,36 +559,36 @@ export default function Settings() {
             </section>
           ) : null}
 
-	          {activeTab === "billing" ? (
-	            <section className="settings-grid">
-	              <article className="settings-card settings-panel">
-	                <h3>Exchange Rates</h3>
-	                <div className="settings-fields">
-	                  <label>
-	                    USD→INR
-	                    <input
-	                      type="number"
-	                      min="1"
-	                      step="0.01"
-	                      placeholder="83"
-	                      value={usdInrRate}
-	                      onChange={(e) => setUsdInrRate(e.target.value)}
-	                      disabled={ratesLoading}
-	                    />
-	                  </label>
-	                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-	                    <button type="button" onClick={saveRates} disabled={ratesLoading}>
-	                      {ratesLoading ? "Saving..." : "Save Exchange Rate"}
-	                    </button>
-	                    {ratesSaved ? <span style={{ color: "#16a34a", fontWeight: 700 }}>Saved</span> : null}
-	                  </div>
-	                  {ratesError ? <div style={{ color: "#dc2626", fontWeight: 600 }}>{ratesError}</div> : null}
-	                </div>
-	              </article>
+          {activeTab === "billing" ? (
+            <section className="settings-grid">
+              <article className="settings-card settings-panel">
+                <h3>Exchange Rates</h3>
+                <div className="settings-fields">
+                  <label>
+                    USD→INR
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      placeholder="83"
+                      value={usdInrRate}
+                      onChange={(e) => setUsdInrRate(e.target.value)}
+                      disabled={ratesLoading}
+                    />
+                  </label>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <button type="button" onClick={saveRates} disabled={ratesLoading}>
+                      {ratesLoading ? "Saving..." : "Save Exchange Rate"}
+                    </button>
+                    {ratesSaved ? <span style={{ color: "#16a34a", fontWeight: 700 }}>Saved</span> : null}
+                  </div>
+                  {ratesError ? <div style={{ color: "#dc2626", fontWeight: 600 }}>{ratesError}</div> : null}
+                </div>
+              </article>
 
-	              <article className="settings-card settings-panel">
-	                <h3>Billing Rules</h3>
-	                <div className="settings-fields">
+              <article className="settings-card settings-panel">
+                <h3>Billing Rules</h3>
+                <div className="settings-fields">
                   <label>
                     Invoice Prefix
                     <input type="text" defaultValue="NEO-INV" />
@@ -582,7 +609,7 @@ export default function Settings() {
                 </div>
               </article>
             </section>
-	          ) : null}
+          ) : null}
 
           {activeTab === "integrations" ? (
             <section className="settings-grid">
@@ -663,11 +690,15 @@ export default function Settings() {
             </section>
           ) : null}
 
-	          <div className="settings-actions">
-	            <button type="button">Save Changes</button>
-	          </div>
-	        </main>
-	      </div>
-	    </div>
+          <div className="settings-actions" style={{ display: "flex", gap: 14, alignItems: "center", justifyContent: "flex-end", marginTop: 20 }}>
+            {isSaved ? <span style={{ color: "#16a34a", fontWeight: 700, fontSize: 13 }}>Saved successfully</span> : null}
+            {generalError ? <span style={{ color: "#dc2626", fontWeight: 600, fontSize: 13 }}>{generalError}</span> : null}
+            <button type="button" onClick={handleBottomSave} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </main>
+      </div>
+    </div>
   );
 }

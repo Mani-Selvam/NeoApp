@@ -4,6 +4,11 @@ const mongoose = require("mongoose");
 const Enquiry = require("../models/Enquiry");
 const FollowUp = require("../models/FollowUp");
 const User = require("../models/User");
+const AdminStaffPayment = require("../models/AdminStaffPayment");
+const AIPayment = require("../models/AIPayment");
+const WebsiteLead = require("../models/WebsiteLead");
+const CommunicationGroup = require("../models/CommunicationGroup");
+const CommunicationMessage = require("../models/CommunicationMessage");
 const { verifyToken } = require("../middleware/auth");
 const cache = require("../utils/responseCache");
 
@@ -444,6 +449,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                 todayList,
                 missedList,
                 upcomingList,
+                unreadChatCount,
             ] = await Promise.all([
                 Enquiry.aggregate([
                     { $match: andMatch(query, dateFilter) },
@@ -516,7 +522,43 @@ router.get("/summary", verifyToken, async (req, res) => {
                     .select('enqId name mobile image product enqNo date time dueAt followUpDate nextFollowUpDate type activityType remarks status')
                     .sort({ date: 1, dueAt: 1, activityTime: 1, createdAt: 1 })
                     .limit(20)
-                    .lean()
+                    .lean(),
+                (async () => {
+                    try {
+                        const currentUserId = req.userId;
+                        const compObjId = mongoose.Types.ObjectId.isValid(String(companyId))
+                            ? new mongoose.Types.ObjectId(companyId)
+                            : null;
+                        if (!currentUserId || !compObjId) return 0;
+                        const [myGroups, unreadDirectCount] = await Promise.all([
+                            CommunicationGroup.find({
+                                companyId: compObjId,
+                                isActive: true,
+                                members: currentUserId,
+                            }).select("_id").lean(),
+                            CommunicationMessage.countDocuments({
+                                companyId: compObjId,
+                                groupId: null,
+                                receiverId: currentUserId,
+                                readBy: { $ne: currentUserId }
+                            })
+                        ]);
+
+                        const myGroupIds = (myGroups || []).map(g => g._id);
+                        const unreadGroupCount = myGroupIds.length > 0
+                            ? await CommunicationMessage.countDocuments({
+                                companyId: compObjId,
+                                groupId: { $in: myGroupIds },
+                                readBy: { $ne: currentUserId }
+                            })
+                            : 0;
+
+                        return (unreadDirectCount || 0) + (unreadGroupCount || 0);
+                    } catch (err) {
+                        console.error("[Dashboard] Error querying unread chat count:", err.message);
+                        return 0;
+                    }
+                })()
             ]);
 
             const counts = {
@@ -573,6 +615,7 @@ router.get("/summary", verifyToken, async (req, res) => {
                 todayFollowUps: todayFollowUpsCount,
                 missedFollowUps: missedFollowUpsCount,
                 upcomingFollowUps: upcomingFollowUpsCount,
+                unreadTeamMessagesCount: unreadChatCount || 0,
                 overallSalesAmount: revenueNow,
                 monthlyRevenue: revenueNow,
                 salesMonthly: revenueResult[0]?.overall[0]?.count || 0,
@@ -609,3 +652,86 @@ router.get("/summary", verifyToken, async (req, res) => {
 });
 
 module.exports = router;
+
+/**
+ * GET /api/dashboard/recent-activity
+ * Returns a timeline of the latest company activity across modules.
+ */
+router.get("/recent-activity", verifyToken, async (req, res) => {
+    try {
+        const companyId = req.user?.company_id;
+        if (!companyId) return res.json({ success: true, activity: [] });
+
+        const limit = 10;
+
+        // Fetch Website Leads
+        const leads = await WebsiteLead.find({ companyId })
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
+
+        // Fetch Admin/Staff Payments
+        const staffPayments = await AdminStaffPayment.find({ companyId })
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
+
+        // Fetch AI Payments
+        const aiPayments = await AIPayment.find({ companyId })
+            .sort({ createdAt: -1 })
+            .limit(limit)
+            .lean();
+
+        let activityFeed = [];
+
+        // Format leads
+        leads.forEach(lead => {
+            activityFeed.push({
+                id: lead._id,
+                type: "lead",
+                title: "New Website Lead",
+                description: `${lead.name} (${lead.email}) submitted a query via the website.`,
+                timestamp: lead.createdAt,
+                icon: "UserPlus",
+                color: "bg-blue-500/10 text-blue-500"
+            });
+        });
+
+        // Format Staff Payments
+        staffPayments.forEach(payment => {
+            activityFeed.push({
+                id: payment._id,
+                type: "staff_topup",
+                title: `${payment.type} Slots Top-up`,
+                description: `Successfully added ${payment.quantity} ${payment.type} slot(s) for ₹${payment.amountPaid}.`,
+                timestamp: payment.createdAt,
+                icon: "ShieldPlus",
+                color: "bg-green-500/10 text-green-500"
+            });
+        });
+
+        // Format AI Payments
+        aiPayments.forEach(payment => {
+            activityFeed.push({
+                id: payment._id,
+                type: "ai_topup",
+                title: "AI Voice Top-up",
+                description: `Purchased ${payment.requestsAdded} AI requests for ₹${payment.amountPaid}.`,
+                timestamp: payment.createdAt,
+                icon: "Mic",
+                color: "bg-purple-500/10 text-purple-500"
+            });
+        });
+
+        // Sort globally by timestamp
+        activityFeed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        // Slice to max 15 items
+        activityFeed = activityFeed.slice(0, 15);
+
+        res.json({ success: true, activity: activityFeed });
+    } catch (error) {
+        console.error("Recent Activity Error:", error);
+        res.status(500).json({ success: false, message: "Error fetching recent activity" });
+    }
+});

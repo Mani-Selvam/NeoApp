@@ -47,6 +47,7 @@
 const admin = require("../config/firebaseAdmin");
 const User = require("../models/User");
 const { resolveAndroidChannelId } = require("../utils/notificationChannels");
+const { sendExpoNotification } = require("../BACKEND_NOTIFICATIONS");
 
 // Try to load notificationPhrases with fallback for different deployment structures
 let getFollowUpSoonTexts, getFollowUpDueTexts, getFollowUpMissedTexts;
@@ -89,6 +90,124 @@ try {
         });
     }
 }
+
+// ─── Unread Follow-up Badge Count Helper ────────────────────────────────────
+
+const mongoose = require("mongoose");
+const FollowUp = require("../models/FollowUp");
+const CommunicationGroup = require("../models/CommunicationGroup");
+const CommunicationMessage = require("../models/CommunicationMessage");
+
+const toLocalIsoDate = (d = new Date()) => {
+    const dt = d instanceof Date ? d : new Date(d);
+    // Align with India Standard Time (IST) offset by default (+5:30) so server dates match client devices in India
+    const istMs = dt.getTime() + (5.5 * 60 * 60 * 1000);
+    const istDate = new Date(istMs);
+    const y = istDate.getUTCFullYear();
+    const m = String(istDate.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(istDate.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+};
+
+const getUnreadBadgeCount = async (userId) => {
+    try {
+        if (!userId) return 0;
+        const user = await User.findById(userId).select("role company_id parentUserId").lean();
+        if (!user) return 0;
+
+        const role = String(user.role || "").trim().toLowerCase();
+        const companyId = user.company_id;
+
+        const query = {};
+        if (role === "staff") {
+            query.userId = new mongoose.Types.ObjectId(user.parentUserId || userId);
+            query.assignedTo = new mongoose.Types.ObjectId(userId);
+        } else if (companyId) {
+            const companyObjId = mongoose.Types.ObjectId.isValid(String(companyId))
+                ? new mongoose.Types.ObjectId(companyId)
+                : null;
+            if (companyObjId) {
+                const rows = await User.find({ company_id: companyId }).select("_id").lean();
+                const ownerUserIds = (rows || []).map((u) => u._id);
+                query.$or = [{ companyId: companyObjId }];
+                if (ownerUserIds.length > 0) {
+                    query.$or.push({ userId: { $in: ownerUserIds } });
+                }
+            } else {
+                query.userId = new mongoose.Types.ObjectId(userId);
+            }
+        } else {
+            query.userId = new mongoose.Types.ObjectId(userId);
+        }
+
+        const today = toLocalIsoDate(new Date());
+        const CURRENT_FOLLOWUP_CLAUSE = { isCurrent: { $ne: false } };
+        const openFollowUpStatusFilter = {
+            status: { $nin: ["Missed", "Completed", "Drop", "Dropped", "Converted"] },
+        };
+        const missedFollowUpStatusFilter = { status: "Missed" };
+
+        const todayOpenFollowUpQuery = {
+            ...query,
+            date: today,
+            ...CURRENT_FOLLOWUP_CLAUSE,
+            ...openFollowUpStatusFilter,
+        };
+
+        const missedFollowUpQuery = {
+            ...query,
+            ...CURRENT_FOLLOWUP_CLAUSE,
+            ...missedFollowUpStatusFilter,
+        };
+
+        let unreadChatCount = 0;
+        if (companyId) {
+            const currentUserId = mongoose.Types.ObjectId.isValid(String(userId))
+                ? new mongoose.Types.ObjectId(userId)
+                : null;
+            const compObjId = mongoose.Types.ObjectId.isValid(String(companyId))
+                ? new mongoose.Types.ObjectId(companyId)
+                : null;
+
+            if (currentUserId && compObjId) {
+                const [myGroups, unreadDirectCount] = await Promise.all([
+                    CommunicationGroup.find({
+                        companyId: compObjId,
+                        isActive: true,
+                        members: currentUserId,
+                    }).select("_id").lean(),
+                    CommunicationMessage.countDocuments({
+                        companyId: compObjId,
+                        groupId: null,
+                        receiverId: currentUserId,
+                        readBy: { $ne: currentUserId }
+                    })
+                ]);
+
+                const myGroupIds = (myGroups || []).map(g => g._id);
+                const unreadGroupCount = myGroupIds.length > 0
+                    ? await CommunicationMessage.countDocuments({
+                        companyId: compObjId,
+                        groupId: { $in: myGroupIds },
+                        readBy: { $ne: currentUserId }
+                    })
+                    : 0;
+
+                unreadChatCount = (unreadDirectCount || 0) + (unreadGroupCount || 0);
+            }
+        }
+
+        const [todayOpenCount, missedCount] = await Promise.all([
+            FollowUp.countDocuments(todayOpenFollowUpQuery),
+            FollowUp.countDocuments(missedFollowUpQuery)
+        ]);
+
+        return todayOpenCount + missedCount + unreadChatCount;
+    } catch (err) {
+        console.error("[FCMService] Error getting badge count:", err.message);
+        return 0;
+    }
+};
 
 // ─── TTL per reminder window (seconds) ───────────────────────────────────────
 
@@ -146,10 +265,10 @@ const buildTexts = ({ activityType, followUpData, minutesLeft, lang }) => {
     if (minutesLeft > 0) {
         return getFollowUpSoonTexts({ ...shared, minutesLeft });
     }
-    
+
     // For due and missed, we want to include the time label (e.g. "at 14:30")
     const timeLabel = followUpData?.when ? new Date(followUpData.when).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : "";
-    
+
     if (minutesLeft === 0) {
         return getFollowUpDueTexts({ ...shared, timeLabel });
     }
@@ -287,6 +406,8 @@ const sendActivityReminder = async (
             return { success: false, error: "No FCM token for user" };
         }
 
+        const badgeCount = await getUnreadBadgeCount(userId);
+
         const lang = normalizeLang(voiceLang);
         const texts = buildTexts({
             activityType,
@@ -360,6 +481,7 @@ const sendActivityReminder = async (
                 channelKey,
                 // Voice text for TTS
                 voiceText: texts.voice || texts.body,
+                badge: String(badgeCount),
             },
 
             // ── Android-specific settings ──
@@ -410,7 +532,7 @@ const sendActivityReminder = async (
                         // FIX BUG 2: iOS requires the custom sound filename here.
                         // (iOS usually needs the extension, e.g. pdue.wav)
                         sound: `${resolveSoundFilename(channelKey)}${resolveSoundFilename(channelKey) === "default" ? "" : ".wav"}`,
-                        badge: 1,
+                        badge: badgeCount,
                         // Allow iOS to modify notification content
                         "mutable-content": 1,
                     },
@@ -461,12 +583,14 @@ const sendNotification = async (identifier, payload, options = {}) => {
     try {
         let fcmToken = null;
         let sessionId = "";
+        let badgeCount = 0;
 
         // If identifier looks like a MongoDB ID, fetch the user
         if (typeof identifier === "string" && identifier.length === 24 && /^[0-9a-fA-F]+$/.test(identifier)) {
             const user = await User.findById(identifier).select("fcmToken fcmSessionId").lean();
             fcmToken = user?.fcmToken;
             sessionId = user?.fcmSessionId || "";
+            badgeCount = await getUnreadBadgeCount(identifier);
         } else {
             // Treat as direct token
             fcmToken = identifier;
@@ -504,6 +628,7 @@ const sendNotification = async (identifier, payload, options = {}) => {
                 payload: {
                     aps: {
                         sound: sound === "default" ? "default" : `${sound}.wav`,
+                        badge: badgeCount,
                     }
                 },
             },
@@ -514,6 +639,7 @@ const sendNotification = async (identifier, payload, options = {}) => {
             ...(message.data || {}),
             sessionId: String(sessionId || ""),
             sentAtMs: String(Date.now()),
+            badge: String(badgeCount),
         };
 
         await admin.messaging().send(message);
@@ -523,53 +649,56 @@ const sendNotification = async (identifier, payload, options = {}) => {
     }
 };
 
-/**
- * Send a notification to multiple users by userIds array.
- * Fetches FCM tokens in a single DB query, then uses sendEachForMulticast.
- */
 const sendToUsers = async (userIds, payload, _options = {}) => {
     try {
         const users = await User.find({ _id: { $in: userIds } })
-            .select("fcmToken")
+            .select("fcmToken pushToken")
             .lean();
 
-        const tokens = users
-            .map((u) => u?.fcmToken)
-            .filter((t) => typeof t === "string" && t.length > 10);
+        let successCount = 0;
+        let failureCount = 0;
 
-        if (tokens.length === 0) {
-            return { success: false, error: "No valid FCM tokens" };
-        }
+        await Promise.allSettled(
+            users.map(async (user) => {
+                try {
+                    const badgeCount = await getUnreadBadgeCount(user._id);
 
-        const multicastMessage = {
-            tokens,
-            notification: {
-                title: payload.title || "Notification",
-                body: payload.body || "",
-            },
-            data: payload.data
-                ? Object.fromEntries(
-                    Object.entries(payload.data).map(([k, v]) => [
-                        k,
-                        typeof v === "string" ? v : String(v),
-                    ]),
-                )
-                : {},
-            android: { priority: "high" },
-            apns: {
-                payload: { aps: { sound: "default" } },
-            },
-        };
-
-        const batchResponse = await admin
-            .messaging()
-            .sendEachForMulticast(multicastMessage);
-        const successCount = batchResponse.successCount;
-        const failureCount = batchResponse.failureCount;
-
-        console.log(
-            `[FCMService] Batch: ${successCount} sent, ${failureCount} failed`,
+                    // Check if it's an Expo Go token first (useful for development)
+                    if (user.pushToken && user.pushToken.startsWith("ExponentPushToken")) {
+                        const res = await sendExpoNotification(user.pushToken, { ...payload, badge: badgeCount }, "high", 1, "default_v5", "default");
+                        if (res) successCount++;
+                        else failureCount++;
+                    }
+                    // Otherwise send via FCM for production
+                    else if (user.fcmToken && user.fcmToken.length > 10) {
+                        const msg = {
+                            token: user.fcmToken,
+                            notification: {
+                                title: payload.title || "Notification",
+                                body: payload.body || "",
+                            },
+                            data: payload.data
+                                ? Object.fromEntries(
+                                    Object.entries(payload.data).map(([k, v]) => [k, typeof v === "string" ? v : String(v)])
+                                )
+                                : {},
+                            android: { priority: "high" },
+                            apns: {
+                                payload: { aps: { sound: "default", badge: badgeCount } },
+                            },
+                        };
+                        msg.data.badge = String(badgeCount);
+                        await admin.messaging().send(msg);
+                        successCount++;
+                    }
+                } catch (e) {
+                    failureCount++;
+                    console.error("[FCMService] Individual batch send failed:", e.message);
+                }
+            })
         );
+
+        console.log(`[FCMService] Batch: ${successCount} sent, ${failureCount} failed`);
 
         return { success: true, successCount, failureCount };
     } catch (error) {
@@ -583,4 +712,5 @@ module.exports = {
     sendToUsers,
     buildTexts,
     resolveSoundFilename,
+    getUnreadBadgeCount,
 };

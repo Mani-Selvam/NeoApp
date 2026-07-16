@@ -11,10 +11,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
 import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
+import * as Clipboard from "expo-clipboard";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import getApiClient from "../services/apiClient";
 import { speakResponse } from "../services/voiceAssistantService";
-import { API_URL } from "../services/apiConfig";
+import { API_URL, WEB_DASHBOARD_URL } from "../services/apiConfig";
 import { getAuthToken } from "../services/secureTokenStorage";
 import { emitEnquiryCreated } from "../services/appEvents";
 
@@ -220,10 +221,12 @@ function WaveBar({ delay, color, active }) {
 function LiveDot({ color }) {
   const op = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    Animated.loop(Animated.sequence([
+    const anim = Animated.loop(Animated.sequence([
       Animated.timing(op, { toValue: 0.2, duration: 650, useNativeDriver: true }),
       Animated.timing(op, { toValue: 1, duration: 650, useNativeDriver: true }),
-    ])).start();
+    ]));
+    anim.start();
+    return () => anim.stop();
   }, []);
   return <Animated.View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: color, opacity: op }} />;
 }
@@ -337,18 +340,54 @@ function QuickCommandGrid({ onSelect }) {
   );
 }
 
+function FormattedText({ text, isUser }) {
+  if (!text) return null;
+  const parts = text.split(/(\*\*.*?\*\*|\n)/g);
+  return (
+    <Text style={{ fontSize: 15.5, color: isUser ? T.textUser : T.textAI, lineHeight: 23, fontWeight: "400" }}>
+      {parts.map((part, i) => {
+        if (part === "\n") return <Text key={i}>{"\n"}</Text>;
+        if (part.startsWith("**") && part.endsWith("**")) {
+          return <Text key={i} style={{ fontWeight: "bold" }}>{part.slice(2, -2)}</Text>;
+        }
+        if (part.trim().startsWith("* ") || part.trim().startsWith("- ")) {
+          return <Text key={i}>{"\n• " + part.replace(/^[\*\-]\s+/, "")}</Text>;
+        }
+        return <Text key={i}>{part}</Text>;
+      })}
+    </Text>
+  );
+}
+
 // ─── ChatBubble ──────────────────────────────────────────────────────────────────
-function ChatBubble({ msg, screenW }) {
+function ChatBubble({ msg, screenW, onSendForm }) {
   const isUser = msg.role === "user";
+  const [copied, setCopied] = useState(false);
+  const [inputValue, setInputValue] = useState("");
+
+  const handleCopy = async () => {
+    await Clipboard.setStringAsync(msg.text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const isForm = !isUser && msg.intent === "GATHER_ENQUIRY_FIELD" && msg.context?.draft;
+
   return (
     <View style={{ marginBottom: 16, alignItems: isUser ? "flex-end" : "flex-start" }}>
       {!isUser && (
-        <View style={{
-          width: 26, height: 26, borderRadius: 8, backgroundColor: T.primarySoft,
-          borderWidth: 1, borderColor: T.borderHigh,
-          alignItems: "center", justifyContent: "center", marginBottom: 6,
-        }}>
-          <Ionicons name="sparkles" size={13} color={T.primary} />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%", paddingRight: 4, paddingBottom: 6 }}>
+          <View style={{
+            width: 26, height: 26, borderRadius: 8, backgroundColor: T.primarySoft,
+            borderWidth: 1, borderColor: T.borderHigh,
+            alignItems: "center", justifyContent: "center",
+          }}>
+            <Ionicons name="sparkles" size={13} color={T.primary} />
+          </View>
+          <TouchableOpacity onPress={handleCopy} style={{ padding: 4, flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <Ionicons name={copied ? "checkmark" : "copy-outline"} size={14} color={copied ? T.green : T.textMuted} />
+            {copied && <Text style={{ fontSize: 11, color: T.green }}>Copied</Text>}
+          </TouchableOpacity>
         </View>
       )}
       <View style={{
@@ -359,9 +398,45 @@ function ChatBubble({ msg, screenW }) {
         borderBottomLeftRadius: isUser ? 18 : 4,
         paddingHorizontal: 16, paddingVertical: 11,
       }}>
-        <Text style={{ fontSize: 15.5, color: isUser ? T.textUser : T.textAI, lineHeight: 23, fontWeight: "400" }}>
-          {msg.text}
-        </Text>
+        <FormattedText text={msg.text} isUser={isUser} />
+
+        {/* Missing Enquiry Data Form Widget */}
+        {isForm && (
+          <View style={{ marginTop: 12, backgroundColor: "#FFF", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: T.borderHigh }}>
+            <Text style={{ fontSize: 12, fontWeight: "700", color: T.textMuted, marginBottom: 8, textTransform: "uppercase" }}>Enquiry Draft</Text>
+            {Object.entries(msg.context.draft).map(([k, v]) => {
+              if (["priority", "source", "assignedTo"].includes(k)) return null;
+              const missing = !v || v === "0" || v === "0000000000";
+              return (
+                <View key={k} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <Ionicons name={missing ? "close-circle" : "checkmark-circle"} size={16} color={missing ? T.red : T.green} />
+                  <Text style={{ fontSize: 13, color: T.textPrimary, flex: 1 }}>
+                    <Text style={{ fontWeight: "600", textTransform: "capitalize" }}>{k}: </Text>
+                    {missing ? <Text style={{ color: T.textMuted, fontStyle: "italic" }}>Missing</Text> : v}
+                  </Text>
+                </View>
+              );
+            })}
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 10, gap: 8 }}>
+              <TextInput 
+                style={{ flex: 1, height: 36, backgroundColor: T.bgInput, borderRadius: 8, paddingHorizontal: 10, fontSize: 14, color: T.textPrimary, borderWidth: 1, borderColor: T.border }}
+                placeholder="Type missing detail..."
+                placeholderTextColor={T.textMuted}
+                value={inputValue}
+                onChangeText={setInputValue}
+                onSubmitEditing={() => {
+                  if (inputValue.trim()) { onSendForm(inputValue); setInputValue(""); }
+                }}
+                returnKeyType="send"
+              />
+              <TouchableOpacity 
+                onPress={() => { if (inputValue.trim()) { onSendForm(inputValue); setInputValue(""); } }}
+                style={{ width: 36, height: 36, borderRadius: 8, backgroundColor: T.primary, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="arrow-up" size={16} color="#FFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* Widget: PIE_CHART */}
         {msg.widget?.type === "PIE_CHART" && (
@@ -421,6 +496,40 @@ function ChatBubble({ msg, screenW }) {
             <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "600" }}>{msg.widget.label || "Download"}</Text>
           </TouchableOpacity>
         )}
+
+        {/* Upgrade Button for Limit Exceeded */}
+        {msg.intent === "ERROR_LIMIT_EXCEEDED" && (
+          <TouchableOpacity
+            onPress={() => {
+              if (Platform.OS === 'ios') {
+                Alert.alert(
+                  "Upgrade on Web Dashboard",
+                  "In-app purchases are only available via our web dashboard. Would you like to open it now?",
+                  [
+                    { text: "Not Now", style: "cancel" },
+                    {
+                      text: "Go to Dashboard",
+                      onPress: () =>
+                        Linking.openURL(WEB_DASHBOARD_URL).catch(() =>
+                          Alert.alert("Error", "Could not open the website.")
+                        ),
+                    },
+                  ]
+                );
+              } else {
+                Linking.openURL(WEB_DASHBOARD_URL);
+              }
+            }}
+            activeOpacity={0.8}
+            style={{
+              marginTop: 12, backgroundColor: "#0b0f1a",
+              flexDirection: "row", alignItems: "center", gap: 8,
+              paddingHorizontal: 16, paddingVertical: 11, borderRadius: 12, justifyContent: "center",
+            }}>
+            <Ionicons name={Platform.OS === 'ios' ? "globe-outline" : "open-outline"} size={18} color="#FFF" />
+            <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "600" }}>{Platform.OS === 'ios' ? "Upgrade on Web Dashboard" : "Upgrade Plan"}</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -442,10 +551,16 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
   const activeChatIdRef = useRef(null);
   const isProcessingTextRef = useRef(false);
 
+  const [handsFreeMode, setHandsFreeMode] = useState(false);
+  const handsFreeModeRef = useRef(false);
+  const digestShown = useRef(false);
+
   // "continuous" mode: after AI speaks, auto-restart listen
   // silence without speech → go idle (no close)
-  const autoListenRef = useRef(true);  // ON by default — only manual stop turns it off
+  const autoListenRef = useRef(false);
   const stateRef = useRef("idle");
+
+  useEffect(() => { handsFreeModeRef.current = handsFreeMode; }, [handsFreeMode]);
 
   useEffect(() => { aiContextRef.current = aiContext; }, [aiContext]);
   useEffect(() => { chatHistoryRef.current = chatHistory; }, [chatHistory]);
@@ -502,14 +617,18 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
     };
     if (visible) {
       loadSessions();
-      loadHistory(activeChatId);
+      if (activeChatId) {
+        loadHistory(activeChatId);
+      } else if (!digestShown.current) {
+        digestShown.current = true;
+        processTextQuery("Provide a daily digest of my scheduled and missed follow-ups for today.", true);
+      }
       Animated.parallel([
         Animated.timing(fadeAnim, { toValue: 1, duration: 360, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
         Animated.timing(slideAnim, { toValue: 0, duration: 360, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       ]).start();
-      // Auto start listening on open
-      autoListenRef.current = true;
-      if (!compact) startAssistant();
+      // Do not auto start listening on open
+      autoListenRef.current = false;
     } else {
       fadeAnim.setValue(0);
       slideAnim.setValue(28);
@@ -517,6 +636,13 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
       stopAssistant();
       setWakeMode(false);
       wakeModeRef.current = false;
+      // Reset chat state on close
+      setChatHistory([]);
+      setTranscript("");
+      setAiResponse("");
+      setAiContext(null);
+      setActiveChatId(null);
+      setIsSidebarOpen(false);
     }
     return () => {
       isMounted.current = false;
@@ -654,17 +780,33 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
     _setState("idle"); setTranscript(""); setAiResponse("");
     try { Speech.stop(); } catch { }
     if (Platform.OS === "web" && recognRef.current) { try { recognRef.current.stop(); } catch { } recognRef.current = null; }
-    if (recording) { try { await recording.stopAndUnloadAsync(); } catch { } setRecording(null); }
+    if (recording) {
+      try { await recording.stopAndUnloadAsync(); } catch { }
+      setRecording(null);
+    }
+    // Reset iOS audio session so other audio (music, calls) works after recording
+    if (Platform.OS === "ios") {
+      try {
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: false });
+      } catch { }
+    }
   };
 
   const stopAndSubmit = async (rec) => {
     if (!rec) return;
     if (!hasSpoken.current) {
-      // Silence detected, no speech — stay idle, do NOT close, do NOT restart
+      // Silence detected, no speech — stay idle, do NOT close, do NOT restart unless hands-free
       _setState("idle");
       setTranscript("No speech detected. Tap mic to try again.");
       try { await rec.stopAndUnloadAsync(); } catch { }
       setRecording(null);
+      // Reset iOS audio session
+      if (Platform.OS === "ios") {
+        try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: false }); } catch { }
+      }
+      if (handsFreeModeRef.current && visible && autoListenRef.current) {
+        startAssistant();
+      }
       return;
     }
     _setState("processing"); setTranscript("Processing…");
@@ -672,6 +814,10 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
       await rec.stopAndUnloadAsync();
       const uri = rec.getURI();
       setRecording(null);
+      // Reset iOS audio session before sending audio to server
+      if (Platform.OS === "ios") {
+        try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: false }); } catch { }
+      }
       processAudio(uri);
     } catch { _setState("idle"); setTranscript("Recording failed."); }
   };
@@ -694,9 +840,8 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
   };
 
   const afterAISpoke = (data) => {
-    // After AI responds: if autoListen is on, restart listening immediately
-    // This gives the "hands-free conversation" experience
-    if (isMounted.current && visible && autoListenRef.current) {
+    // After AI responds: if handsFree is on, restart listening immediately
+    if (isMounted.current && visible && autoListenRef.current && handsFreeModeRef.current) {
       startAssistant();
     } else {
       _setState("idle");
@@ -736,7 +881,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
         if (data.context) setAiContext(data.context);
         else if (data.intent === "SUBMIT_ENQUIRY" || data.intent === "CANCEL_ENQUIRY") setAiContext(null);
 
-        const aiMsg = { role: "assistant", text: data.spokenText };
+        const aiMsg = { role: "assistant", text: data.spokenText, intent: data.intent };
         if (data.widget) aiMsg.widget = data.widget;
         const newHistory = [...chatHistoryRef.current, { role: "user", text: data.statsUsed?.recognizedText || "Voice Query" }, aiMsg];
         setChatHistory(newHistory.slice(-50));
@@ -759,8 +904,8 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
                 : [data.context.draft];
 
               const cf = (v, def = "") => (!v || String(v).trim().toLowerCase() === "skip") ? def : v;
-              
-              await Promise.all(draftsToSubmit.map(d => 
+
+              await Promise.all(draftsToSubmit.map(d =>
                 client.post("/enquiries", {
                   name: cf(d.name, "Unknown"), mobile: cf(d.mobile, "0000000000"),
                   email: cf(d.email, ""), enqType: cf(d.priority, "Normal"),
@@ -770,7 +915,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
                   followupMode: "Manual", remarks: "Added via Voice Assistant",
                 })
               ));
-              
+
               try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch { }
               emitEnquiryCreated();
             } catch (err) { console.error("Auto submit enquiry failed", err); }
@@ -778,7 +923,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
           } else if (data.intent === "GATHER_ENQUIRY_FIELD") {
             startAssistant();
           } else {
-            const isErr = data.spokenText.includes("trouble") || data.spokenText.includes("சேவை");
+            const isErr = data.intent === "ERROR_LIMIT_EXCEEDED" || (data.spokenText || "").includes("trouble") || (data.spokenText || "").includes("சேவை");
             if (!isErr) afterAISpoke(data);
             else _setState("idle");
           }
@@ -827,7 +972,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
         if (data.context) setAiContext(data.context);
         else if (data.intent === "SUBMIT_ENQUIRY" || data.intent === "CANCEL_ENQUIRY") setAiContext(null);
 
-        const aiMsg = { role: "assistant", text: data.spokenText };
+        const aiMsg = { role: "assistant", text: data.spokenText, intent: data.intent };
         if (data.widget) aiMsg.widget = data.widget;
         const newHistory = [...chatHistoryRef.current, { role: "user", text: queryText }, aiMsg];
         setChatHistory(newHistory.slice(-50));
@@ -849,8 +994,8 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
                 : [data.context.draft];
 
               const cf = (v, def = "") => (!v || String(v).trim().toLowerCase() === "skip") ? def : v;
-              
-              await Promise.all(draftsToSubmit.map(d => 
+
+              await Promise.all(draftsToSubmit.map(d =>
                 client.post("/enquiries", {
                   name: cf(d.name, "Unknown"), mobile: cf(d.mobile, "0000000000"),
                   email: cf(d.email, ""), enqType: cf(d.priority, "Normal"),
@@ -868,7 +1013,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
           } else if (data.intent === "GATHER_ENQUIRY_FIELD") {
             if (shouldSpeak) startAssistant(); else _setState("idle");
           } else {
-            const isErr = data.spokenText.includes("trouble") || data.spokenText.includes("சேவை");
+            const isErr = data.intent === "ERROR_LIMIT_EXCEEDED" || (data.spokenText || "").includes("trouble") || (data.spokenText || "").includes("சேவை");
             if (!isErr && shouldSpeak && autoListenRef.current) afterAISpoke(data);
             else _setState("idle");
           }
@@ -1067,8 +1212,24 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
               </View>
 
               <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                {/* Status badge */}
-                <StatusBadge state={state} />
+                {/* Hands-Free Toggle */}
+                <TouchableOpacity
+                  onPress={() => {
+                    const newVal = !handsFreeMode;
+                    setHandsFreeMode(newVal);
+                    if (newVal) {
+                      autoListenRef.current = true;
+                      if (state === "idle") startAssistant();
+                    } else {
+                      autoListenRef.current = false;
+                      stopAssistant();
+                    }
+                  }} 
+                  activeOpacity={0.75}
+                  style={{ width: 38, height: 38, borderRadius: 11, backgroundColor: handsFreeMode ? T.primary : T.bgInput, borderWidth: 1, borderColor: handsFreeMode ? T.primary : T.border, alignItems: "center", justifyContent: "center" }}>
+                  <Ionicons name="headset" size={18} color={handsFreeMode ? "#FFF" : T.primary} />
+                </TouchableOpacity>
+
                 {/* New chat */}
                 <TouchableOpacity
                   onPress={handleNewChat} activeOpacity={0.75}
@@ -1111,7 +1272,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
 
               {/* Chat history */}
               {chatHistory.map((msg, idx) => (
-                <ChatBubble key={idx} msg={msg} screenW={SCREEN_W} />
+                <ChatBubble key={idx} msg={msg} screenW={SCREEN_W} onSendForm={(txt) => processTextQuery(txt, false)} />
               ))}
 
               {/* Live transcript bubble (while listening/processing) */}
@@ -1138,7 +1299,7 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
               backgroundColor: T.bgCard,
               paddingTop: 12, paddingBottom: 12,
             }}>
-              
+
               {/* Wave bars — shown when listening */}
               {state === "listening" && (
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", height: 28 }}>
@@ -1211,6 +1372,16 @@ export default function VoiceAssistantOverlay({ visible, onClose, compact = fals
                     </View>
                   </TouchableOpacity>
                 )}
+              </View>
+
+              {/* ── Disclaimer & Upgrade Text ── */}
+              <View style={{ marginTop: 12, marginHorizontal: 20, marginBottom: 4 }}>
+                <Text style={{ textAlign: "center", fontSize: 11, color: T.textMuted, lineHeight: 16 }}>
+                  Neo Voice Assistant can make mistakes. Please verify important information.
+                </Text>
+                <Text style={{ textAlign: "center", fontSize: 11, color: T.primary, fontWeight: "600", marginTop: 4 }}>
+                  ✨ A major upgrade to Neo Voice is coming soon!
+                </Text>
               </View>
             </View>
 

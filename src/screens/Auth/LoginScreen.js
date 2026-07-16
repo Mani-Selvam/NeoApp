@@ -5,6 +5,7 @@ import Constants from "expo-constants";
 import { useEffect, useMemo, useState } from "react";
 import * as WebBrowser from "expo-web-browser";
 import * as Google from "expo-auth-session/providers/google";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { MotiView } from "moti";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -21,6 +22,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  UIManager,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -362,6 +364,9 @@ const SignInButton = ({ onPress, loading, ui }) => {
   );
 };
 
+// Native Apple Sign-In is always available on iOS when expo-apple-authentication is configured.
+const isAppleAvailable = Platform.OS === 'ios';
+
 // ─── LoginScreen ───────────────────────────────────────────────────────────────
 const LoginScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
@@ -396,14 +401,18 @@ const LoginScreen = ({ navigation }) => {
   const isExpoGo = Constants?.appOwnership === "expo";
   const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "953843416185-sihgmeq3lcv7ppt73b5ddkvni2d0cjio.apps.googleusercontent.com";
   const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || "953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h.apps.googleusercontent.com";
+  const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "953843416185-fo0k23604n7ms6dm0bhbb302dl2ipej6.apps.googleusercontent.com";
   const googleExpoGoRedirectUri = process.env.EXPO_PUBLIC_GOOGLE_EXPO_GO_REDIRECT_URI || "https://auth.expo.io/@manibro29/neoapp-manibro29";
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     webClientId: googleWebClientId,
     androidClientId: isExpoGo ? googleWebClientId : googleAndroidClientId,
-    redirectUri: isExpoGo 
-      ? googleExpoGoRedirectUri 
-      : `com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h:/oauthredirect`,
+    iosClientId: isExpoGo ? googleWebClientId : googleIosClientId,
+    redirectUri: isExpoGo
+      ? googleExpoGoRedirectUri
+      : Platform.OS === 'ios'
+        ? `com.googleusercontent.apps.953843416185-fo0k23604n7ms6dm0bhbb302dl2ipej6:/oauthredirect`
+        : `com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h:/oauthredirect`,
   });
 
   useEffect(() => {
@@ -433,7 +442,7 @@ const LoginScreen = ({ navigation }) => {
           },
         },
       );
-      
+
       const user = res.data.user;
       if (!user.mobile) {
         setGoogleToken(res.data.token);
@@ -449,6 +458,49 @@ const LoginScreen = ({ navigation }) => {
       setLoading(false);
     }
   };
+
+  const handleAppleLogin = async () => {
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (credential.identityToken) {
+        setLoading(true);
+        try {
+          const res = await axios.post(
+            `${API_URL}/auth/apple-login`,
+            { idToken: credential.identityToken }
+          );
+
+          if (res.data.success && res.data.token && res.data.user) {
+            if (res.data.user.mobile) {
+              await login(res.data.token, res.data.user);
+            } else {
+              setGoogleToken(res.data.token);
+              setGoogleUser(res.data.user);
+              setCollectMobileValue("");
+              setShowMobileCollectModal(true);
+              setLoading(false);
+            }
+          }
+        } catch (e) {
+          setLoading(false);
+          showAlert(e.response?.data?.message || "Apple authentication failed", "error");
+        }
+      }
+    } catch (e) {
+      if (e.code === 'ERR_REQUEST_CANCELED') {
+        // user canceled Apple Sign in
+      } else {
+        showAlert("Apple Sign-In failed", "error");
+      }
+    }
+  };
+
 
   const handleSaveCollectedMobile = async () => {
     const val = collectMobileValue.trim();
@@ -541,7 +593,7 @@ const LoginScreen = ({ navigation }) => {
           >
             Enter Mobile Number
           </Text>
-          
+
           <Text
             style={{
               fontSize: 13,
@@ -866,7 +918,7 @@ const LoginScreen = ({ navigation }) => {
               </TouchableOpacity>
 
               <SignInButton onPress={handleLogin} loading={loading} ui={ui} />
-              
+
               <View style={S.dividerRow}>
                 <View style={S.dividerLine} />
                 <Text style={S.dividerText}>OR</Text>
@@ -882,6 +934,16 @@ const LoginScreen = ({ navigation }) => {
                 <Ionicons name="logo-google" size={20} color="#DB4437" />
                 <Text style={S.googleButtonText}>Continue with Google</Text>
               </TouchableOpacity>
+
+              {Platform.OS === 'ios' && (
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                  cornerRadius={12}
+                  style={[S.googleButton, { height: ui.buttonHeight, marginTop: 12, paddingHorizontal: 0, paddingVertical: 0 }]}
+                  onPress={handleAppleLogin}
+                />
+              )}
             </View>
           </Animated.View>
 
@@ -890,10 +952,18 @@ const LoginScreen = ({ navigation }) => {
             entering={FadeIn.delay(480).duration(550)}
             style={[S.footer, { marginTop: ui.isTablet ? 28 : ui.isVeryShort ? 14 : 20 }]}
           >
-            <Text style={S.footerText}>New here? </Text>
-            <TouchableOpacity onPress={() => navigation.navigate("Signup")}>
-              <Text style={S.footerLink}>Create Account →</Text>
-            </TouchableOpacity>
+            {Platform.OS === 'ios' ? (
+               <Text style={[S.footerText, { fontSize: 12, textAlign: 'center', lineHeight: 18, marginTop: 4, paddingHorizontal: 10 }]}>
+                 Don't have an account? Please visit neophrondev.in/Neogroww_Website to register.
+               </Text>
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={S.footerText}>New here? </Text>
+                <TouchableOpacity onPress={() => navigation.navigate("Signup")}>
+                  <Text style={S.footerLink}>Create Account  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>

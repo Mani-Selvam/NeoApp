@@ -47,6 +47,25 @@ export function AuthProvider({ children }) {
     setSessionExpiresAt(expiry);
   }, []);
 
+  const updateUser = useCallback((updatedFields) => {
+    setUser((currentUser) => {
+      if (!currentUser) return null;
+      const nextUser = { ...currentUser, ...updatedFields };
+      localStorage.setItem("user", JSON.stringify(nextUser));
+      return nextUser;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleExpired = () => {
+      updateUser({ passwordExpired: true });
+    };
+    window.addEventListener("neoapp:password-expired", handleExpired);
+    return () => {
+      window.removeEventListener("neoapp:password-expired", handleExpired);
+    };
+  }, [updateUser]);
+
   useEffect(() => {
     if (!user || !sessionExpiresAt) return;
 
@@ -73,8 +92,9 @@ export function AuthProvider({ children }) {
       isAuthenticated: Boolean(user) && !isSessionExpired,
       login,
       logout,
+      updateUser,
     }),
-    [user, sessionExpiresAt, isSessionExpired, login, logout],
+    [user, sessionExpiresAt, isSessionExpired, login, logout, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

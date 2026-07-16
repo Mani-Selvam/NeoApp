@@ -2,6 +2,7 @@ const { ensureEnvLoaded } = require("../config/loadEnv");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Company = require("../models/Company");
+const { getSecurityPolicy } = require("../services/settingsService");
 
 ensureEnvLoaded();
 
@@ -114,6 +115,31 @@ const verifyToken = async (req, res, next) => {
     }
 
     const role = String(user.role || "").toLowerCase();
+
+    // Check password rotation for superadmins
+    if (role === "superadmin") {
+      const policy = await getSecurityPolicy();
+      const rotationDays = Number(policy?.passwordRotationDays ?? 90);
+      if (Number.isFinite(rotationDays) && rotationDays > 0) {
+        const changedAt = user.passwordChangedAt || user.updatedAt || user.createdAt;
+        if (changedAt) {
+          const ageMs = Date.now() - new Date(changedAt).getTime();
+          const maxMs = rotationDays * 24 * 60 * 60 * 1000;
+          if (Number.isFinite(ageMs) && ageMs > maxMs) {
+            const path = String(req.originalUrl || req.path || "").toLowerCase();
+            const isAllowed = path.includes("change-password") || path.includes("logout");
+            if (!isAllowed) {
+              clearUserCache(decoded.userId);
+              return res.status(403).json({
+                success: false,
+                code: "PASSWORD_EXPIRED",
+                message: `Password expired (rotation ${rotationDays} days). Reset your password to continue.`,
+              });
+            }
+          }
+        }
+      }
+    }
     const companyId = user.company_id ? user.company_id.toString() : "";
     if (role !== "superadmin" && companyId) {
       const companyStatus = await getCompanyStatus(companyId);

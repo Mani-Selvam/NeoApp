@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
+import { emitAppEvent, APP_EVENTS } from "./appEvents";
 const CACHE_VERSION = 1;
 const PREFIX = "APP_CACHE:";
 const TAG_PREFIX = "APP_CACHE_TAG:";
@@ -94,4 +94,35 @@ export const isFresh = (entry, ttlMs) => {
     const ttl = Number(ttlMs);
     if (!Number.isFinite(ttl) || ttl <= 0) return false;
     return Date.now() - entry.t < ttl;
+};
+
+export const getSWR = async (key, fetcher, ttlMs = 60000, options = {}) => {
+    // 1. Try get from cache
+    const cached = await getCacheEntry(key);
+    
+    // 2. Determine if we need to fetch in background (if missing or stale)
+    const isCacheFresh = isFresh(cached, ttlMs);
+    
+    if (!isCacheFresh || options.force) {
+        const doFetch = async () => {
+            try {
+                const data = await fetcher();
+                await setCacheEntry(key, data, options);
+                // Emit event so UI can update silently
+                emitAppEvent(APP_EVENTS.SWR_CACHE_UPDATE, { key, data });
+                return data;
+            } catch (err) {
+                console.warn("[SWR] background fetch failed for", key, err?.message);
+                throw err;
+            }
+        };
+
+        if (cached && !options.forceWait) {
+            doFetch().catch(() => {}); // fire and forget
+        } else {
+            return await doFetch(); // wait for it if no cache or forceWait
+        }
+    }
+    
+    return cached.value;
 };

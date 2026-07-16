@@ -15,6 +15,7 @@ const userSchema = new mongoose.Schema({
     visiblePassword: { type: String },
     logo: { type: String }, // User profile picture or company logo
     googleId: { type: String, sparse: true, index: true },
+    appleId: { type: String, sparse: true, index: true },
     status: {
         type: String,
         enum: ["Active", "Inactive"],

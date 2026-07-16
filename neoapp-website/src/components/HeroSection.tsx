@@ -71,7 +71,7 @@ export function HeroSection({ onOpenModal }: HeroSectionProps) {
         >
           <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent z-10 h-full w-full bottom-0"></div>
           <img 
-            src="/hero-dashboard.png" 
+            src={`${import.meta.env.BASE_URL}hero-dashboard.png`}
             alt="NeoApp CRM Dashboard" 
             className="w-full h-auto rounded-xl shadow-2xl border border-border/50 object-cover bg-card/50 backdrop-blur-sm"
           />

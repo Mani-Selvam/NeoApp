@@ -43,6 +43,9 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
         notes = {},
         theme = { color: "#0E5E6F" },
         isAiTopup = false,
+        isAdminStaffTopup = false,
+        quantity = 0,
+        type = "Admin"
     } = route?.params || {};
 
     const onMessage = useCallback(
@@ -78,6 +81,15 @@ export default function RazorpayCheckoutScreen({ navigation, route }) {
                             razorpay_signature: payload.razorpay_signature,
                         });
                         res = verifyResponse.data;
+                    } else if (isAdminStaffTopup) {
+                        const { verifyAdminStaffPayment } = require("../services/staffService");
+                        res = await verifyAdminStaffPayment({
+                            type,
+                            quantity,
+                            razorpay_order_id: payload.razorpay_order_id,
+                            razorpay_payment_id: payload.razorpay_payment_id,
+                            razorpay_signature: payload.razorpay_signature,
+                        });
                     } else {
                         res = await verifyRazorpayPayment({
                             planId,

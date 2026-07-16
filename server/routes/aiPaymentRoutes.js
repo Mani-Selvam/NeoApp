@@ -9,7 +9,7 @@ const { sendEmail } = require("../utils/emailService");
 const { sendWhatsAppMessage } = require("../utils/whatsappConfigService");
 
 const { getRazorpayClientAsync, verifyCheckoutSignatureAsync } = require("../services/razorpayService");
-const { getRazorpayConfig } = require("../services/settingsService");
+const { getRazorpayConfig, getUsdInrRate } = require("../services/settingsService");
 
 /**
  * POST /api/ai-payments/razorpay/order
@@ -23,8 +23,10 @@ router.post("/razorpay/order", verifyToken, requireActivePlan, async (req, res) 
         const effectivePlan = req.effectivePlan;
         if (!effectivePlan) return res.status(400).json({ success: false, message: "No active plan" });
 
-        const price = effectivePlan.aiVoiceExtraPrice || 500;
-        const amountPaise = Math.round(price * 100);
+        const priceUsd = effectivePlan.aiVoiceExtraPrice || 500;
+        const usdInrRate = 83; // Fixed conversion rate as requested
+        const priceInr = Math.round(priceUsd * usdInrRate);
+        const amountPaise = Math.round(priceInr * 100);
 
         const razorpay = await getRazorpayClientAsync();
         const order = await razorpay.orders.create({
@@ -41,8 +43,9 @@ router.post("/razorpay/order", verifyToken, requireActivePlan, async (req, res) 
             keyId: cfg?.keyId || "",
             razorpayOrderId: order.id,
             amountInrPaise: amountPaise,
-            amountInr: price,
-            currency: "INR"
+            amountInr: priceInr,
+            currency: "INR",
+            priceUsd: priceUsd
         });
     } catch (error) {
         console.error("AI Top-up Order Error:", error);
@@ -76,13 +79,16 @@ router.post("/razorpay/verify", verifyToken, requireActivePlan, async (req, res)
         }
 
         const effectivePlan = req.effectivePlan;
-        const price = effectivePlan.aiVoiceExtraPrice || 500;
+        const priceUsd = effectivePlan.aiVoiceExtraPrice || 500;
         const requests = effectivePlan.aiVoiceExtraRequests || 1000;
+        
+        const usdInrRate = 83; // Fixed conversion rate as requested
+        const priceInr = Math.round(priceUsd * usdInrRate);
 
         const payment = new AIPayment({
             companyId,
             userId,
-            amountPaid: price,
+            amountPaid: priceInr,
             requestsAdded: requests,
             status: "Completed",
             transactionId: razorpay_payment_id,
@@ -97,15 +103,16 @@ router.post("/razorpay/verify", verifyToken, requireActivePlan, async (req, res)
             await company.save();
         }
 
+        const userDoc = await mongoose.model("User").findById(userId);
+
         let emailSent = false;
         try {
-            const userDoc = await mongoose.model("User").findById(userId);
             if (userDoc && userDoc.email) {
                 await sendEmail({
                     to: userDoc.email,
                     subject: "AI Voice Assistant Top-Up Successful",
-                    text: `Your purchase of ${requests} AI Voice Requests for ₹${price} was successful.`,
-                    html: `<h3>Payment Successful!</h3><p>Your purchase of <b>${requests} AI Voice Requests</b> for ₹${price} was successfully applied to your account.</p>`
+                    text: `Your purchase of ${requests} AI Voice Requests for ₹${priceInr} was successful.`,
+                    html: `<h3>Payment Successful!</h3><p>Your purchase of <b>${requests} AI Voice Requests</b> for ₹${priceInr} was successfully applied to your account.</p>`
                 });
                 emailSent = true;
                 payment.receiptEmailSent = true;
@@ -116,16 +123,26 @@ router.post("/razorpay/verify", verifyToken, requireActivePlan, async (req, res)
 
         let whatsappSent = false;
         try {
-            const userDoc = await mongoose.model("User").findById(userId);
-            if (userDoc && userDoc.phone) {
-                const content = `Payment successful! You purchased ${requests} AI Voice requests for ₹${price}.`;
-                await sendWhatsAppMessage({
-                    companyId,
-                    phoneNumber: userDoc.phone,
-                    content: content
+            console.log("[AI Top-Up] Preparing to send WhatsApp. User mobile:", userDoc?.mobile);
+            if (userDoc && userDoc.mobile) {
+                const { sendNeoTemplateMessage } = require("../utils/otpService");
+                const templateName = process.env.NEO_AI_PLAN_TEMPLATE_NAME || "voice_plan_upgrade";
+                
+                const sent = await sendNeoTemplateMessage({
+                    phoneNumber: userDoc.mobile,
+                    templateName: templateName,
+                    parameters: [
+                        String(requests),
+                        String(priceInr)
+                    ]
                 });
-                whatsappSent = true;
-                payment.whatsappSent = true;
+                
+                if (sent) {
+                    whatsappSent = true;
+                    payment.whatsappSent = true;
+                }
+            } else {
+                console.log("[AI Top-Up] User does not have a mobile number set, skipping WhatsApp.");
             }
         } catch (e) {
             console.error("Failed to send AI top-up WhatsApp", e);
@@ -133,13 +150,25 @@ router.post("/razorpay/verify", verifyToken, requireActivePlan, async (req, res)
 
         await payment.save();
 
+        const receipt = {
+            receiptNumber: `AI-${payment._id.toString().slice(-6).toUpperCase()}`,
+            customerName: userDoc?.name || "-",
+            customerEmail: userDoc?.email || "-",
+            planName: "AI Voice Top-Up",
+            paymentId: razorpay_payment_id,
+            orderId: razorpay_order_id,
+            amountInr: priceInr,
+            paidAtLabel: new Date().toLocaleString("en-IN", { hour12: true }),
+        };
+
         return res.json({
             success: true,
             message: "Top-up successful",
             payment,
+            receipt,
             emailSent,
             whatsappSent,
-            pricing: { finalPrice: price },
+            pricing: { finalPrice: priceUsd },
             plan: { name: "AI Voice Top-Up" }
         });
     } catch (error) {

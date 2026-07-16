@@ -23,7 +23,7 @@ const connectDB = async () => {
         // Fallback to local MongoDB
         try {
             console.log("Attempting to connect to local MongoDB...");
-            const conn = await mongoose.connect("", {
+            const conn = await mongoose.connect("mongodb://127.0.0.1:27017/crm_db", {
                 serverSelectionTimeoutMS: 5000,
             });
             console.log(`✅ Local MongoDB Connected: ${conn.connection.host}`);

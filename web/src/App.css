@@ -23,16 +23,12 @@
   min-height: 100vh;
   background:
     radial-gradient(circle at 0% 0%, rgba(59, 91, 253, 0.14), transparent 36%),
-    radial-gradient(
-      circle at 100% 0%,
+    radial-gradient(circle at 100% 0%,
       rgba(16, 185, 129, 0.12),
-      transparent 38%
-    ),
-    radial-gradient(
-      circle at 100% 100%,
+      transparent 38%),
+    radial-gradient(circle at 100% 100%,
       rgba(14, 165, 233, 0.1),
-      transparent 40%
-    ),
+      transparent 40%),
     var(--bg);
 }
 
@@ -316,11 +312,9 @@
   position: relative;
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.9),
-    rgba(255, 255, 255, 0.98)
-  );
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.9),
+      rgba(255, 255, 255, 0.98));
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px);
   padding: 16px;
@@ -488,11 +482,9 @@
 }
 
 .chart-card-revenue {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.98),
-    rgba(251, 248, 255, 0.92)
-  );
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.98),
+      rgba(251, 248, 255, 0.92));
 }
 
 .chart-card-revenue .chart-track {
@@ -562,21 +554,15 @@
 
 .chart-card-mountain {
   background:
-    radial-gradient(
-      circle at 15% 12%,
+    radial-gradient(circle at 15% 12%,
       rgba(59, 130, 246, 0.14),
-      transparent 34%
-    ),
-    radial-gradient(
-      circle at 90% 20%,
+      transparent 34%),
+    radial-gradient(circle at 90% 20%,
       rgba(14, 165, 233, 0.14),
-      transparent 34%
-    ),
-    linear-gradient(
-      180deg,
+      transparent 34%),
+    linear-gradient(180deg,
       rgba(255, 255, 255, 0.98),
-      rgba(239, 246, 255, 0.95)
-    );
+      rgba(239, 246, 255, 0.95));
 }
 
 .chart-mountain-wrap {
@@ -644,11 +630,9 @@
 }
 
 .chart-card-pie {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.98),
-    rgba(245, 247, 255, 0.96)
-  );
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.98),
+      rgba(245, 247, 255, 0.96));
 }
 
 .chart-pie-wrap {
@@ -725,11 +709,9 @@
 }
 
 .chart-card-progress {
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.98),
-    rgba(244, 252, 249, 0.95)
-  );
+  background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.98),
+      rgba(244, 252, 249, 0.95));
 }
 
 .chart-progress-list {
@@ -782,21 +764,15 @@
 
 .chart-card-bubbles {
   background:
-    radial-gradient(
-      circle at 10% 10%,
+    radial-gradient(circle at 10% 10%,
       rgba(251, 146, 60, 0.18),
-      transparent 34%
-    ),
-    radial-gradient(
-      circle at 90% 20%,
+      transparent 34%),
+    radial-gradient(circle at 90% 20%,
       rgba(14, 165, 233, 0.18),
-      transparent 34%
-    ),
-    linear-gradient(
-      180deg,
+      transparent 34%),
+    linear-gradient(180deg,
       rgba(255, 255, 255, 0.98),
-      rgba(255, 249, 240, 0.95)
-    );
+      rgba(255, 249, 240, 0.95));
 }
 
 .chart-bubble-grid {
@@ -841,16 +817,12 @@
   position: relative;
   overflow: hidden;
   background:
-    radial-gradient(
-      circle at 50% 40%,
+    radial-gradient(circle at 50% 40%,
       rgba(56, 189, 248, 0.12),
-      transparent 52%
-    ),
-    linear-gradient(
-      180deg,
+      transparent 52%),
+    linear-gradient(180deg,
       rgba(255, 255, 255, 0.98),
-      rgba(240, 249, 255, 0.95)
-    );
+      rgba(240, 249, 255, 0.95));
 }
 
 .chart-orbit-wrap {
@@ -900,8 +872,7 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  transform: rotate(var(--angle)) translateX(min(37vw, 130px))
-    rotate(calc(-1 * var(--angle)));
+  transform: rotate(var(--angle)) translateX(min(37vw, 130px)) rotate(calc(-1 * var(--angle)));
   display: grid;
   justify-items: center;
   gap: 5px;
@@ -1104,16 +1075,12 @@
   padding: 22px;
   background:
     radial-gradient(circle at 5% 5%, rgba(59, 91, 253, 0.22), transparent 42%),
-    radial-gradient(
-      circle at 90% 20%,
+    radial-gradient(circle at 90% 20%,
       rgba(16, 185, 129, 0.2),
-      transparent 42%
-    ),
-    radial-gradient(
-      circle at 70% 100%,
+      transparent 42%),
+    radial-gradient(circle at 70% 100%,
       rgba(244, 114, 182, 0.12),
-      transparent 48%
-    ),
+      transparent 48%),
     var(--bg);
 }
 
@@ -1130,11 +1097,9 @@
   height: 240px;
   left: -70px;
   top: 8%;
-  background: radial-gradient(
-    circle at 30% 30%,
-    rgba(59, 91, 253, 0.5),
-    rgba(59, 91, 253, 0.06)
-  );
+  background: radial-gradient(circle at 30% 30%,
+      rgba(59, 91, 253, 0.5),
+      rgba(59, 91, 253, 0.06));
 }
 
 .login-orb-two {
@@ -1143,11 +1108,9 @@
   right: -90px;
   bottom: 4%;
   animation-delay: 1.5s;
-  background: radial-gradient(
-    circle at 30% 30%,
-    rgba(20, 184, 166, 0.45),
-    rgba(20, 184, 166, 0.06)
-  );
+  background: radial-gradient(circle at 30% 30%,
+      rgba(20, 184, 166, 0.45),
+      rgba(20, 184, 166, 0.06));
 }
 
 .login-shell {
@@ -1162,11 +1125,9 @@
 .login-showcase {
   border-radius: 18px;
   border: 1px solid rgba(59, 91, 253, 0.2);
-  background: linear-gradient(
-    135deg,
-    rgba(59, 91, 253, 0.9),
-    rgba(14, 165, 233, 0.84)
-  );
+  background: linear-gradient(135deg,
+      rgba(59, 91, 253, 0.9),
+      rgba(14, 165, 233, 0.84));
   color: #fff;
   padding: 28px;
   box-shadow: var(--shadow-lg);
@@ -1182,11 +1143,9 @@
   border-radius: 999px;
   right: -100px;
   top: -95px;
-  background: radial-gradient(
-    circle,
-    rgba(255, 255, 255, 0.35),
-    rgba(255, 255, 255, 0)
-  );
+  background: radial-gradient(circle,
+      rgba(255, 255, 255, 0.35),
+      rgba(255, 255, 255, 0));
 }
 
 .login-kicker {
@@ -1313,10 +1272,12 @@
 }
 
 @keyframes floatOrb {
+
   0%,
   100% {
     transform: translateY(0);
   }
+
   50% {
     transform: translateY(-16px);
   }
@@ -1327,6 +1288,7 @@
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -1338,6 +1300,7 @@
     transform: scaleY(0);
     opacity: 0.2;
   }
+
   to {
     transform: scaleY(1);
     opacity: 1;
@@ -1355,6 +1318,7 @@
     opacity: 0;
     transform: scale(0.7);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -1372,6 +1336,7 @@
     opacity: 0;
     transform: scaleY(0.75);
   }
+
   to {
     opacity: 1;
     transform: scaleY(1);
@@ -1383,6 +1348,7 @@
     opacity: 0;
     transform: scale(0.75);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -1390,20 +1356,24 @@
 }
 
 @keyframes chartBubbleFloat {
+
   0%,
   100% {
     transform: translateY(0);
   }
+
   50% {
     transform: translateY(-4px);
   }
 }
 
 @keyframes orbitPulse {
+
   0%,
   100% {
     transform: scale(1);
   }
+
   50% {
     transform: scale(1.04);
   }
@@ -1413,6 +1383,7 @@
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -1421,13 +1392,12 @@
 @keyframes orbitNodeIn {
   from {
     opacity: 0;
-    transform: rotate(var(--angle)) translateX(min(34vw, 110px))
-      rotate(calc(-1 * var(--angle))) scale(0.85);
+    transform: rotate(var(--angle)) translateX(min(34vw, 110px)) rotate(calc(-1 * var(--angle))) scale(0.85);
   }
+
   to {
     opacity: 1;
-    transform: rotate(var(--angle)) translateX(min(37vw, 130px))
-      rotate(calc(-1 * var(--angle))) scale(1);
+    transform: rotate(var(--angle)) translateX(min(37vw, 130px)) rotate(calc(-1 * var(--angle))) scale(1);
   }
 }
 
@@ -1436,6 +1406,7 @@
     opacity: 0;
     transform: scale(0.8) rotate(-24deg);
   }
+
   to {
     opacity: 1;
     transform: scale(1) rotate(0deg);
@@ -1611,7 +1582,7 @@
     padding-top: 4px;
   }
 
-  .table td > * {
+  .table td>* {
     min-width: 0;
   }
 
@@ -1666,6 +1637,7 @@
 }
 
 @media (max-width: 640px) {
+
   .sidebar-brand p,
   .header-right .icon-only-btn {
     display: none;
@@ -1725,8 +1697,7 @@
   }
 
   .chart-orbit-node {
-    transform: rotate(var(--angle)) translateX(min(41vw, 110px))
-      rotate(calc(-1 * var(--angle)));
+    transform: rotate(var(--angle)) translateX(min(41vw, 110px)) rotate(calc(-1 * var(--angle)));
   }
 
   .action-row .settings-card {
@@ -1763,4 +1734,229 @@
   .login-form h2 {
     font-size: 24px;
   }
+}
+
+/* Password Expiry Modal Overlay */
+.expiry-modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 999999 !important;
+  background: rgba(11, 18, 32, 0.7) !important;
+  backdrop-filter: blur(12px) !important;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  animation: fadeInModal 0.25s ease-out;
+}
+
+@keyframes fadeInModal {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.expiry-modal-box {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 64px rgba(11, 18, 32, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.15);
+  max-width: 480px;
+  width: 100%;
+  padding: 32px;
+  text-align: center;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: scaleInModal 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes scaleInModal {
+  from {
+    transform: scale(0.9) translateY(10px);
+  }
+
+  to {
+    transform: scale(1) translateY(0);
+  }
+}
+
+.expiry-modal-icon {
+  font-size: 32px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--primary-soft);
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 16px rgba(59, 91, 253, 0.15);
+}
+
+.expiry-modal-box h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.expiry-modal-desc {
+  margin: 0 0 24px;
+  font-size: 14px;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+
+.expiry-modal-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: left;
+}
+
+.expiry-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.expiry-modal-field span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.expiry-modal-field input {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.expiry-modal-field input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 91, 253, 0.15);
+}
+
+.expiry-modal-error {
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  color: var(--danger);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.expiry-modal-success {
+  background: #f0fdf4;
+  border: 1px solid #dcfce7;
+  color: var(--success);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.expiry-modal-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  margin-top: 10px;
+  align-items: center;
+}
+
+.expiry-modal-submit-btn {
+  padding: 12px 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #3b5bfd, #5f86ff);
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(59, 91, 253, 0.2);
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.expiry-modal-submit-btn:hover {
+  opacity: 0.95;
+}
+
+.expiry-modal-submit-btn:active {
+  transform: scale(0.98);
+}
+
+.expiry-modal-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.expiry-modal-logout-btn {
+  padding: 12px 18px;
+  border: 1px solid #fee2e2;
+  border-radius: var(--radius-sm);
+  background: #fee2e2;
+  color: #991b1b;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.expiry-modal-logout-btn:hover {
+  background: #fecaca;
+}
+
+.expiry-modal-logout-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Expiry Modal Password Toggle Styles */
+.expiry-modal-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.expiry-modal-input-wrapper input {
+  width: 100%;
+  padding-right: 42px !important;
+}
+
+.expiry-modal-toggle-btn {
+  position: absolute;
+  right: 10px;
+  background: none !important;
+  border: none !important;
+  color: var(--text-soft) !important;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 4px !important;
+  border-radius: 4px;
+  transition: color 0.2s;
+  box-shadow: none !important;
+  height: auto !important;
+  width: auto !important;
+}
+
+.expiry-modal-toggle-btn:hover {
+  color: var(--text) !important;
 }

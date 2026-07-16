@@ -717,6 +717,39 @@ router.post(
         emitToUsers(req, [req.userId, receiverId], "COMMUNICATION_MESSAGE_CREATED", populated);
       }
 
+      // Send push notification to offline/background users so they receive the new badge count immediately
+      setImmediate(async () => {
+        try {
+          const targetUserIds = groupId
+            ? (group.members || []).filter(id => String(id) !== String(req.userId))
+            : [receiverId];
+
+          if (targetUserIds.length > 0) {
+            const senderName = populated.senderId?.name || "Someone";
+            const isCall = populated.messageType === "call";
+            const isMedia = populated.messageType && populated.messageType !== "text" && !isCall;
+            const bodyPreview = isCall
+              ? getCommunicationCallLabel(populated.callStatus)
+              : isMedia
+                ? `[Sent an attachment]`
+                : populated.message || "";
+
+            await sendToUsers(targetUserIds, {
+              title: groupId ? `${group.name} • ${senderName}` : senderName,
+              body: bodyPreview,
+              data: {
+                type: "chat_message",
+                groupId: groupId || "",
+                senderId: String(req.userId),
+                messageId: String(message._id),
+              }
+            });
+          }
+        } catch (err) {
+          console.error("[Chat Push Notification Error]:", err.message);
+        }
+      });
+
       res.status(201).json(populated);
     } catch (error) {
       res.status(500).json({ error: error.message });

@@ -46,6 +46,20 @@ if (Platform.OS !== "web") {
             console.log(`  ChannelId: ${data.channelId || "default"}`);
             console.log(`  Type: ${data.type || "unknown"}`);
             console.log(`  MessageId: ${remoteMessage?.messageId || "N/A"}`);
+            console.log(`  Badge: ${data.badge || "N/A"}`);
+
+            // Update badge count dynamically if available
+            const badgeCount = remoteMessage?.data?.badge ?? remoteMessage?.notification?.badge;
+            if (badgeCount !== undefined && badgeCount !== null) {
+                try {
+                    const Notifications = require("expo-notifications");
+                    const count = Math.max(0, Math.round(Number(badgeCount)));
+                    await Notifications.setBadgeCountAsync(count);
+                    console.log(`[FCM] Background updated app badge count to ${count}`);
+                } catch (badgeErr) {
+                    console.warn("[FCM] Failed to update badge count in background:", badgeErr.message);
+                }
+            }
 
             // ✅ Return true to indicate message was handled
             // (Doesn't prevent system tray display — notification already queued by OS)

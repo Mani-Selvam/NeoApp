@@ -15,7 +15,6 @@ import {
     KeyboardAvoidingView,
     Linking,
     Modal,
-    PermissionsAndroid,
     Platform,
     RefreshControl,
     ScrollView,
@@ -66,6 +65,7 @@ const playStoreSafeMode =
 const Audio = Platform.OS !== "web" ? require("expo-av").Audio : null;
 
 const getImmediateCall = () => {
+    if (Platform.OS !== "android") return null;
     try {
         return require("react-native-immediate-phone-call");
     } catch {
@@ -74,6 +74,7 @@ const getImmediateCall = () => {
 };
 
 const getIntentLauncher = () => {
+    if (Platform.OS !== "android") return null;
     try {
         return require("expo-intent-launcher");
     } catch {

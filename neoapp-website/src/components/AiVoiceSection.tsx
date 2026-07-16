@@ -57,7 +57,7 @@ export function AiVoiceSection() {
               className="relative"
             >
               <img 
-                src="/ai-voice.png" 
+                src={`${import.meta.env.BASE_URL}ai-voice.png`}
                 alt="AI Voice Assistant Visualization" 
                 className="w-full h-auto max-w-lg mx-auto rounded-3xl"
               />

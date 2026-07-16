@@ -33,6 +33,7 @@ const sections = [
       { id: "coupons", label: "Coupons", to: "/superadmin/coupons" },
       { id: "pricing", label: "Pricing Management", to: "/superadmin/pricing" },
       { id: "aipayments", label: "AI Voice Payments", to: "/superadmin/ai-payments" },
+      { id: "aipayments", label: "Staff/Admin Upgrades", to: "/superadmin/admin-staff-payments" },
     ],
   },
   {

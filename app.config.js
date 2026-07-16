@@ -165,13 +165,18 @@ module.exports = ({ config }) => {
 
             // ─── PLAY STORE SAFETY: Force-block permissions at build time ─────
             // This is the ONLY way to ensure libraries don't sneak permissions back in.
+            let buildProps = {
+                ios: {
+                    useFrameworks: "static",
+                    forceStaticLinking: ["RNFBApp", "RNFBAuth", "RNFBMessaging"]
+                }
+            };
             if (playStoreSafeMode) {
-                plugins = upsertPlugin(plugins, "expo-build-properties", {
-                    android: {
-                        blockPermissions: androidBlockedPermissions,
-                    },
-                });
+                buildProps.android = {
+                    blockPermissions: androidBlockedPermissions,
+                };
             }
+            plugins = upsertPlugin(plugins, "expo-build-properties", buildProps);
 
             return plugins;
         })(),

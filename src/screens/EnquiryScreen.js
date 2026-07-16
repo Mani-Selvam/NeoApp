@@ -22,7 +22,6 @@ import {
     Linking,
     Modal,
     PanResponder,
-    PermissionsAndroid,
     Platform,
     ScrollView,
     StatusBar,
@@ -135,6 +134,7 @@ const fmtDur = (s) => {
 };
 const getInitials = (name = "") => name.substring(0, 2).toUpperCase() || "NA";
 const getImmediateCall = () => {
+    if (Platform.OS !== "android") return null;
     try {
         // Defensive require to avoid crash if library is unlinked in Safe Mode
         return (
@@ -1092,18 +1092,7 @@ export default function EnquiryListScreen({ navigation, route }) {
 
             let cached = null;
             try {
-                if (refresh && allowCache) {
-                    cached = await getCacheEntry(cacheKey).catch(() => null);
-                    if (cached?.value?.items) {
-                        const cachedItems = Array.isArray(cached.value.items)
-                            ? cached.value.items
-                            : [];
-                        setEnquiries(dedupeEnquiries(cachedItems));
-                        setHasMore(Boolean(cached.value.hasMore));
-                        setPage(Number(cached.value.page || 1));
-                        if (!showIndicator) setIsLoading(false);
-                    }
-                }
+                // Manual getCacheEntry removed - relying on SWR in enquiryService
 
                 if (refresh) {
                     const shouldFetch =
@@ -1167,15 +1156,7 @@ export default function EnquiryListScreen({ navigation, route }) {
                     setEnquiries(nextItems);
                     setHasMore(nextHasMore);
                     setPage(nextPage);
-                    await setCacheEntry(
-                        cacheKey,
-                        {
-                            items: nextItems,
-                            hasMore: nextHasMore,
-                            page: nextPage,
-                        },
-                        { tags: ["enquiries"] },
-                    ).catch(() => { });
+                    // setCacheEntry removed - relying on SWR in enquiryService
                 } else {
                     const pg = page;
                     const res = await enquiryService.getAllEnquiries(
@@ -1346,12 +1327,32 @@ export default function EnquiryListScreen({ navigation, route }) {
         const unsub2 = onAppEvent(APP_EVENTS.ENQUIRY_CREATED, refresh);
         const unsub3 = onAppEvent(APP_EVENTS.ENQUIRY_UPDATED, refresh);
         const unsub4 = onAppEvent(APP_EVENTS.FOLLOWUP_CHANGED, refresh);
+        const unsub5 = onAppEvent(APP_EVENTS.SWR_CACHE_UPDATE, (payload) => {
+            if (payload?.key && payload.key.includes("enquiries:list")) {
+                fetchEnquiries(true, {
+                    showIndicator: false,
+                    force: false,
+                });
+            }
+        });
+
+        // Trigger silent refresh when app returns from background
+        const appStateSub = AppState.addEventListener("change", (nextState) => {
+            if (nextState === "active") {
+                fetchEnquiries(true, {
+                    showIndicator: false,
+                    force: false, // Let SWR handle the background sync intelligently
+                });
+            }
+        });
 
         return () => {
             cancelDebounceKey("enquiry-refresh");
             unsub2();
             unsub3();
             unsub4();
+            unsub5();
+            appStateSub?.remove();
         };
     }, [fetchEnquiries]);
 
@@ -1936,10 +1937,10 @@ export default function EnquiryListScreen({ navigation, route }) {
                         fetchEnquiries(false);
                 }}
                 onEndReachedThreshold={0.5}
-                initialNumToRender={10}
-                maxToRenderPerBatch={10}
-                windowSize={11}
-                removeClippedSubviews={false}
+                initialNumToRender={8}
+                maxToRenderPerBatch={5}
+                windowSize={5}
+                removeClippedSubviews={true}
                 ListFooterComponent={
                     isLoadingMore ? (
                         <ActivityIndicator

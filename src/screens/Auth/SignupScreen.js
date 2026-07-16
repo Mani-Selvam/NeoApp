@@ -5,6 +5,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as WebBrowser from "expo-web-browser";
 import * as Google from "expo-auth-session/providers/google";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { MotiView } from "moti";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -21,6 +22,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    UIManager,
     useWindowDimensions,
     View,
 } from "react-native";
@@ -421,6 +423,9 @@ const PwChecklist = ({ checks }) => {
     );
 };
 
+// Check if Apple Authentication is supported/implemented in this build
+const isAppleAvailable = Platform.OS === 'ios' && !!UIManager.getViewManagerConfig('ExpoAppleAuthentication');
+
 const SignupScreen = ({ navigation }) => {
     const insets = useSafeAreaInsets();
     const { width, height } = useWindowDimensions();
@@ -482,14 +487,18 @@ const SignupScreen = ({ navigation }) => {
     const isExpoGo = Constants?.appOwnership === "expo";
     const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || "953843416185-sihgmeq3lcv7ppt73b5ddkvni2d0cjio.apps.googleusercontent.com";
     const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || "953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h.apps.googleusercontent.com";
+    const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "953843416185-fo0k23604n7ms6dm0bhbb302dl2ipej6.apps.googleusercontent.com";
     const googleExpoGoRedirectUri = process.env.EXPO_PUBLIC_GOOGLE_EXPO_GO_REDIRECT_URI || "https://auth.expo.io/@manibro29/neoapp-manibro29";
 
     const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
         webClientId: googleWebClientId,
         androidClientId: isExpoGo ? googleWebClientId : googleAndroidClientId,
-        redirectUri: isExpoGo 
-            ? googleExpoGoRedirectUri 
-            : `com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h:/oauthredirect`,
+        iosClientId: isExpoGo ? googleWebClientId : googleIosClientId,
+        redirectUri: isExpoGo
+            ? googleExpoGoRedirectUri
+            : Platform.OS === 'ios'
+                ? `com.googleusercontent.apps.953843416185-fo0k23604n7ms6dm0bhbb302dl2ipej6:/oauthredirect`
+                : `com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h:/oauthredirect`,
     });
 
     useEffect(() => {
@@ -519,7 +528,7 @@ const SignupScreen = ({ navigation }) => {
                     },
                 },
             );
-            
+
             const user = res.data.user;
             if (!user.mobile) {
                 setGoogleToken(res.data.token);
@@ -533,6 +542,59 @@ const SignupScreen = ({ navigation }) => {
             showInline(e.response?.data?.message || "Google authentication failed", "error");
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleAppleLogin = async () => {
+        try {
+            const credential = await AppleAuthentication.signInAsync({
+                requestedScopes: [
+                    AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+                    AppleAuthentication.AppleAuthenticationScope.EMAIL,
+                ],
+            });
+
+            if (credential.identityToken) {
+                setLoading(true);
+                try {
+                    const deviceModel = `${Platform.OS} ${String(Platform.Version)}`;
+                    const deviceName = String(
+                        Constants?.deviceName || Constants?.deviceModel || Constants?.expoConfig?.name || "NeoApp",
+                    );
+
+                    const res = await axios.post(
+                        `${API_URL}/auth/apple-login`,
+                        { idToken: credential.identityToken },
+                        {
+                            headers: {
+                                "x-device-model": deviceModel,
+                                "x-device-name": deviceName,
+                            },
+                        },
+                    );
+
+                    if (res.data.success && res.data.token && res.data.user) {
+                        if (res.data.user.mobile) {
+                            await login(res.data.token, res.data.user);
+                        } else {
+                            setGoogleToken(res.data.token);
+                            setGoogleUser(res.data.user);
+                            setCollectMobileValue("");
+                            setShowMobileCollectModal(true);
+                            setLoading(false);
+                        }
+                    }
+                } catch (e) {
+                    setLoading(false);
+                    showInline(e.response?.data?.message || "Apple authentication failed", "error");
+                }
+            }
+        } catch (e) {
+            if (e.code === 'ERR_REQUEST_CANCELED') {
+                // user canceled Apple Sign in
+            } else {
+                showInline("Apple Sign-In failed", "error");
+            }
         }
     };
 
@@ -627,7 +689,7 @@ const SignupScreen = ({ navigation }) => {
                     >
                         Enter Mobile Number
                     </Text>
-                    
+
                     <Text
                         style={{
                             fontSize: 13,
@@ -1122,6 +1184,16 @@ const SignupScreen = ({ navigation }) => {
                                     <Ionicons name="logo-google" size={20} color="#DB4437" />
                                     <Text style={S.googleButtonText}>Continue with Google</Text>
                                 </TouchableOpacity>
+
+                                {Platform.OS === 'ios' && isAppleAvailable && (
+                                    <AppleAuthentication.AppleAuthenticationButton
+                                        buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                                        buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                                        cornerRadius={12}
+                                        style={[S.googleButton, { height: ui.buttonHeight, marginTop: 12, paddingHorizontal: 0, paddingVertical: 0 }]}
+                                        onPress={handleAppleLogin}
+                                    />
+                                )}
                             </Animated.View>
                         </View>
                     </Animated.View>

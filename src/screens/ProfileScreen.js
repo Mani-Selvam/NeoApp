@@ -131,6 +131,9 @@ const ProfileScreen = ({ navigation }) => {
     const [passwordUpdating, setPasswordUpdating] = useState(false);
     const [passwordOtp, setPasswordOtp] = useState("");
     const [passwordOtpStep, setPasswordOtpStep] = useState(1); // 1: Info & Send OTP, 2: Enter OTP & Complete
+    const [showOldPassword, setShowOldPassword] = useState(false);
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     // Mobile States (Direct without OTP)
     const [showMobileEditModal, setShowMobileEditModal] = useState(false);
@@ -830,33 +833,42 @@ const ProfileScreen = ({ navigation }) => {
                                         <View style={[styles.inputWrapper, { marginBottom: 15 }]}>
                                             <Ionicons name="lock-closed-outline" size={20} color={COLORS.textMuted} style={styles.inputIcon} />
                                             <TextInput
-                                                style={styles.input}
+                                                style={[styles.input, { flex: 1 }]}
                                                 placeholder="Current Password"
-                                                secureTextEntry
+                                                secureTextEntry={!showOldPassword}
                                                 value={oldPassword}
                                                 onChangeText={setOldPassword}
                                             />
+                                            <TouchableOpacity onPress={() => setShowOldPassword(!showOldPassword)} style={{ padding: 10, paddingRight: 5 }}>
+                                                <Ionicons name={showOldPassword ? "eye-off" : "eye"} size={22} color={COLORS.textDim} />
+                                            </TouchableOpacity>
                                         </View>
                                     )}
                                     <View style={[styles.inputWrapper, { marginBottom: 15 }]}>
                                         <Ionicons name="lock-open-outline" size={20} color={COLORS.textMuted} style={styles.inputIcon} />
                                         <TextInput
-                                            style={styles.input}
+                                            style={[styles.input, { flex: 1 }]}
                                             placeholder="New Password (min 8 chars)"
-                                            secureTextEntry
+                                            secureTextEntry={!showNewPassword}
                                             value={newPassword}
                                             onChangeText={setNewPassword}
                                         />
+                                        <TouchableOpacity onPress={() => setShowNewPassword(!showNewPassword)} style={{ padding: 10, paddingRight: 5 }}>
+                                            <Ionicons name={showNewPassword ? "eye-off" : "eye"} size={22} color={COLORS.textDim} />
+                                        </TouchableOpacity>
                                     </View>
                                     <View style={[styles.inputWrapper, { marginBottom: 15 }]}>
                                         <Ionicons name="shield-checkmark-outline" size={20} color={COLORS.textMuted} style={styles.inputIcon} />
                                         <TextInput
-                                            style={styles.input}
+                                            style={[styles.input, { flex: 1 }]}
                                             placeholder="Confirm New Password"
-                                            secureTextEntry
+                                            secureTextEntry={!showConfirmPassword}
                                             value={confirmNewPassword}
                                             onChangeText={setConfirmNewPassword}
                                         />
+                                        <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)} style={{ padding: 10, paddingRight: 5 }}>
+                                            <Ionicons name={showConfirmPassword ? "eye-off" : "eye"} size={22} color={COLORS.textDim} />
+                                        </TouchableOpacity>
                                     </View>
 
                                     <TouchableOpacity

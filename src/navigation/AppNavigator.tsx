@@ -205,14 +205,14 @@ function MainTabNavigator() {
                     resumeRecalcTimersRef.current.push(
                         setTimeout(() => setAppActiveTick((t) => t + 1), 1100),
                     );
-                } catch (_e) {}
+                } catch (_e) { }
             }
         });
         return () => {
             try {
                 resumeRecalcTimersRef.current.forEach((id) => clearTimeout(id));
                 resumeRecalcTimersRef.current = [];
-            } catch (_e) {}
+            } catch (_e) { }
             sub.remove();
         };
     }, []);
@@ -256,11 +256,19 @@ function MainTabNavigator() {
                     0,
                 );
                 setChatBadgeCount(unread);
-            } catch (_error) {}
+            } catch (_error) { }
         };
         loadChatBadge();
+
+        const stateSub = AppState.addEventListener("change", (nextState) => {
+            if (nextState === "active") {
+                loadChatBadge();
+            }
+        });
+
         return () => {
             active = false;
+            stateSub?.remove?.();
         };
     }, [billingInfo?.plan]);
 
@@ -667,7 +675,7 @@ function GlobalVoiceAssistantFab({
         } catch (_e) {
             try {
                 navigationRef.dispatch(TabActions.jumpTo(route));
-            } catch (_inner) {}
+            } catch (_inner) { }
         }
     };
 
@@ -682,7 +690,7 @@ function GlobalVoiceAssistantFab({
                 onClose={() => setAssistantOpen(false)}
             />
 
-            
+
 
             <Animated.View
                 pointerEvents="box-none"
@@ -790,6 +798,8 @@ function PlanRestrictedScreen({
     title: string;
     message: string;
 }) {
+    const { user } = useAuth();
+    const isStaffUser = String(user?.role || "").toLowerCase() === "staff";
     return (
         <View style={guardStyles.root}>
             <View style={guardStyles.card}>
@@ -805,11 +815,17 @@ function PlanRestrictedScreen({
                     />
                 </View>
                 <Text style={guardStyles.title}>{title} is locked</Text>
-                <Text style={guardStyles.text}>{message}</Text>
+                <Text style={guardStyles.text}>
+                    {isStaffUser
+                        ? `${title || "This feature"} is not enabled for your company. Please contact your administrator.`
+                        : message}
+                </Text>
                 <TouchableOpacity
                     style={guardStyles.button}
-                    onPress={() => navigation.navigate("PricingScreen")}>
-                    <Text style={guardStyles.buttonText}>View Plans</Text>
+                    onPress={() => navigation.navigate(isStaffUser ? "Main" : "PricingScreen")}>
+                    <Text style={guardStyles.buttonText}>
+                        {isStaffUser ? "Back To Dashboard" : "View Plans"}
+                    </Text>
                 </TouchableOpacity>
             </View>
         </View>
@@ -1118,18 +1134,18 @@ export default function AppNavigator() {
                 const todayList = Array.isArray(todayRes?.data)
                     ? todayRes.data
                     : Array.isArray(todayRes)
-                      ? todayRes
-                      : [];
+                        ? todayRes
+                        : [];
                 const missedList = Array.isArray(missedRes?.data)
                     ? missedRes.data
                     : Array.isArray(missedRes)
-                      ? missedRes
-                      : [];
+                        ? missedRes
+                        : [];
                 const allList = Array.isArray(allRes?.data)
                     ? allRes.data
                     : Array.isArray(allRes)
-                      ? allRes
-                      : [];
+                        ? allRes
+                        : [];
 
                 // Resilience: if "All" fails/returns empty, still schedule from
                 // available Today/Missed payloads so time reminders don't stop.
@@ -1142,8 +1158,8 @@ export default function AppNavigator() {
                     ]) {
                         const id = String(
                             row?._id ??
-                                row?.id ??
-                                `${row?.enqNo || ""}|${row?.nextFollowUpDate || row?.followUpDate || row?.date || ""}|${row?.time || row?.dueAt || ""}`,
+                            row?.id ??
+                            `${row?.enqNo || ""}|${row?.nextFollowUpDate || row?.followUpDate || row?.date || ""}|${row?.time || row?.dueAt || ""}`,
                         ).trim();
                         if (!id) continue;
                         if (!byId.has(id)) byId.set(id, row);
@@ -1195,6 +1211,22 @@ export default function AppNavigator() {
             if (state === "active") {
                 // App came to foreground - resync, reinitialize audio, and refresh push token
                 syncHourlyFollowUps();
+
+                // Force a server-side badge refresh on app foreground
+                (async () => {
+                    try {
+                        console.log("[AppNav] Refreshing badge count on app foreground...");
+                        const latestCount = await followupService.fetchLatestBadgeCount();
+                        if (Platform.OS !== "web") {
+                            const Notifications = require("expo-notifications");
+                            await Notifications.setBadgeCountAsync(latestCount);
+                        }
+                        console.log(`[AppNav] ✓ Synchronized badge count to ${latestCount} on foreground`);
+                    } catch (e) {
+                        console.warn("[AppNav] Failed to refresh badge count on foreground:", e);
+                    }
+                })();
+
                 // Periodically refresh push token to ensure it's valid for closed-app notifications
                 (async () => {
                     try {
@@ -1283,7 +1315,7 @@ export default function AppNavigator() {
                                 enqNo: item?.enqNo,
                             },
                         ),
-                    ).catch(() => {});
+                    ).catch(() => { });
                 }
                 // Reschedule follow-up reminders with delay to allow server to process update.
                 // Add 500ms delay to ensure server has persisted changes before client fetches.
@@ -1363,7 +1395,7 @@ export default function AppNavigator() {
         if (!payload?.details) {
             try {
                 navigationRef.dispatch(TabActions.jumpTo("Enquiry"));
-            } catch (_e) {}
+            } catch (_e) { }
             return;
         }
 
@@ -1399,7 +1431,7 @@ export default function AppNavigator() {
             );
             try {
                 navigationRef.dispatch(TabActions.jumpTo("Enquiry"));
-            } catch (_e) {}
+            } catch (_e) { }
         } finally {
             openingIncomingRef.current = false;
         }
@@ -1680,7 +1712,7 @@ export default function AppNavigator() {
             </Modal>
 
             <Modal
-                visible={Boolean(billingPrompt?.visible) && (billingPrompt?.kind === 'upgrade' || !['PricingScreen', 'ProfileScreen'].includes(currentRouteName))}
+                visible={!isStaffUser && Boolean(billingPrompt?.visible) && (billingPrompt?.kind === 'upgrade' || !['PricingScreen', 'ProfileScreen'].includes(currentRouteName))}
                 transparent
                 animationType="fade"
                 onRequestClose={dismissBillingPrompt}>
@@ -1807,7 +1839,7 @@ export default function AppNavigator() {
                 </TouchableOpacity>
             </Modal>
 
-            {isLoggedIn && billingAlert && !billingPrompt?.visible ? (
+            {isLoggedIn && !isStaffUser && billingAlert && !billingPrompt?.visible ? (
                 <View
                     pointerEvents="box-none"
                     style={{
@@ -1835,8 +1867,8 @@ export default function AppNavigator() {
                                 billingAlert.level === "expired"
                                     ? "#7F1D1D"
                                     : billingAlert.level === "warning"
-                                      ? "#92400E"
-                                      : "#1D4ED8",
+                                        ? "#92400E"
+                                        : "#1D4ED8",
                             borderRadius: 14,
                             paddingHorizontal: 14,
                             paddingVertical: 12,

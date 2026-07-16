@@ -33,6 +33,7 @@ export default function Companies() {
           staffCount: c.staffCount || 0,
           createdAt: c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "-",
           status: c.status || "Unknown",
+          disableEnvFallback: c.disableEnvFallback || false,
         })),
       );
     } catch (e) {
@@ -51,6 +52,11 @@ export default function Companies() {
 
   const activateCompany = async (id) => {
     await api.updateCompanyStatus(id, "Active");
+    await load();
+  };
+
+  const toggleEnvConfirmation = async (id, currentVal) => {
+    await api.updateCompanyEnvConfirmation(id, !currentVal);
     await load();
   };
 
@@ -116,6 +122,13 @@ export default function Companies() {
               Activate
             </button>
           )}
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => toggleEnvConfirmation(row.id, row.disableEnvFallback)}
+          >
+            {row.disableEnvFallback ? "Enable Env Alert" : "Disable Env Alert"}
+          </button>
         </div>
       ),
     },

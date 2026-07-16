@@ -148,8 +148,8 @@ const getCouponTargetUsers = async (coupon) => {
         const normalizedPlanCompanyIds = planCompanyIds.map((id) => String(id));
         companyIds = companyIds.length
             ? companyIds.filter((companyId) =>
-                  normalizedPlanCompanyIds.includes(companyId),
-              )
+                normalizedPlanCompanyIds.includes(companyId),
+            )
             : normalizedPlanCompanyIds;
     }
 
@@ -428,6 +428,7 @@ exports.getCompanies = async (_req, res) => {
                     ownerEmail: "$owner.email",
                     subscriptionStatus: "$activeSub.status",
                     planId: "$activeSub.planId",
+                    disableEnvFallback: "$whatsappTemplate.disableEnvFallback",
                 },
             },
             { $sort: { createdAt: -1 } },
@@ -447,6 +448,7 @@ exports.getCompanies = async (_req, res) => {
             planCode: c.planId
                 ? planMap.get(c.planId.toString())?.code || "-"
                 : "-",
+            disableEnvFallback: c.disableEnvFallback || false,
         }));
 
         res.json(response);
@@ -512,6 +514,34 @@ exports.updateCompanyStatus = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to update company status",
+        });
+    }
+};
+
+exports.updateCompanyEnvConfirmation = async (req, res) => {
+    try {
+        const { disableEnvFallback } = req.body;
+        const updated = await Company.findByIdAndUpdate(
+            req.params.companyId,
+            { $set: { "whatsappTemplate.disableEnvFallback": Boolean(disableEnvFallback) } },
+            { returnDocument: "after", runValidators: true },
+        );
+        if (!updated)
+            return res
+                .status(404)
+                .json({ success: false, message: "Company not found" });
+
+        clearCompanyCache(req.params.companyId);
+
+        await logAction(req, "COMPANY_ENV_CONFIRMATION_UPDATED", {
+            companyId: req.params.companyId,
+            disableEnvFallback: Boolean(disableEnvFallback),
+        });
+        res.json({ success: true, company: updated });
+    } catch (_error) {
+        res.status(500).json({
+            success: false,
+            message: "Failed to update company environment confirmation setting",
         });
     }
 };
@@ -1622,3 +1652,74 @@ exports.getWebsiteLeads = async (req, res) => {
         });
     }
 };
+
+exports.getAdminStaffPayments = async (req, res) => {
+    try {
+        const AdminStaffPayment = require("../models/AdminStaffPayment");
+        const payments = await AdminStaffPayment.find()
+            .populate("companyId", "name code")
+            .populate("userId", "name email")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        res.json({ success: true, payments });
+    } catch (_error) {
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch admin/staff payments",
+        });
+    }
+};
+
+exports.changeSuperadminPassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!newPassword) {
+            return res.status(400).json({ success: false, message: "New password is required" });
+        }
+        if (!currentPassword) {
+            return res.status(400).json({ success: false, message: "Current password is required" });
+        }
+
+        const user = await User.findById(req.userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "Superadmin profile not found" });
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ success: false, message: "Incorrect current password" });
+        }
+
+        const policy = await getSecurityPolicy();
+        const minLen = Number(policy?.passwordMinLength ?? 8);
+        const requiredLen = Number.isFinite(minLen) && minLen >= 8 ? minLen : 8;
+
+        if (String(newPassword).length < requiredLen) {
+            return res.status(400).json({
+                success: false,
+                message: `New password must be at least ${requiredLen} characters`,
+            });
+        }
+
+        const isSame = await bcrypt.compare(newPassword, user.password);
+        if (isSame) {
+            return res.status(400).json({
+                success: false,
+                message: "New password cannot be the same as your current password",
+            });
+        }
+
+        user.password = newPassword;
+        await user.save();
+
+        await logAction(req, "SUPERADMIN_PASSWORD_CHANGED", {
+            userId: user._id,
+        });
+
+        res.json({ success: true, message: "Password changed successfully" });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message || "Failed to change password" });
+    }
+};
+

@@ -32,8 +32,11 @@ const User = require("../models/User");
 const firebaseNotificationService = require("./firebaseNotificationService");
 const { sendExpoNotification } = require("../BACKEND_NOTIFICATIONS");
 const dailyReportService = require("./dailyReportService");
+const dailyQuoteService = require("./dailyQuoteService");
 
 let lastDailyReportDate = ""; // Format: YYYY-MM-DD to ensure once-per-day
+let lastMorningQuoteDate = "";
+let lastEveningQuoteDate = "";
 
 let _schedulerTimeoutId = null;
 
@@ -218,6 +221,26 @@ exports.sendDueFollowUpReminders = async () => {
             lastDailyReportDate = dateStr;
             dailyReportService.sendDailyMorningReports().catch(err =>
                 console.error("[DailyReport] Trigger error:", err.message)
+            );
+        }
+
+        // ─── DAILY QUOTES HOOK (8:00 AM and 6:00 PM IST) ───
+        const morningQuoteHour = parseInt(process.env.MORNING_QUOTE_HOUR || "8");
+        const morningQuoteMinute = parseInt(process.env.MORNING_QUOTE_MINUTE || "0");
+        const eveningQuoteHour = parseInt(process.env.EVENING_QUOTE_HOUR || "18");
+        const eveningQuoteMinute = parseInt(process.env.EVENING_QUOTE_MINUTE || "0");
+
+        if (istHour === morningQuoteHour && istMinute === morningQuoteMinute && lastMorningQuoteDate !== dateStr) {
+            lastMorningQuoteDate = dateStr;
+            dailyQuoteService.sendCompanyWideQuote('morning').catch(err =>
+                console.error("[DailyQuote] Trigger error:", err.message)
+            );
+        }
+
+        if (istHour === eveningQuoteHour && istMinute === eveningQuoteMinute && lastEveningQuoteDate !== dateStr) {
+            lastEveningQuoteDate = dateStr;
+            dailyQuoteService.sendCompanyWideQuote('evening').catch(err =>
+                console.error("[DailyQuote] Trigger error:", err.message)
             );
         }
 
@@ -425,11 +448,14 @@ exports.sendDueFollowUpReminders = async () => {
                                     lang: voiceLang,
                                 });
 
+                                const badgeCount = await firebaseNotificationService.getUnreadBadgeCount(user._id);
+
                                 const expoResult = await sendExpoNotification(
                                     user.pushToken,
                                     {
                                         title: richTexts.title,
                                         body: richTexts.body,
+                                        badge: badgeCount,
                                         data: {
                                             ...followUpData,
                                             minutesLeft: String(minutesLeft),

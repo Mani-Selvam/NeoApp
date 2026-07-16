@@ -3,7 +3,7 @@ import axios from "axios";
 import getApiClient from "./apiClient";
 import { API_URL } from "./apiConfig";
 import { getAuthToken } from "./secureTokenStorage";
-import { buildCacheKey, getCacheEntry, invalidateCacheTags, isFresh, setCacheEntry } from "./appCache";
+import { buildCacheKey, getCacheEntry, invalidateCacheTags, isFresh, setCacheEntry, getSWR } from "./appCache";
 import { emitFollowupChanged } from "./appEvents";
 
 const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_FOLLOWUPS_MS || 60000);
@@ -48,10 +48,25 @@ export const getFollowUps = async (
         if (extraParams && typeof extraParams === "object") {
             Object.assign(params, extraParams);
         }
-        const response = await client.get("/followups", {
-            params,
+        const authKey = String(client?.defaults?.headers?.Authorization || "").trim() || "no-auth";
+        const key = buildCacheKey(
+            "followups:list:v1",
+            `${authKey}|${JSON.stringify(params)}`,
+        );
+
+        const fetcher = async () => {
+            const response = await client.get("/followups", { params });
+            return response.data; // Now returns { data: [], pagination: {} }
+        };
+
+        const force = extraParams?.force === true;
+        const forceWait = extraParams?.forceWait === true || page > 1;
+
+        return await getSWR(key, fetcher, DEFAULT_TTL_MS, {
+            tags: ["followups"],
+            force,
+            forceWait,
         });
-        return response.data; // Now returns { data: [], pagination: {} }
     } catch (error) {
         const isExpired = error.response?.status === 402 || error.response?.data?.code === 'NO_ACTIVE_PLAN';
         if (!isExpired) {
@@ -97,7 +112,7 @@ export const createFollowUp = async (followUpData) => {
                     name: `voiceNote.m4a`,
                 });
             }
-            
+
             const token = await getAuthToken();
             const fetchResponse = await axios.post(`${API_URL}/followups`, formData, {
                 headers: {
@@ -186,7 +201,7 @@ export const updateFollowUp = async (id, followUpData) => {
                     name: `voiceNote.m4a`,
                 });
             }
-            
+
             const token = await getAuthToken();
             const fetchResponse = await axios.put(`${API_URL}/followups/${id}`, formData, {
                 headers: {
@@ -275,3 +290,19 @@ export const getFollowUpHistory = async (enqNoOrId, options = {}) => {
         throw error;
     }
 };
+
+// GET LATEST AGGREGATED BADGE COUNT FROM SERVER
+export const fetchLatestBadgeCount = async () => {
+    try {
+        const client = await getApiClient();
+        const response = await client.get("/followups/badge-count");
+        return response.data?.badgeCount ?? 0;
+    } catch (error) {
+        console.error(
+            "Fetch latest badge count error:",
+            error.response?.data || error.message,
+        );
+        return 0;
+    }
+};
+

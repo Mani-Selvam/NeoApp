@@ -3,19 +3,29 @@
     "name": "NeoGroww",
     "slug": "neoapp-manibro27",
     "owner": "manibro27",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "icon": "./src/assets/app-icon.png",
     "orientation": "portrait",
     "scheme": [
       "myapp",
-      "com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h"
+      "com.googleusercontent.apps.953843416185-j91ael3gcav98qip8bs7vk12gdiu2a4h",
+      "com.googleusercontent.apps.953843416185-fo0k23604n7ms6dm0bhbb302dl2ipej6"
     ],
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "com.neogroww.crm",
+      "buildNumber": "7",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "NeoGroww needs access to your location to automatically attach location data when adding new enquiries and leads.",
+        "NSPhotoLibraryUsageDescription": "NeoGroww needs access to your photo library to let you select and upload attachments to your records.",
+        "NSCameraUsageDescription": "NeoGroww needs access to your camera to let you capture and upload photos directly to your records.",
+        "NSMicrophoneUsageDescription": "NeoGroww needs access to your microphone to let you record and attach voice notes to tasks.",
+        "NSContactsUsageDescription": "NeoGroww needs access to your contacts to help you import leads and link call logs.",
+        "LSApplicationQueriesSchemes": ["whatsapp", "tel", "mailto"]
       }
     },
     "web": {
@@ -29,7 +39,7 @@
     },
     "android": {
       "package": "com.neogroww.crm",
-      "versionCode": 9,
+      "versionCode": 10,
       "googleServicesFile": "./google-services.json",
       "blockedPermissions": [],
       "adaptiveIcon": {
@@ -52,11 +62,17 @@
           ]
         }
       ],
-      "expo-image-picker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "NeoGroww needs access to your photo library to let you select and upload attachments to your records.",
+          "cameraPermission": "NeoGroww needs access to your camera to let you capture and upload photos directly to your records."
+        }
+      ],
       [
         "expo-av",
         {
-          "microphonePermission": "The app needs access to your microphone to record voice notes."
+          "microphonePermission": "NeoGroww needs access to your microphone to let you record and attach voice notes to tasks."
         }
       ],
       "expo-video",
@@ -64,7 +80,7 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "The app needs access to your contacts to link call logs."
+          "contactsPermission": "NeoGroww needs access to your contacts to help you import leads and link call logs."
         }
       ],
       [
@@ -75,9 +91,14 @@
             "targetSdkVersion": 35,
             "ndkVersion": "26.1.10909125",
             "enableProguardModuleExtension": true
+          },
+          "ios": {
+            "useFrameworks": "static",
+            "forceStaticLinking": ["RNFBApp", "RNFBAuth", "RNFBMessaging"]
           }
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "extra": {
       "playStoreSafeMode": false,

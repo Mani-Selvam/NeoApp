@@ -54,7 +54,7 @@ router.get("/voice-sessions", verifyToken, async (req, res) => {
     try {
         const userId = req.userId;
         const companyId = req.user?.company_id;
-        
+
         const query = { userId };
         if (companyId) {
             query.companyId = companyId;
@@ -80,7 +80,7 @@ router.get("/voice-history", verifyToken, async (req, res) => {
         const userId = req.userId;
         const companyId = req.user?.company_id;
         const chatId = req.query.chatId;
-        
+
         const query = { userId };
         if (companyId) {
             query.companyId = companyId;
@@ -89,10 +89,10 @@ router.get("/voice-history", verifyToken, async (req, res) => {
             query._id = new mongoose.Types.ObjectId(chatId);
         }
 
-        let conversation = chatId 
+        let conversation = chatId
             ? await VoiceConversation.findOne(query)
             : await VoiceConversation.findOne(query).sort({ updatedAt: -1 });
-            
+
         if (!conversation) {
             conversation = new VoiceConversation({
                 userId,
@@ -122,7 +122,7 @@ router.delete("/voice-history", verifyToken, async (req, res) => {
         const userId = req.userId;
         const companyId = req.user?.company_id;
         const chatId = req.query.chatId;
-        
+
         const query = { userId };
         if (companyId) {
             query.companyId = companyId;
@@ -149,7 +149,7 @@ router.put("/voice-history", verifyToken, async (req, res) => {
         const userId = req.userId;
         const companyId = req.user?.company_id;
         const { chatId, title } = req.body;
-        
+
         if (!chatId || !title) {
             return res.status(400).json({ success: false, error: "chatId and title are required" });
         }
@@ -179,9 +179,9 @@ router.get("/usage", verifyToken, requireActivePlan, async (req, res) => {
 
         const Company = mongoose.model("Company");
         const companyDoc = await Company.findById(companyId).select("assistantUsage");
-        
+
         let usage = companyDoc?.assistantUsage || { yearlyUsed: 0, extraPurchased: 0 };
-        
+
         const baseLimit = req.effectivePlan?.aiVoiceLimitYearly || 3000;
         const totalLimit = baseLimit + (usage.extraPurchased || 0);
         const remaining = Math.max(0, totalLimit - (usage.yearlyUsed || 0));
@@ -231,14 +231,15 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                 if ((usage.yearlyUsed || 0) >= totalLimit) {
                     const errorMsg = `You have reached your company's yearly AI limit of ${totalLimit} queries. Please ask an admin to purchase a top-up.`;
                     console.log(`[Voice Assistant] Rate limit exceeded for Company ${companyId}: ${usage.yearlyUsed}/${totalLimit}`);
-                    
+
                     // Cleanup any uploaded temp audio
                     if (req.file && req.file.path) {
-                        try { require("fs").unlinkSync(req.file.path); } catch (e) {}
+                        try { require("fs").unlinkSync(req.file.path); } catch (e) { }
                     }
 
                     return res.json({
                         success: true,
+                        spokenText: errorMsg,
                         reply: errorMsg,
                         replyAudioData: null,
                         enquiries: [],
@@ -258,18 +259,18 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
         if (req.body.context) {
             try {
                 contextObj = typeof req.body.context === "string" ? JSON.parse(req.body.context) : req.body.context;
-            } catch(e) {
+            } catch (e) {
                 console.warn("[Voice Assistant] Failed to parse context:", e);
             }
         }
-        
+
         let voiceDoc;
         const chatId = req.body.chatId;
-        
+
         if (chatId) {
             voiceDoc = await VoiceConversation.findOne({ _id: new mongoose.Types.ObjectId(chatId), userId });
         }
-        
+
         if (!voiceDoc) {
             voiceDoc = new VoiceConversation({
                 userId,
@@ -278,7 +279,7 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                 messages: []
             });
         }
-        
+
         // Pass last 15 messages to AI to save tokens but retain context
         let historyObj = voiceDoc.messages.slice(-15);
 
@@ -365,7 +366,9 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             targets,
             templates,
             unreadTeamMessagesCount,
-            recentTeamMessages
+            recentTeamMessages,
+            todayEnquiriesCount,
+            todayEnquiriesList
         ] = await Promise.all([
             Enquiry.countDocuments(query),
             Enquiry.countDocuments({ ...query, status: "Converted" }),
@@ -412,7 +415,9 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             companyId ? Target.find({ company_id: companyId }).sort({ year: -1, month: -1 }).limit(3).lean() : Promise.resolve([]),
             MessageTemplate.find({ userId: { $in: userIdsInCompany } }).select("name keyword category status").lean(),
             CommunicationMessage.countDocuments({ receiverId: userId, readBy: { $ne: userId } }),
-            companyId ? CommunicationMessage.find({ companyId: companyId }).sort({ createdAt: -1 }).limit(5).populate("senderId", "name").populate("receiverId", "name").lean() : Promise.resolve([])
+            companyId ? CommunicationMessage.find({ companyId: companyId }).sort({ createdAt: -1 }).limit(5).populate("senderId", "name").populate("receiverId", "name").lean() : Promise.resolve([]),
+            Enquiry.countDocuments({ ...query, createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } }),
+            Enquiry.find({ ...query, createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } }).select("name mobile status").limit(10).lean()
         ]);
 
         const missedNames = (missedFollowupsList || []).map(f => f.name).filter(Boolean);
@@ -476,7 +481,9 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             targets: targetsSummary,
             templates: templatesSummary,
             unreadTeamMessagesCount,
-            recentTeamMessages: recentMessagesSummary
+            recentTeamMessages: recentMessagesSummary,
+            todayEnquiriesCount,
+            todayEnquiriesList: (todayEnquiriesList || []).map(e => ({ name: e.name, mobile: e.mobile, status: e.status }))
         };
 
         console.log("[Voice Assistant] Live database stats fetched:", dbStatsSummary);
@@ -569,13 +576,13 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                 const params = responsePayload.queryParams || {};
                 let eqQuery = { ...query };
                 if (params.dateFilter && params.dateFilter.toLowerCase() === "today") {
-                    eqQuery.createdAt = { $gte: new Date(new Date().setHours(0,0,0,0)) };
+                    eqQuery.createdAt = { $gte: new Date(new Date().setHours(0, 0, 0, 0)) };
                 } else if (params.dateFilter && params.dateFilter.toLowerCase() === "yesterday") {
                     const yesterday = new Date();
                     yesterday.setDate(yesterday.getDate() - 1);
-                    yesterday.setHours(0,0,0,0);
+                    yesterday.setHours(0, 0, 0, 0);
                     const today = new Date();
-                    today.setHours(0,0,0,0);
+                    today.setHours(0, 0, 0, 0);
                     eqQuery.createdAt = { $gte: yesterday, $lt: today };
                 }
                 if (params.nameQuery) eqQuery.name = { $regex: params.nameQuery, $options: "i" };
@@ -584,12 +591,12 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                 if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
                     responsePayload.spokenText = `I found ${list.length} matching enquiries.`;
                 }
-            } 
+            }
             else if (responsePayload.intent === "SHOW_PIE_CHART") {
                 const target = responsePayload.chartTarget || "staff";
                 let chartData = [];
                 const colors = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#32ADE6"];
-                
+
                 if (target === "leads") {
                     const leadStats = await Enquiry.aggregate([
                         { $match: query },
@@ -627,11 +634,11 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
             else if (responsePayload.intent === "EXPORT_DATA") {
                 const fs = require("fs");
                 const path = require("path");
-                
+
                 const target = responsePayload.exportTarget || "enquiries";
                 const format = responsePayload.exportFormat || "excel";
                 let rawData = [];
-                
+
                 if (target === "staff") {
                     const staffStats = await Enquiry.aggregate([
                         { $match: query },
@@ -656,7 +663,7 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                         "Created": e.createdAt ? new Date(e.createdAt).toLocaleDateString() : ""
                     }));
                 }
-                
+
                 if (format === "pdf") {
                     let html = `<html><head><style>body{font-family:sans-serif;} table{width:100%;border-collapse:collapse;margin-top:20px;} th,td{border:1px solid #ddd;padding:8px;text-align:left;} th{background-color:#0A84FF;color:white;}</style></head><body><h2>${target === "staff" ? "Staff Performance" : "Enquiries"} Report</h2><table><tr>`;
                     const keys = rawData.length > 0 ? Object.keys(rawData[0]) : [];
@@ -668,7 +675,7 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                         html += `</tr>`;
                     });
                     html += `</table></body></html>`;
-                    
+
                     widgetObj = { type: "DOWNLOAD_LINK", html, format: "pdf", label: "Download PDF" };
                     if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
                         responsePayload.spokenText = `I have generated the ${target} report in PDF format.`;
@@ -678,12 +685,12 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                     const worksheet = XLSX.utils.json_to_sheet(rawData);
                     const workbook = XLSX.utils.book_new();
                     XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
-                    
+
                     const uploadsDir = path.join(__dirname, "../uploads");
                     if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
                     const fileName = `export_${Date.now()}.xlsx`;
                     XLSX.writeFile(workbook, path.join(uploadsDir, fileName));
-                    
+
                     widgetObj = { type: "DOWNLOAD_LINK", url: `${req.protocol}://${req.get('host')}/uploads/${fileName}`, format: "excel", label: "Download Excel" };
                     if (!responsePayload.spokenText || responsePayload.spokenText.length < 5) {
                         responsePayload.spokenText = `I have generated the ${target} report in Excel format.`;
@@ -702,7 +709,7 @@ router.post("/voice-command", verifyToken, requireActivePlan, requireFeature("vo
                 if (shortTitle.length === 30) shortTitle += "...";
                 voiceDoc.title = shortTitle || "New Chat";
             }
-            
+
             voiceDoc.messages.push({
                 role: "user",
                 text: responsePayload.recognizedText,
@@ -757,6 +764,8 @@ You are a highly efficient voice assistant for the NeoGroww CRM database.
 Below are the actual real-time CRM statistics and configuration for the logged-in user:
 - Today's Date: ${stats.todayDate}
 - Total Enquiries: ${stats.totalEnquiries}
+- Today's Enquiries Added: ${stats.todayEnquiriesCount}
+- Today's Enquiries List (Up to 10): ${stats.todayEnquiriesList ? JSON.stringify(stats.todayEnquiriesList) : "None"}
 - Active Leads (In Progress): ${stats.activeLeads}
 - Converted Leads (Success): ${stats.convertedEnquiries}
 - Contacted Leads: ${stats.contactedLeadsCount}
@@ -911,7 +920,7 @@ You MUST respond with a JSON object in this exact structure:
                     console.log(`[Gemini API] Aborting candidacy early due to status ${status}`);
                     throw err; // Fail-fast to local stats fallback instantly!
                 }
-                
+
                 // If model not found or rate limited, don't waste time retrying it, jump to next candidate!
                 if (status === 404 || status === 429) {
                     console.log(`[Gemini API] Skipping model ${model} immediately due to status ${status}`);
@@ -960,6 +969,8 @@ You are a highly efficient voice assistant for the Neogroww CRM database.
 Below are the actual real-time CRM statistics and configuration for the logged-in user:
 - Today's Date: ${stats.todayDate}
 - Total Enquiries: ${stats.totalEnquiries}
+- Today's Enquiries Added: ${stats.todayEnquiriesCount}
+- Today's Enquiries List (Up to 10): ${stats.todayEnquiriesList ? JSON.stringify(stats.todayEnquiriesList) : "None"}
 - Active Leads (In Progress): ${stats.activeLeads}
 - Converted Leads (Success): ${stats.convertedEnquiries}
 - Contacted Leads: ${stats.contactedLeadsCount}
@@ -1085,7 +1096,7 @@ You MUST respond with a JSON object in this exact structure:
                     console.log(`[Gemini Text API] Aborting candidacy early due to status ${status}`);
                     throw err; // Fail-fast to local stats fallback instantly!
                 }
-                
+
                 // If model not found or rate limited, don't waste time retrying it, jump to next candidate!
                 if (status === 404 || status === 429) {
                     console.log(`[Gemini Text API] Skipping model ${model} immediately due to status ${status}`);
@@ -1113,6 +1124,8 @@ async function callOpenAI(transcript, stats, apiKey) {
 You are a voice assistant for the Neogroww CRM.
 Real-time CRM Stats:
 - Total Enquiries: ${stats.totalEnquiries}
+- Today's Enquiries Added: ${stats.todayEnquiriesCount}
+- Today's Enquiries List (Up to 10): ${stats.todayEnquiriesList ? JSON.stringify(stats.todayEnquiriesList) : "None"}
 - Active Leads: ${stats.activeLeads}
 - Converted Leads: ${stats.convertedEnquiries}
 - Today's Scheduled Follow-ups: ${stats.todayScheduledFollowups}
@@ -1162,11 +1175,11 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
     // --- Auto-detect Bulk Enquiries from Table or Context ---
     const isAddIntent = t.includes("add enq") || t.includes("add lead") || t.includes("bulk assign");
     const hasTable = transcript.includes("|") && transcript.split("\n").length >= 2;
-    
+
     if (hasTable || isAddIntent || (context && context.mode === "ADD_ENQUIRY")) {
         let drafts = [];
         const lines = transcript.split("\n").map(l => l.trim()).filter(l => l.length > 0);
-        
+
         if (hasTable || lines.some(l => l.includes("|"))) {
             const tableLines = lines.filter(l => l.includes("|") && !l.includes("---") && !l.toLowerCase().includes("full name"));
             for (const line of tableLines) {
@@ -1218,7 +1231,7 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
         if (lastMsg && lastMsg.role === "assistant") {
             const lastText = lastMsg.text.toLowerCase();
             const isFollowup = t.includes("address") || t.includes("detail") || t.includes("number") || t.includes("who") || t.includes("what") || t.includes("full") || t.includes("விவரம்") || t.includes("முகவரி");
-            
+
             if (isFollowup) {
                 if (lastText.includes("upcoming") || lastText.includes("this week") || lastText.includes("வாரம்")) {
                     t = "upcoming full detail " + t;
@@ -1553,14 +1566,14 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
             const namesStr = wantsDetails
                 ? details.map(f => `${f.name} (Mobile: ${f.mobile}, Address: ${f.address})`).join(". ")
                 : details.map(f => f.name).join(", ");
-                
+
             const namesStrTa = wantsDetails
                 ? details.map(f => `${f.name} (எண்: ${f.mobile}, முகவரி: ${f.address})`).join(". ")
                 : details.map(f => f.name).join(", ");
-                
+
             if (isTamil) {
                 return {
-                    spokenText: wantsDetails 
+                    spokenText: wantsDetails
                         ? `தவறவிட்ட நபர்களின் விவரங்கள்: ${namesStrTa}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`
                         : `தவறவிட்ட நபர் பெயர்கள்: ${namesStrTa}. மொத்தம் ${count} தொடர்புகள் உள்ளன.`,
                     intent: "GET_MISSED_NAMES",
@@ -1582,7 +1595,7 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
             const count = stats.todayScheduledFollowups || 0;
             const details = stats.todayDetails || [];
             const wantsDetails = t.includes("detail") || t.includes("full") || t.includes("விவரம்") || t.includes("முழு") || t.includes("முகவரி") || t.includes("எண்");
-            
+
             if (count === 0) {
                 return {
                     spokenText: isTamil ? "இன்று திட்டமிடப்பட்டவர்கள் யாருமில்லை!" : "You have zero scheduled follow-ups today!",
@@ -1593,11 +1606,11 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
             const namesStr = wantsDetails
                 ? details.map(f => `${f.name} (Mobile: ${f.mobile}, Address: ${f.address})`).join(". ")
                 : details.map(f => f.name).join(", ");
-                
+
             const namesStrTa = wantsDetails
                 ? details.map(f => `${f.name} (எண்: ${f.mobile}, முகவரி: ${f.address})`).join(". ")
                 : details.map(f => f.name).join(", ");
-                
+
             if (isTamil) {
                 return {
                     spokenText: wantsDetails
@@ -1649,14 +1662,14 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
 
         if (isTamil) {
             if (count > 0) {
-                const namesStr = wantsDetails 
+                const namesStr = wantsDetails
                     ? upcomingList.map(f => `${f.name} (${f.date} அன்று ${f.time || 'எந்த நேரத்திலும்'}, எண்: ${f.mobile}, முகவரி: ${f.address})`).join(". ")
                     : upcomingList.map(f => f.name).join(", ");
-                    
+
                 const spokenText = wantsDetails
                     ? `உங்களுக்கு ${count} திட்டமிடப்பட்ட தொடர்புகள் உள்ளன. விவரங்கள்: ${namesStr}.`
                     : `இந்த வாரம் உங்களுக்கு ${count} தொடர்புகள் திட்டமிடப்பட்டுள்ளன. அவர்கள்: ${namesStr}.`;
-                    
+
                 return {
                     spokenText,
                     intent: "GET_UPCOMING_FOLLOWUPS",
@@ -1671,14 +1684,14 @@ function handleLocalFallback(transcript, stats, history = [], context = null) {
             }
         } else {
             if (count > 0) {
-                const namesStr = wantsDetails 
+                const namesStr = wantsDetails
                     ? upcomingList.map(f => `${f.name} (On ${f.date} at ${f.time || 'Any time'}, Mobile: ${f.mobile}, Address: ${f.address})`).join(". ")
                     : upcomingList.map(f => f.name).join(", ");
-                    
+
                 const spokenText = wantsDetails
                     ? `You have ${count} upcoming follow-ups. Here are the details: ${namesStr}.`
                     : `You have ${count} upcoming follow-ups this week with: ${namesStr}.`;
-                    
+
                 return {
                     spokenText,
                     intent: "GET_UPCOMING_FOLLOWUPS",

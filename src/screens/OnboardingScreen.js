@@ -1,27 +1,27 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-    FlatList,
-    Image,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    useWindowDimensions,
-    View,
+  FlatList,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from "react-native";
+import { Image } from "expo-image";
 import Animated, {
-    Easing,
-    Extrapolation,
-    FadeIn,
-    interpolate,
-    useAnimatedRef,
-    useAnimatedScrollHandler,
-    useAnimatedStyle,
-    useSharedValue,
-    withSequence,
-    withSpring,
-    withTiming,
+  Easing,
+  Extrapolation,
+  FadeIn,
+  interpolate,
+  useAnimatedRef,
+  useAnimatedScrollHandler,
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
@@ -207,6 +207,7 @@ export default function OnboardingScreen({ navigation }) {
         });
       }, 200);
     } else {
+      await completeOnboarding();
       if (isLoggedIn) {
         try {
           navigation.replace("Main");
@@ -220,11 +221,11 @@ export default function OnboardingScreen({ navigation }) {
           console.log("Safe navigation bypass Login from Next:", e);
         }
       }
-      await completeOnboarding();
     }
   };
 
   const handleSkip = async () => {
+    await completeOnboarding();
     if (isLoggedIn) {
       try {
         navigation.replace("Main");
@@ -238,7 +239,6 @@ export default function OnboardingScreen({ navigation }) {
         console.log("Safe navigation bypass Login from Skip:", e);
       }
     }
-    await completeOnboarding();
   };
 
   const renderItem = useCallback(
@@ -473,7 +473,7 @@ const OnboardItem = ({ item, index, scrollX, width, metrics }) => {
             <Image
               source={item.media}
               style={styles.media}
-              resizeMode="contain"
+              contentFit="contain"
             />
           </Animated.View>
 

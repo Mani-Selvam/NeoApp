@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -9,6 +9,9 @@ import {
     Text,
     TouchableOpacity,
     View,
+    Platform,
+    Animated,
+    Easing,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -22,61 +25,55 @@ const { width: SW, height: SH } = Dimensions.get("window");
 const BASE_W = 375;
 const BASE_H = 812;
 
-/** Horizontal scale – padding, widths, border-radius */
 const hs = (n) => Math.round((SW / BASE_W) * n);
-
-/** Vertical scale – heights, vertical spacing */
 const vs = (n) => Math.round((SH / BASE_H) * n);
-
-/**
- * Moderate font scale.
- * factor 0.35 keeps fonts readable on large screens without blowing up.
- */
 const ms = (n, factor = 0.35) => Math.round(n + (hs(n) - n) * factor);
-
-/** Clamp a value between min and max */
 const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
 
-// Safe font helpers with min/max guards
-const fsTitle = clamp(ms(26), 22, 32);
-const fsSub = clamp(ms(14), 12, 17);
-const fsEyebrow = clamp(ms(11), 10, 13);
-const fsRecNum = clamp(ms(14), 13, 17); // kept smaller so long IDs don't overflow
-const fsStamp = clamp(ms(11), 10, 13);
-const fsChip = clamp(ms(14), 13, 16);
-const fsLabel = clamp(ms(12), 11, 14);
-const fsValue = clamp(ms(13), 12, 15);
-const fsBtn = clamp(ms(15), 14, 17);
-// ───────────────────────────────────────────────────────────────────────────
+// Safe font helpers
+const fsTitle = clamp(ms(28), 24, 34);
+const fsSub = clamp(ms(15), 14, 18);
+const fsLabel = clamp(ms(13), 12, 15);
+const fsValue = clamp(ms(14), 13, 16);
+const fsBtn = clamp(ms(16), 15, 18);
 
+// ─── Theme Colors ──────────────────────────────────────────────────────────
 const C = {
-    bg: "#F3F7FB",
-    surface: "#FFFFFF",
-    text: "#102033",
-    subtext: "#526277",
-    muted: "#7C8A9A",
-    border: "#DCE5EF",
-    primary: "#0F62FE",
-    primaryDark: "#0A3E9B",
-    success: "#16A34A",
-    successSoft: "#DCFCE7",
-    accent: "#E8F0FF",
+    bgStart: "#F0F7FF", // Soft light blue start
+    bgEnd: "#E0EFFF",   // Soft light blue end
+    cardBg: "#FFFFFF",
+    primary: "#007AFF",
+    primarySoft: "rgba(0, 122, 255, 0.1)",
+    success: "#34C759",
+    successSoft: "rgba(52, 199, 89, 0.15)",
+    text: "#1C1C1E",
+    subtext: "#6E6E73",
+    muted: "#C7C7CC",
+    border: "#E5E5EA",
 };
 
 const fmtDate = (value) => {
     if (!value) return "-";
     const d = new Date(value);
-    return isNaN(d.getTime()) ? "-" : d.toLocaleDateString();
+    return isNaN(d.getTime()) ? "-" : d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
 };
-
-/** Truncate long strings with ellipsis for display */
-const truncate = (str, max = 22) =>
-    str && str.length > max ? str.slice(0, max) + "…" : str || "-";
 
 export default function PaymentSuccessScreen({ navigation, route }) {
     const insets = useSafeAreaInsets();
     const { refreshBillingPlan } = useAuth();
     const [downloading, setDownloading] = useState(false);
+
+    // ─── Intro Animation State ───
+    const [isVerifying, setIsVerifying] = useState(true);
+    const fadeAnim = useRef(new Animated.Value(0)).current;
+    const slideAnim = useRef(new Animated.Value(40)).current;
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+    const checkScale = useRef(new Animated.Value(0)).current;
+    
+    // Bubble Animations
+    const bubble1 = useRef(new Animated.Value(0)).current;
+    const bubble2 = useRef(new Animated.Value(0)).current;
+    const bubble3 = useRef(new Animated.Value(0)).current;
 
     const planName = route?.params?.planName || "Selected";
     const finalPrice = route?.params?.finalPrice;
@@ -97,60 +94,57 @@ export default function PaymentSuccessScreen({ navigation, route }) {
     }, [displayCurrency, finalPrice, symbol, usdInrRate]);
 
     useEffect(() => {
-        refreshBillingPlan?.().catch(() => {});
+        // Start background bubble animations
+        const bubbleLoops = [];
+        const loopBubble = (anim, duration) => {
+            const loop = Animated.loop(
+                Animated.sequence([
+                    Animated.timing(anim, { toValue: 1, duration, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+                    Animated.timing(anim, { toValue: 0, duration, useNativeDriver: true, easing: Easing.inOut(Easing.ease) })
+                ])
+            );
+            loop.start();
+            bubbleLoops.push(loop);
+        };
+        loopBubble(bubble1, 4000);
+        loopBubble(bubble2, 5500);
+        loopBubble(bubble3, 4500);
+
+        // Intro pulsing animation
+        const pulseLoop = Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseAnim, { toValue: 1.1, duration: 800, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+                Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true, easing: Easing.inOut(Easing.ease) })
+            ])
+        );
+        pulseLoop.start();
+
+        // Simulate verify processing then transition to receipt
+        const verifyTimer = setTimeout(() => {
+            setIsVerifying(false);
+            
+            // Pop the checkmark and slide in the receipt
+            Animated.parallel([
+                Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+                Animated.timing(slideAnim, { toValue: 0, duration: 600, easing: Easing.out(Easing.back(1.5)), useNativeDriver: true }),
+                Animated.spring(checkScale, { toValue: 1, friction: 5, tension: 40, useNativeDriver: true, delay: 200 })
+            ]).start();
+            
+            refreshBillingPlan?.().catch(() => {});
+        }, 2500);
+
+        return () => {
+            bubbleLoops.forEach(l => l.stop());
+            pulseLoop.stop();
+            clearTimeout(verifyTimer);
+        };
     }, [refreshBillingPlan]);
 
     // ── Receipt HTML (PDF export) ──────────────────────────────────────────
     const receiptHtml = useMemo(() => {
-        const amountLabel = receipt?.amountInr
-            ? `INR ${Number(receipt.amountInr).toFixed(2)}`
-            : formattedAmount;
+        const amountLabel = receipt?.amountInr ? `INR ${Number(receipt.amountInr).toFixed(2)}` : formattedAmount;
         return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8"/>
-    <style>
-      body{font-family:Arial,sans-serif;padding:24px;color:#102033;}
-      .sheet{border:1px solid #dce5ef;border-radius:16px;padding:24px;}
-      .top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;}
-      .brand{font-size:24px;font-weight:800;color:#0f62fe;}
-      .tag{color:#526277;font-size:11px;letter-spacing:1px;text-transform:uppercase;}
-      .title{font-size:20px;font-weight:800;margin:14px 0 4px;}
-      .sub{color:#526277;margin-bottom:18px;font-size:14px;}
-      table{width:100%;border-collapse:collapse;margin-top:10px;}
-      td{padding:10px 0;border-bottom:1px solid #e8eef5;vertical-align:top;}
-      td:first-child{color:#6b7b8d;width:40%;font-size:13px;}
-      td:last-child{text-align:right;font-weight:700;font-size:13px;word-break:break-all;}
-      .foot{margin-top:20px;color:#6b7b8d;font-size:11px;}
-    </style>
-  </head>
-  <body>
-    <div class="sheet">
-      <div class="top">
-        <div>
-          <div class="brand">NeoApp</div>
-          <div class="tag">Payment Receipt</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:13px;font-weight:700">${receipt?.receiptNumber || "-"}</div>
-          <div style="color:#6b7b8d;font-size:11px">${receipt?.paidAtLabel || "-"}</div>
-        </div>
-      </div>
-      <div class="title">Subscription Activated</div>
-      <div class="sub">Your payment was received successfully.</div>
-      <table>
-        <tr><td>Plan</td><td>${planName}</td></tr>
-        <tr><td>Amount Paid</td><td>${amountLabel}</td></tr>
-        <tr><td>Renew Date</td><td>${fmtDate(renewDate)}</td></tr>
-        <tr><td>Payment ID</td><td>${receipt?.paymentId || "-"}</td></tr>
-        <tr><td>Order ID</td><td>${receipt?.orderId || "-"}</td></tr>
-        <tr><td>Customer</td><td>${receipt?.customerName || "-"}</td></tr>
-        <tr><td>Email</td><td>${receipt?.customerEmail || "-"}</td></tr>
-      </table>
-      <div class="foot">Generated by NeoApp billing flow.</div>
-    </div>
-  </body>
-</html>`;
+<html><head><meta charset="utf-8"/><style>body{font-family:Arial,sans-serif;padding:24px;color:#102033;}.sheet{border:1px solid #dce5ef;border-radius:16px;padding:24px;}.top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;}.brand{font-size:24px;font-weight:800;color:#0f62fe;}.tag{color:#526277;font-size:11px;letter-spacing:1px;text-transform:uppercase;}.title{font-size:20px;font-weight:800;margin:14px 0 4px;}.sub{color:#526277;margin-bottom:18px;font-size:14px;}table{width:100%;border-collapse:collapse;margin-top:10px;}td{padding:10px 0;border-bottom:1px solid #e8eef5;vertical-align:top;}td:first-child{color:#6b7b8d;width:40%;font-size:13px;}td:last-child{text-align:right;font-weight:700;font-size:13px;word-break:break-all;}.foot{margin-top:20px;color:#6b7b8d;font-size:11px;}</style></head><body><div class="sheet"><div class="top"><div><div class="brand">NeoApp</div><div class="tag">Payment Receipt</div></div><div style="text-align:right"><div style="font-size:13px;font-weight:700">${receipt?.receiptNumber || "-"}</div><div style="color:#6b7b8d;font-size:11px">${receipt?.paidAtLabel || "-"}</div></div></div><div class="title">Subscription Activated</div><div class="sub">Your payment was received successfully.</div><table><tr><td>Plan</td><td>${planName}</td></tr><tr><td>Amount Paid</td><td>${amountLabel}</td></tr><tr><td>Renew Date</td><td>${fmtDate(renewDate)}</td></tr><tr><td>Payment ID</td><td>${receipt?.paymentId || "-"}</td></tr><tr><td>Order ID</td><td>${receipt?.orderId || "-"}</td></tr><tr><td>Customer</td><td>${receipt?.customerName || "-"}</td></tr><tr><td>Email</td><td>${receipt?.customerEmail || "-"}</td></tr></table><div class="foot">Generated by NeoApp billing flow.</div></div></body></html>`;
     }, [formattedAmount, planName, receipt, renewDate]);
 
     // ── Handlers ──────────────────────────────────────────────────────────
@@ -158,399 +152,428 @@ export default function PaymentSuccessScreen({ navigation, route }) {
         if (!receipt) return;
         try {
             setDownloading(true);
-            const file = await Print.printToFileAsync({
-                html: receiptHtml,
-                base64: false,
-            });
-            const available = await Sharing.isAvailableAsync();
-            if (available) {
-                await Sharing.shareAsync(file.uri, {
-                    mimeType: "application/pdf",
-                    dialogTitle: "Download receipt PDF",
-                    UTI: "com.adobe.pdf",
-                });
+            if (Platform.OS === "web") {
+                await Print.printAsync({ html: receiptHtml });
             } else {
-                Alert.alert("Receipt Ready", `PDF saved at:\n${file.uri}`);
+                const file = await Print.printToFileAsync({ html: receiptHtml, base64: false });
+                const available = await Sharing.isAvailableAsync();
+                if (available) {
+                    await Sharing.shareAsync(file.uri, { mimeType: "application/pdf", dialogTitle: "Download receipt PDF", UTI: "com.adobe.pdf" });
+                } else {
+                    Alert.alert("Receipt Ready", `PDF saved at:\n${file.uri}`);
+                }
             }
         } catch (e) {
-            Alert.alert(
-                "Receipt Failed",
-                e?.message || "Unable to generate receipt PDF",
-            );
+            Alert.alert("Receipt Failed", e?.message || "Unable to generate receipt PDF");
         } finally {
             setDownloading(false);
         }
     };
 
     const onContinue = async () => {
-        await refreshBillingPlan?.().catch(() => {});
         navigation.reset({ index: 0, routes: [{ name: "Main" }] });
     };
 
-    // ── Detail rows ───────────────────────────────────────────────────────
-    const detailRows = [
-        { label: "Amount Paid", value: formattedAmount, wrap: false },
-        { label: "Renew Date", value: fmtDate(renewDate), wrap: false },
-        {
-            label: "Receipt No",
-            value: receipt?.receiptNumber || "-",
-            wrap: true,
-        },
-        { label: "Payment ID", value: receipt?.paymentId || "-", wrap: true },
-        { label: "Order ID", value: receipt?.orderId || "-", wrap: true },
-        {
-            label: "Receipt Email",
-            value: receipt?.customerEmail || "-",
-            wrap: true,
-        },
+    // Helper to calculate animated transforms
+    const getBubbleTransform = (anim, moveY, moveX, scaleTo) => [
+        { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, moveY] }) },
+        { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, moveX] }) },
+        { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, scaleTo] }) }
     ];
 
     return (
-        <View style={[styles.container, { paddingTop: insets.top }]}>
-            <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
+        <View style={styles.container}>
+            <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+            
+            {/* ── Background Gradient & Bubbles ── */}
+            <LinearGradient colors={[C.bgStart, C.bgEnd]} style={StyleSheet.absoluteFillObject} />
+            <Animated.View style={[styles.bubble, styles.bubble1, { transform: getBubbleTransform(bubble1, -40, 20, 1.1) }]} />
+            <Animated.View style={[styles.bubble, styles.bubble2, { transform: getBubbleTransform(bubble2, 50, -30, 1.2) }]} />
+            <Animated.View style={[styles.bubble, styles.bubble3, { transform: getBubbleTransform(bubble3, -20, -40, 1.15) }]} />
 
-            <ScrollView
-                contentContainerStyle={[
-                    styles.scrollContent,
-                    { paddingBottom: insets.bottom + vs(24) },
-                ]}
-                showsVerticalScrollIndicator={false}>
-                <View style={styles.mainContent}>
-                    {/* ── Hero ─────────────────────────────────────────── */}
-                    <LinearGradient
-                        colors={["#F8FFFB", "#EEF4FF"]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.hero}>
-                        <View style={styles.badgeRing}>
-                            <View style={styles.badgeCore}>
-                                <Ionicons
-                                    name="checkmark"
-                                    size={ms(32)}
-                                    color={C.success}
-                                />
+            {/* ── Intro Loading State ── */}
+            {isVerifying && (
+                <View style={styles.verifyingContainer}>
+                    <Animated.View style={[styles.pulseCircle, { transform: [{ scale: pulseAnim }] }]}>
+                        <Ionicons name="shield-checkmark" size={ms(40)} color={C.primary} />
+                    </Animated.View>
+                    <Text style={styles.verifyingTitle}>Verifying Payment</Text>
+                    <Text style={styles.verifyingSub}>Please wait while we secure your transaction...</Text>
+                    <ActivityIndicator size="large" color={C.primary} style={{ marginTop: vs(20) }} />
+                </View>
+            )}
+
+            {/* ── Beautiful Receipt Screen ── */}
+            {!isVerifying && (
+                <Animated.ScrollView
+                    contentContainerStyle={[
+                        styles.scrollContent,
+                        { paddingTop: insets.top + vs(20), paddingBottom: insets.bottom + vs(24) },
+                    ]}
+                    showsVerticalScrollIndicator={false}
+                    style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }], flex: 1 }}
+                >
+                    <View style={styles.mainContent}>
+                        
+                        {/* Checkmark Header */}
+                        <View style={styles.headerCheckContainer}>
+                            <Animated.View style={[styles.checkCircle, { transform: [{ scale: checkScale }] }]}>
+                                <Ionicons name="checkmark" size={ms(44)} color={C.cardBg} />
+                            </Animated.View>
+                            <Text style={styles.heroTitle}>Payment Successful</Text>
+                            <Text style={styles.heroSub}>Your {planName} plan is active and ready.</Text>
+                        </View>
+
+                        {/* White Receipt Card */}
+                        <View style={styles.receiptCard}>
+                            <View style={styles.cardHeader}>
+                                <View style={styles.brandContainer}>
+                                    <View style={styles.brandLogo}>
+                                        <Text style={styles.brandInitial}>N</Text>
+                                    </View>
+                                    <Text style={styles.brandText}>NeoApp</Text>
+                                </View>
+                                <View style={styles.receiptBadge}>
+                                    <Text style={styles.receiptBadgeText}>RECEIPT</Text>
+                                </View>
                             </View>
-                        </View>
-                        <Text style={styles.heroTitle}>Payment Successful</Text>
-                        <Text style={styles.heroSub}>
-                            Your {planName} plan is active and ready to use.
-                        </Text>
-                    </LinearGradient>
 
-                    {/* ── Receipt Card ──────────────────────────────────── */}
-                    <View style={styles.receiptCard}>
-                        {/* Header row: eyebrow + stamp */}
-                        <View style={styles.receiptHeaderRow}>
-                            <Text style={styles.receiptEyebrow}>RECEIPT</Text>
-                            <View style={styles.receiptStamp}>
-                                <Ionicons
-                                    name="shield-checkmark"
-                                    size={ms(13)}
-                                    color={C.primary}
-                                />
-                                <Text style={styles.receiptStampText}>
-                                    Verified
-                                </Text>
+                            <Text style={styles.amountText}>{formattedAmount}</Text>
+                            <Text style={styles.amountSub}>Total Amount Paid</Text>
+
+                            {/* Separator line */}
+                            <View style={styles.separatorContainer}>
+                                <View style={styles.separatorDot} />
+                                <View style={styles.dashedLine} />
+                                <View style={styles.separatorDotRight} />
                             </View>
-                        </View>
 
-                        {/* Receipt number – full width, wraps naturally */}
-                        <Text style={styles.receiptNumber} selectable>
-                            {receipt?.receiptNumber || "Preparing receipt…"}
-                        </Text>
-
-                        {/* Plan chip */}
-                        <View style={styles.planChip}>
-                            <Ionicons
-                                name="diamond-outline"
-                                size={ms(14)}
-                                color={C.primary}
-                            />
-                            <Text style={styles.planChipText}>{planName}</Text>
-                        </View>
-
-                        {/* Detail rows */}
-                        <View style={styles.detailList}>
-                            {detailRows.map(({ label, value, wrap }, idx) => (
-                                <View
-                                    key={label}
-                                    style={[
-                                        styles.detailRow,
-                                        idx === detailRows.length - 1 &&
-                                            styles.detailRowLast,
-                                        // stack label + value vertically for wrap rows on small screens
-                                        wrap &&
-                                            SW < 360 &&
-                                            styles.detailRowStacked,
-                                    ]}>
-                                    <Text style={styles.detailLabel}>
-                                        {label}
-                                    </Text>
-                                    <Text
-                                        style={[
-                                            styles.detailValue,
-                                            wrap && styles.detailValueWrap,
-                                        ]}
-                                        selectable>
-                                        {value}
+                            {/* Detail Rows */}
+                            <View style={styles.detailsContainer}>
+                                <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Plan Details</Text>
+                                    <Text style={styles.detailValue}>{planName}</Text>
+                                </View>
+                                <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Date Paid</Text>
+                                    <Text style={styles.detailValue}>{receipt?.paidAtLabel?.split(',')[0] || fmtDate(new Date())}</Text>
+                                </View>
+                                <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Renew Date</Text>
+                                    <Text style={styles.detailValue}>{fmtDate(renewDate)}</Text>
+                                </View>
+                                <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Receipt No</Text>
+                                    <Text style={[styles.detailValue, { fontSize: fsValue - 1 }]}>{receipt?.receiptNumber || "-"}</Text>
+                                </View>
+                                <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Transaction ID</Text>
+                                    <Text style={[styles.detailValue, { fontSize: fsValue - 2 }]} numberOfLines={1} ellipsizeMode="middle">
+                                        {receipt?.paymentId || "-"}
                                     </Text>
                                 </View>
-                            ))}
+                            </View>
                         </View>
+
+                        {/* Action Buttons */}
+                        <View style={styles.actionsContainer}>
+                            <TouchableOpacity
+                                style={[styles.secondaryBtn, (!receipt || downloading) && { opacity: 0.6 }]}
+                                onPress={onDownloadReceipt}
+                                disabled={!receipt || downloading}
+                                activeOpacity={0.8}
+                            >
+                                {downloading ? (
+                                    <ActivityIndicator color={C.text} size="small" />
+                                ) : (
+                                    <Ionicons name="download-outline" size={ms(20)} color={C.text} />
+                                )}
+                                <Text style={styles.secondaryBtnText}>
+                                    {downloading ? "Generating..." : "Download PDF"}
+                                </Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={styles.primaryBtn} onPress={onContinue} activeOpacity={0.8}>
+                                <Text style={styles.primaryBtnText}>Back to Dashboard</Text>
+                                <Ionicons name="arrow-forward" size={ms(20)} color="#FFFFFF" />
+                            </TouchableOpacity>
+                        </View>
+
                     </View>
-
-                    {/* ── Buttons ───────────────────────────────────────── */}
-                    <TouchableOpacity
-                        style={[
-                            styles.secondaryBtn,
-                            (!receipt || downloading) && styles.disabledBtn,
-                        ]}
-                        onPress={onDownloadReceipt}
-                        disabled={!receipt || downloading}
-                        activeOpacity={0.8}>
-                        {downloading ? (
-                            <ActivityIndicator color={C.text} size="small" />
-                        ) : (
-                            <Ionicons
-                                name="download-outline"
-                                size={ms(18)}
-                                color={C.text}
-                            />
-                        )}
-                        <Text style={styles.secondaryBtnText}>
-                            {downloading
-                                ? "Generating PDF…"
-                                : "Download Receipt PDF"}
-                        </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.primaryBtn}
-                        onPress={onContinue}
-                        activeOpacity={0.8}>
-                        <Text style={styles.primaryBtnText}>
-                            Continue To Home
-                        </Text>
-                        <Ionicons
-                            name="arrow-forward"
-                            size={ms(18)}
-                            color="#fff"
-                        />
-                    </TouchableOpacity>
-                </View>
-            </ScrollView>
+                </Animated.ScrollView>
+            )}
         </View>
     );
 }
 
-// ─── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: C.bg,
+        backgroundColor: C.bgStart,
     },
+    // ── Bubbles ──
+    bubble: {
+        position: "absolute",
+        borderRadius: 999,
+        opacity: 0.5,
+    },
+    bubble1: {
+        width: SW * 0.8,
+        height: SW * 0.8,
+        backgroundColor: "rgba(0, 122, 255, 0.15)",
+        top: -SW * 0.2,
+        right: -SW * 0.2,
+    },
+    bubble2: {
+        width: SW * 0.6,
+        height: SW * 0.6,
+        backgroundColor: "rgba(52, 199, 89, 0.12)",
+        bottom: SH * 0.1,
+        left: -SW * 0.2,
+    },
+    bubble3: {
+        width: SW * 0.5,
+        height: SW * 0.5,
+        backgroundColor: "rgba(175, 82, 222, 0.12)",
+        top: SH * 0.3,
+        right: SW * 0.1,
+    },
+    
+    // ── Verifying State ──
+    verifyingContainer: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: hs(30),
+        zIndex: 10,
+    },
+    pulseCircle: {
+        width: hs(90),
+        height: hs(90),
+        borderRadius: hs(45),
+        backgroundColor: "rgba(0,122,255,0.08)",
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: vs(24),
+        borderWidth: 1,
+        borderColor: "rgba(0,122,255,0.15)",
+    },
+    verifyingTitle: {
+        fontSize: fsTitle,
+        fontWeight: "800",
+        color: C.text,
+        marginBottom: vs(8),
+    },
+    verifyingSub: {
+        fontSize: fsSub,
+        color: C.subtext,
+        textAlign: "center",
+    },
+
+    // ── Receipt UI ──
     scrollContent: {
         flexGrow: 1,
-        paddingHorizontal: hs(18),
-        paddingTop: vs(14),
-        justifyContent: "center",
+        paddingHorizontal: hs(16),
+        alignItems: "center",
     },
-
-    // Centers content on tablets, max 520 px wide
     mainContent: {
-        maxWidth: 520,
+        maxWidth: 500,
         width: "100%",
-        alignSelf: "center",
-        gap: vs(14),
-    },
-
-    // ── Hero ────────────────────────────────────────────────────────────
-    hero: {
-        borderRadius: hs(24),
-        paddingHorizontal: hs(20),
-        paddingVertical: vs(24),
         alignItems: "center",
-        borderWidth: 1,
-        borderColor: "#D9E7FF",
     },
-    badgeRing: {
-        width: hs(88),
-        height: hs(88),
-        borderRadius: hs(44),
-        backgroundColor: "rgba(22,163,74,0.10)",
+    headerCheckContainer: {
         alignItems: "center",
+        marginBottom: vs(32),
+    },
+    checkCircle: {
+        width: hs(80),
+        height: hs(80),
+        borderRadius: hs(40),
+        backgroundColor: C.success,
         justifyContent: "center",
-        marginBottom: vs(14),
-    },
-    badgeCore: {
-        width: hs(66),
-        height: hs(66),
-        borderRadius: hs(33),
-        backgroundColor: C.successSoft,
         alignItems: "center",
-        justifyContent: "center",
+        marginBottom: vs(16),
+        shadowColor: C.success,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+        elevation: 8,
     },
     heroTitle: {
         fontSize: fsTitle,
-        fontWeight: "900",
+        fontWeight: "800",
         color: C.text,
-        textAlign: "center",
+        marginBottom: vs(6),
     },
     heroSub: {
-        marginTop: vs(6),
         fontSize: fsSub,
-        lineHeight: fsSub * 1.55,
-        textAlign: "center",
         color: C.subtext,
-        paddingHorizontal: hs(8),
+        textAlign: "center",
     },
 
-    // ── Receipt Card ────────────────────────────────────────────────────
+    // ── Card ──
     receiptCard: {
-        backgroundColor: C.surface,
-        borderRadius: hs(22),
-        padding: hs(18),
-        borderWidth: 1,
-        borderColor: C.border,
-        shadowColor: "#163A63",
-        shadowOpacity: 0.08,
-        shadowRadius: hs(16),
-        shadowOffset: { width: 0, height: vs(6) },
-        elevation: 4,
+        width: "100%",
+        backgroundColor: C.cardBg,
+        borderRadius: hs(24),
+        paddingVertical: vs(24),
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.15,
+        shadowRadius: 20,
+        elevation: 10,
     },
-
-    // "RECEIPT" eyebrow + "Verified" stamp on the same row
-    receiptHeaderRow: {
+    cardHeader: {
         flexDirection: "row",
-        alignItems: "center",
         justifyContent: "space-between",
-        marginBottom: vs(4),
+        alignItems: "center",
+        paddingHorizontal: hs(24),
+        marginBottom: vs(24),
     },
-    receiptEyebrow: {
-        fontSize: fsEyebrow,
-        fontWeight: "800",
-        color: C.muted,
-        letterSpacing: hs(0.8),
-    },
-    receiptStamp: {
+    brandContainer: {
         flexDirection: "row",
         alignItems: "center",
-        gap: hs(5),
-        backgroundColor: C.accent,
-        paddingHorizontal: hs(10),
-        paddingVertical: vs(5),
-        borderRadius: 999,
+        gap: hs(10),
     },
-    receiptStampText: {
-        fontSize: fsStamp,
+    brandLogo: {
+        width: hs(32),
+        height: hs(32),
+        borderRadius: hs(8),
+        backgroundColor: C.primary,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    brandInitial: {
+        color: "#fff",
         fontWeight: "800",
-        color: C.primaryDark,
+        fontSize: ms(16),
     },
-
-    // Receipt number sits full-width below the header row
-    receiptNumber: {
-        fontSize: fsRecNum,
+    brandText: {
+        fontSize: ms(18),
+        fontWeight: "800",
+        color: C.text,
+    },
+    receiptBadge: {
+        backgroundColor: "#F1F5F9",
+        paddingHorizontal: hs(10),
+        paddingVertical: vs(4),
+        borderRadius: hs(6),
+    },
+    receiptBadgeText: {
+        fontSize: ms(11),
+        fontWeight: "800",
+        color: C.subtext,
+        letterSpacing: 1,
+    },
+    amountText: {
+        fontSize: ms(42),
         fontWeight: "900",
         color: C.text,
-        marginBottom: vs(12),
-        // Allow long IDs to break at any character
-        flexWrap: "wrap",
+        textAlign: "center",
+        marginBottom: vs(2),
+    },
+    amountSub: {
+        fontSize: fsLabel,
+        color: C.subtext,
+        textAlign: "center",
+        fontWeight: "600",
     },
 
-    // Plan chip
-    planChip: {
+    // ── Separator ──
+    separatorContainer: {
         flexDirection: "row",
         alignItems: "center",
-        gap: hs(7),
-        backgroundColor: "#F4F8FF",
-        borderRadius: hs(14),
-        paddingHorizontal: hs(12),
-        paddingVertical: vs(10),
-        marginBottom: vs(14),
-        alignSelf: "flex-start",
+        marginVertical: vs(24),
+        position: "relative",
     },
-    planChipText: {
-        fontSize: fsChip,
-        fontWeight: "800",
-        color: C.primaryDark,
+    separatorDot: {
+        width: hs(20),
+        height: hs(20),
+        borderRadius: hs(10),
+        backgroundColor: C.bgStart,
+        position: "absolute",
+        left: -hs(10),
+        zIndex: 2,
+    },
+    separatorDotRight: {
+        width: hs(20),
+        height: hs(20),
+        borderRadius: hs(10),
+        backgroundColor: C.bgEnd,
+        position: "absolute",
+        right: -hs(10),
+        zIndex: 2,
+    },
+    dashedLine: {
+        flex: 1,
+        height: 1,
+        borderWidth: 1,
+        borderColor: C.border,
+        borderStyle: "dashed",
     },
 
-    // Detail list
-    detailList: {
-        gap: 0,
+    // ── Details ──
+    detailsContainer: {
+        paddingHorizontal: hs(24),
+        gap: vs(16),
     },
     detailRow: {
         flexDirection: "row",
-        alignItems: "flex-start",
         justifyContent: "space-between",
-        paddingVertical: vs(10),
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: "#EDF2F7",
-    },
-    // Last row: no bottom border
-    detailRowLast: {
-        borderBottomWidth: 0,
-    },
-    // On very small screens (<360 dp) stack label above value
-    detailRowStacked: {
-        flexDirection: "column",
-        gap: vs(2),
+        alignItems: "center",
     },
     detailLabel: {
-        // Fixed width so all labels align; shrinks on tiny screens
-        width: SW < 360 ? "100%" : hs(106),
         fontSize: fsLabel,
-        fontWeight: "600",
-        color: C.muted,
-        marginTop: vs(1),
+        color: C.subtext,
+        fontWeight: "500",
     },
     detailValue: {
-        flex: 1,
         fontSize: fsValue,
-        fontWeight: "800",
         color: C.text,
+        fontWeight: "700",
+        maxWidth: "60%",
         textAlign: "right",
     },
-    // For IDs / emails: allow natural wrapping instead of truncation
-    detailValueWrap: {
-        flexWrap: "wrap",
-        // Break long tokens (payment IDs, order IDs) anywhere
-        // React Native doesn't support word-break, but wrapping is enabled
-        // by allowing the text component to grow
-    },
 
-    // ── Buttons ─────────────────────────────────────────────────────────
+    // ── Actions ──
+    actionsContainer: {
+        width: "100%",
+        marginTop: vs(32),
+        gap: vs(12),
+    },
     secondaryBtn: {
-        minHeight: vs(52),
-        borderRadius: hs(16),
-        backgroundColor: "#EAF0F6",
+        flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
-        flexDirection: "row",
+        backgroundColor: "#FFFFFF",
+        borderWidth: 1,
+        borderColor: C.border,
+        height: vs(54),
+        borderRadius: hs(16),
         gap: hs(8),
-        paddingHorizontal: hs(16),
     },
     secondaryBtnText: {
-        fontSize: fsBtn,
-        fontWeight: "800",
         color: C.text,
+        fontSize: fsBtn,
+        fontWeight: "600",
     },
     primaryBtn: {
-        minHeight: vs(54),
-        borderRadius: hs(16),
-        backgroundColor: C.primary,
+        flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
-        flexDirection: "row",
+        backgroundColor: C.primary,
+        height: vs(54),
+        borderRadius: hs(16),
         gap: hs(8),
-        paddingHorizontal: hs(16),
+        shadowColor: C.primary,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 5,
     },
     primaryBtnText: {
+        color: "#FFFFFF",
         fontSize: fsBtn,
-        fontWeight: "900",
-        color: "#fff",
-    },
-    disabledBtn: {
-        opacity: 0.55,
+        fontWeight: "800",
     },
 });

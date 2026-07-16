@@ -6,6 +6,7 @@ import {
     invalidateCacheTags,
     isFresh,
     setCacheEntry,
+    getSWR,
 } from "./appCache";
 
 const DEFAULT_TTL_MS = Number(process.env.EXPO_PUBLIC_CACHE_TTL_ENQUIRIES_MS || 60000);
@@ -82,33 +83,19 @@ export const getAllEnquiries = async (
             "enquiries:list:v1",
             `${authKey}|${stableStringify(params)}`,
         );
-        const now = Date.now();
-        const recent = _recentGetAllEnquiries.get(key);
-        if (recent && now - Number(recent.t || 0) < RECENT_DEDUP_WINDOW_MS) {
-            return recent.value;
-        }
-
-        const inflight = _inflightGetAllEnquiries.get(key);
-        if (inflight) return await inflight;
-
-        const promise = (async () => {
+        const fetcher = async () => {
             const response = await client.get("/enquiries", { params });
-            _recentGetAllEnquiries.set(key, { t: Date.now(), value: response.data });
-            if (_recentGetAllEnquiries.size > 200) {
-                const cutoff = Date.now() - 5 * 60 * 1000;
-                for (const [k, v] of _recentGetAllEnquiries.entries()) {
-                    if (Number(v?.t || 0) < cutoff) _recentGetAllEnquiries.delete(k);
-                }
-            }
             return response.data; // Now returns { data: [], pagination: {} } or [] if legacy
-        })();
+        };
 
-        _inflightGetAllEnquiries.set(key, promise);
-        try {
-            return await promise;
-        } finally {
-            _inflightGetAllEnquiries.delete(key);
-        }
+        const force = extraParams?.force === true;
+        const forceWait = extraParams?.forceWait === true || page > 1; // forceWait on pagination
+
+        return await getSWR(key, fetcher, DEFAULT_TTL_MS, {
+            tags: ["enquiries"],
+            force,
+            forceWait,
+        });
     } catch (error) {
         console.error(
             "Get enquiries error:",

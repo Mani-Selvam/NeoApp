@@ -6,6 +6,7 @@ import {
     FlatList,
     Image,
     KeyboardAvoidingView,
+    Linking,
     Modal,
     Platform,
     RefreshControl,
@@ -25,7 +26,7 @@ import {
 import { ListSkeleton } from "../components/skeleton/screens";
 import { SkeletonPulse } from "../components/skeleton/Skeleton";
 import { useAuth } from "../contexts/AuthContext";
-import { getImageUrl } from "../services/apiConfig";
+import { getImageUrl, WEB_DASHBOARD_URL } from "../services/apiConfig";
 import * as staffService from "../services/staffService";
 import { getUserFacingError } from "../utils/appFeedback";
 
@@ -286,6 +287,11 @@ export default function StaffScreen({ navigation }) {
     message: "",
     primaryText: "Upgrade",
   });
+  const [topUpState, setTopUpState] = useState({
+    visible: false,
+    type: "Staff", // or "Admin"
+    quantity: 1,
+  });
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -432,6 +438,39 @@ export default function StaffScreen({ navigation }) {
     },
     [adminCount, maxAdmins, maxStaff, showUpgrade, staffCount],
   );
+
+  const handleTopUpPayment = async () => {
+      try {
+          if (!billingPlan) return;
+          setTopUpState(prev => ({ ...prev, loading: true }));
+          const res = await staffService.createAdminStaffOrder({
+              type: topUpState.type,
+              quantity: topUpState.quantity
+          });
+
+          if (res?.success) {
+              setTopUpState(prev => ({ ...prev, visible: false, loading: false }));
+              navigation.navigate("RazorpayCheckoutScreen", {
+                  isAdminStaffTopup: true,
+                  quantity: topUpState.quantity,
+                  type: topUpState.type,
+                  keyId: res.keyId,
+                  orderId: res.razorpayOrderId,
+                  amountInrPaise: res.amountInrPaise,
+                  amountInr: res.amountInr,
+                  displayCurrency: res.currency,
+                  notes: { planName: `${topUpState.type} Upgrade x${topUpState.quantity}` }
+              });
+          } else {
+              Alert.alert("Error", res?.message || "Failed to create order");
+              setTopUpState(prev => ({ ...prev, loading: false }));
+          }
+      } catch (error) {
+          console.error("Top-up error", error);
+          Alert.alert("Error", "Payment initialization failed");
+          setTopUpState(prev => ({ ...prev, loading: false }));
+      }
+  };
 
   const handleAdd = useCallback(async () => {
     if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
@@ -631,20 +670,28 @@ export default function StaffScreen({ navigation }) {
         <Ionicons name="chevron-back" size={20} color={T.ink} />
       </TouchableOpacity>
       <Text style={styles.hdrTitle}>Admin / Staff</Text>
-      <TouchableOpacity
-        onPress={() => navigation.navigate("ProfileScreen")}
-        style={styles.hdrBtn}
-      >
-        {user?.logo ? (
-          <Image source={{ uri: getImageUrl(user.logo) }} style={styles.ava} />
-        ) : (
-          <View style={styles.avaFb}>
-            <Text style={styles.avaLetter}>
-              {(user?.name || "U")[0].toUpperCase()}
-            </Text>
-          </View>
-        )}
-      </TouchableOpacity>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <TouchableOpacity
+          onPress={() => setTopUpState(prev => ({ ...prev, visible: true }))}
+          style={[styles.hdrBtn, { width: undefined, paddingHorizontal: 12, backgroundColor: T.ink }]}
+        >
+          <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Upgrade</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => navigation.navigate("ProfileScreen")}
+          style={styles.hdrBtn}
+        >
+          {user?.logo ? (
+            <Image source={{ uri: getImageUrl(user.logo) }} style={styles.ava} />
+          ) : (
+            <View style={styles.avaFb}>
+              <Text style={styles.avaLetter}>
+                {(user?.name || "U")[0].toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -1059,6 +1106,96 @@ export default function StaffScreen({ navigation }) {
               onPress={closeUpgrade}
             >
               <Text style={styles.btnGhostTxt}>Not now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Top-Up Modal */}
+      <Modal statusBarTranslucent
+        visible={topUpState.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !topUpState.loading && setTopUpState(prev => ({ ...prev, visible: false }))}
+      >
+        <View style={styles.upgradeOverlay}>
+          <View style={styles.upgradeCard}>
+            <Text style={styles.upgradeTitle}>Buy more slots</Text>
+            <View style={styles.upgradeLine} />
+            
+            <View style={styles.field}>
+              <Text style={styles.fLbl}>SELECT ROLE</Text>
+              <RadioRow
+                current={topUpState.type}
+                onSet={(v) => setTopUpState(prev => ({ ...prev, type: v }))}
+                disabled={topUpState.loading}
+                options={["Staff", "Admin"]}
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.fLbl}>QUANTITY</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+                <TouchableOpacity
+                  style={[styles.btnGhost, { width: 44, height: 44, paddingHorizontal: 0 }]}
+                  onPress={() => setTopUpState(prev => ({ ...prev, quantity: Math.max(1, prev.quantity - 1) }))}
+                  disabled={topUpState.loading || topUpState.quantity <= 1}
+                >
+                  <Text style={[styles.btnGhostTxt, { fontSize: 24 }]}>-</Text>
+                </TouchableOpacity>
+                <Text style={{ fontSize: 20, fontWeight: "700" }}>{topUpState.quantity}</Text>
+                <TouchableOpacity
+                  style={[styles.btnGhost, { width: 44, height: 44, paddingHorizontal: 0 }]}
+                  onPress={() => setTopUpState(prev => ({ ...prev, quantity: prev.quantity + 1 }))}
+                  disabled={topUpState.loading}
+                >
+                  <Text style={[styles.btnGhostTxt, { fontSize: 24 }]}>+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {Platform.OS === 'ios' ? (
+              <TouchableOpacity
+                style={styles.btnPri}
+                onPress={() => {
+                  Alert.alert(
+                    "Upgrade on Web Dashboard",
+                    "In-app purchases for staff upgrades are only available via our web dashboard. Would you like to open it now?",
+                    [
+                      { text: "Not Now", style: "cancel" },
+                      {
+                        text: "Go to Dashboard",
+                        onPress: () =>
+                          Linking.openURL(WEB_DASHBOARD_URL).catch(() =>
+                            Alert.alert("Error", "Could not open the website. Please visit neophrondev.in manually.")
+                          ),
+                      },
+                    ]
+                  );
+                }}
+              >
+                <Ionicons name="globe-outline" size={16} color="#fff" style={{ marginRight: 6 }} />
+                <Text style={styles.btnPriTxt}>Upgrade on Web Dashboard</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.btnPri, topUpState.loading && { opacity: 0.5 }]}
+                onPress={handleTopUpPayment}
+                disabled={topUpState.loading}
+              >
+                {topUpState.loading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.btnPriTxt}>Pay to Upgrade</Text>
+                )}
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.btnGhost, { marginTop: 8 }]}
+              onPress={() => !topUpState.loading && setTopUpState(prev => ({ ...prev, visible: false }))}
+              disabled={topUpState.loading}
+            >
+              <Text style={styles.btnGhostTxt}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1551,6 +1688,7 @@ const styles = StyleSheet.create({
     height: 50,
     backgroundColor: T.ink,
     borderRadius: T.radius,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 10,

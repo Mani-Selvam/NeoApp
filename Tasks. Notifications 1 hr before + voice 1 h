@@ -17,3 +17,56 @@
 
 1. AI calls - own development - Integrated in Website
 2. Payment options - Collection and integration
+
+
+
+Cert ID: F89KRV34UP, Serial number: 5351222CB955858EBF5F5AE76FBAEC43, Team ID: S69SJG4G5Z, Team name: NEOPHRON TECHNOLOGIES (Company/Organization)
+    Created: 11 minutes ago, Updated: 1 minute ago,
+    Expires: Wed, 16 Jun 2027 11:56:39 GMT+0530 ... yes
+Using distribution certificate with serial number 5351222CB955858EBF5F5AE76FBAEC43
+
+
+ Select devices for the ad hoc build: » 00008120-000E553A213BA01E (iPhone) (created at: 2026-06-16T07:02:53.284Z)
+✔ Created new profile: *[expo] com.neogroww.crm AdHoc 1781593453195
+
+Project Credentials Configuration
+
+Project                   @manibro27/neoapp-manibro27
+Bundle Identifier         com.neogroww.crm
+                          
+Ad Hoc Configuration      
+
+Distribution Certificate
+Serial Number             5351222CB955858EBF5F5AE76FBAEC43
+Expiration Date           Wed, 16 Jun 2027 11:56:39 GMT+0530
+Apple Team                S69SJG4G5Z (NEOPHRON TECHNOLOGIES (Company/Organization))
+Updated                   27 minutes ago
+
+Provisioning Profile    
+Developer Portal ID       2JQ6V3Z35L
+Status                    active
+Expiration                Wed, 16 Jun 2027 11:56:39 GMT+0530
+Apple Team                S69SJG4G5Z (NEOPHRON TECHNOLOGIES (Company/Organization))
+Provisioned devices       - iPhone (UDID: 00008120-000E553A213BA01E)
+Updated                   1 second ago
+
+All credentials are ready to build @manibro27/neoapp-manibro27 (com.neogroww.crm)
+
+√ Would you like to set up Push Notifications for your project? » Yes
+? Generate a new Apple Push Notifications service key? » (Y/n)
+
+
+
+
+
+
+
+Always look for and use the appropriate **Firebase agent skills** to perform tasks related to Firebase.
+
+I want to use Firebase as my backend, using Firebase Authentication and Firestore database.
+
+Set up and use Email/password Authentication.
+
+Use my existing Firebase project: 953843416185
+
+Make sure to register a Apple app in that project and set up my app's codebase to use Firebase.

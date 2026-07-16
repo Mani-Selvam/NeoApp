@@ -1181,13 +1181,11 @@ export default function AddEnquiryScreen({ route, navigation }) {
     // ── Validation ────────────────────────────────────────────────────────────
     const validate = () => {
         const e = {};
-        if (!isEditMode) {
-            if (!form.name?.trim()) e.name = "Name is required";
-            if (!form.mobile?.trim()) e.mobile = "Mobile is required";
-            if (!form.product?.trim()) e.product = "Product is required";
-            if (!form.cost || Number(form.cost) <= 0)
-                e.cost = "Cost is required";
-        }
+        if (!form.name?.trim()) e.name = "Name is required";
+        if (!form.mobile?.trim()) e.mobile = "Mobile is required";
+        if (!form.product?.trim()) e.product = "Product is required";
+        if (!form.cost || Number(form.cost) <= 0) e.cost = "Cost is required";
+        
         if (form.mobile?.trim() && form.mobile.trim().length !== 10) {
             e.mobile = "Mobile must be 10 digits";
         }
@@ -1906,12 +1904,13 @@ export default function AddEnquiryScreen({ route, navigation }) {
                                     sc={sc}
                                 />
                                 <Field
-                                    label="Estimated Value (₹)"
+                                    label="Estimated Value (₹) *"
                                     value={form.cost}
                                     onChange={(t) => set("cost", t)}
                                     placeholder="0.00"
                                     icon="cash-outline"
                                     keyboardType="decimal-pad"
+                                    error={errors.cost}
                                 />
                             </Card>
 

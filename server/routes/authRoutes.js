@@ -16,6 +16,7 @@ const {
 } = require("../utils/otpService");
 const { ensureEnvLoaded } = require("../config/loadEnv");
 const firebaseAdmin = require("../config/firebaseAdmin");
+const appleSignin = require("apple-signin-auth");
 const {
     verifyToken,
     WEB_AUTH_COOKIE_NAME,
@@ -358,6 +359,13 @@ router.post("/login-phone", async (req, res) => {
         // Check if user exists
         let user = await User.findOne({ mobile: phone_number });
 
+        if (user && user.role !== "superadmin" && user.company_id) {
+            const companyExists = await Company.exists({ _id: user.company_id });
+            if (!companyExists) {
+                user = null;
+            }
+        }
+
         if (!user) {
             // Create a new user? Or require registration flow?
             // Usually, we create a partial user or just log them in if minimal info needed.
@@ -485,6 +493,13 @@ router.post("/google-login", async (req, res) => {
             $or: [{ googleId: uid }, { email: normalizedEmail }],
         });
 
+        if (user && user.role !== "superadmin" && user.company_id) {
+            const companyExists = await Company.exists({ _id: user.company_id });
+            if (!companyExists) {
+                user = null;
+            }
+        }
+
         if (!user) {
             // AUTO-REGISTER new Google user
             // Create a default company for this user
@@ -564,7 +579,7 @@ router.post("/google-login", async (req, res) => {
                 previousSessionId,
                 currentSessionId: user.activeSessionId,
             }),
-        ).catch(() => {});
+        ).catch(() => { });
 
         res.json({
             success: true,
@@ -585,6 +600,151 @@ router.post("/google-login", async (req, res) => {
         res.status(401).json({
             success: false,
             message: "Google authentication failed",
+        });
+    }
+});
+
+// [NEW] Apple Login Endpoint
+router.post("/apple-login", async (req, res) => {
+    try {
+        const { idToken } = req.body;
+
+        if (!idToken) {
+            return res.status(400).json({
+                success: false,
+                message: "Apple ID Token is required",
+            });
+        }
+
+        let decodedToken = null;
+        try {
+            decodedToken = await appleSignin.verifyIdToken(idToken, {
+                ignoreExpiration: false,
+            });
+        } catch (err) {
+            console.error("Apple Token Verification failed:", err);
+            return res.status(401).json({
+                success: false,
+                message: "Invalid or expired Apple ID token",
+            });
+        }
+
+        const { email, sub: uid } = decodedToken;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid token: No email found. Note: Apple only provides the email on the very first sign-in. If missing, user may need to revoke sign-in from Apple ID settings and try again.",
+            });
+        }
+
+        const normalizedEmail = normalizeEmail(email);
+
+        // Check if user exists by appleId or email
+        let user = await User.findOne({
+            $or: [{ appleId: uid }, { email: normalizedEmail }],
+        });
+
+        if (user && user.role !== "superadmin" && user.company_id) {
+            const companyExists = await Company.exists({ _id: user.company_id });
+            if (!companyExists) {
+                user = null;
+            }
+        }
+
+        if (!user) {
+            const domain = `apple_${uid}`;
+            let company = await Company.findOne({ domain });
+            if (!company) {
+                company = await Company.create({
+                    name: `Apple User's Company`,
+                    domain,
+                    plan: { type: "Starter", staffLimit: 1 },
+                });
+            }
+
+            if (company?._id) await ensureDefaultTrialSubscription(company._id);
+
+            user = new User({
+                appleId: uid,
+                name: "Apple User", // Apple doesn't always send name in token, usually in separate object on first signin only
+                email: normalizedEmail,
+                password: uid, // Placeholder hashed password
+                status: "Active",
+                company_id: company._id,
+                role: "Admin",
+            });
+            await user.save();
+            await ensureBlankWhatsappConfig({
+                companyId: company._id,
+                ownerUserId: user._id,
+            });
+
+            // Trigger Notifications for NEW Apple Signup
+            const adminNumber = process.env.SIGNUP_ADMIN_ALERT_NUMBER;
+            const now = new Date();
+            const signupDate = `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
+
+            Promise.all([
+                sendWelcomeEmail(
+                    user.email,
+                    user.name,
+                    company.name,
+                    user.mobile || "-"
+                ),
+                sendSignupTemplateNotifications({
+                    customerName: user.name,
+                    companyName: company.name,
+                    customerPhoneNumber: user.mobile || "-",
+                    email: user.email,
+                    adminPhoneNumber: adminNumber,
+                })
+            ]).catch(err => console.error("[AppleSignup] Notification error:", err.message));
+        } else {
+            if (!user.appleId) {
+                user.appleId = uid;
+                await user.save();
+            }
+        }
+
+        if (user.status === "Inactive") {
+            return res
+                .status(403)
+                .json({ success: false, message: "Account is inactive" });
+        }
+
+        const previousSessionId = user.activeSessionId;
+        const token = await rotateSessionAndIssueToken(req, user);
+
+        const deviceInfo = extractDeviceInfo(req);
+        Promise.resolve(
+            sendLoginAlertToOtherDevices(user._id, {
+                ...deviceInfo,
+                email: user.email,
+                previousSessionId,
+                currentSessionId: user.activeSessionId,
+            }),
+        ).catch(() => { });
+
+        res.json({
+            success: true,
+            message: "Login successful via Apple",
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                mobile: user.mobile || "",
+                logo: user.logo || "",
+                role: user.role,
+                status: user.status,
+            },
+            token,
+        });
+    } catch (error) {
+        console.error("Apple Login Error:", error);
+        res.status(401).json({
+            success: false,
+            message: "Apple authentication failed",
         });
     }
 });
@@ -1223,10 +1383,10 @@ router.post("/signup", async (req, res) => {
             },
             company: company
                 ? {
-                      id: company._id,
-                      code: company.code || "",
-                      name: company.name || "",
-                  }
+                    id: company._id,
+                    code: company.code || "",
+                    name: company.name || "",
+                }
                 : null,
             token,
         });
@@ -1318,6 +1478,7 @@ router.post(
             }
 
             const rotationDays = Number(policy?.passwordRotationDays ?? 90);
+            let passwordExpired = false;
             if (Number.isFinite(rotationDays) && rotationDays > 0) {
                 const changedAt =
                     user.passwordChangedAt || user.updatedAt || user.createdAt;
@@ -1325,11 +1486,7 @@ router.post(
                     const ageMs = Date.now() - new Date(changedAt).getTime();
                     const maxMs = rotationDays * 24 * 60 * 60 * 1000;
                     if (Number.isFinite(ageMs) && ageMs > maxMs) {
-                        return res.status(403).json({
-                            success: false,
-                            code: "PASSWORD_EXPIRED",
-                            message: `Password expired (rotation ${rotationDays} days). Reset your password to continue.`,
-                        });
+                        passwordExpired = true;
                     }
                 }
             }
@@ -1405,13 +1562,16 @@ router.post(
 
             return res.json({
                 success: true,
-                message: "Superadmin login successful",
+                message: passwordExpired
+                    ? "Superadmin login successful (password expired)"
+                    : "Superadmin login successful",
                 user: {
                     id: user._id,
                     name: user.name,
                     email: user.email,
                     role: user.role,
                     status: user.status,
+                    passwordExpired,
                 },
                 token,
                 sessionTimeoutMinutes: minutes,
@@ -1694,6 +1854,14 @@ router.post(
                 });
             }
 
+            // Check if user's company exists if they are not superadmin
+            if (user.role !== "superadmin" && user.company_id && !company) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Account not found. Please sign up.",
+                });
+            }
+
             // Check if user status is Active
             if (user.status === "Inactive") {
                 return res.status(403).json({
@@ -1836,7 +2004,7 @@ router.post("/logout", verifyToken, async (req, res) => {
                 pushToken: 1,
                 lastTokenUpdate: 1,
             },
-        }).catch(() => {});
+        }).catch(() => { });
         clearUserCache(req.userId);
 
         const io = req.app?.get("io");
@@ -1898,9 +2066,9 @@ router.post("/register-fcm-token", verifyToken, async (req, res) => {
                 fcmTokenUpdatedAt: new Date(),
                 ...(sessionIdValue
                     ? {
-                          fcmSessionId: sessionIdValue,
-                          fcmSessionUpdatedAt: new Date(),
-                      }
+                        fcmSessionId: sessionIdValue,
+                        fcmSessionUpdatedAt: new Date(),
+                    }
                     : {}),
             },
             { returnDocument: "after" },
@@ -1948,7 +2116,7 @@ router.post(
                     pushToken: 1,
                     lastTokenUpdate: 1,
                 },
-            }).catch(() => {});
+            }).catch(() => { });
             clearUserCache(userId);
             res.json({ success: true });
         } catch (error) {
@@ -2062,12 +2230,148 @@ router.post(
     },
 );
 
+// OTP Login/Signup Routes
+router.post("/otp/send", async (req, res) => {
+    try {
+        const { identifier } = req.body;
+        if (!identifier) {
+            return res.status(400).json({ success: false, message: "Email or mobile is required" });
+        }
+
+        const isEmail = identifier.includes("@");
+        const normalizedIdentifier = isEmail ? identifier.trim().toLowerCase() : identifier.trim().replace(/\D/g, "");
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        const OtpModel = require("../models/Otp");
+        await OtpModel.create({
+            identifier: normalizedIdentifier,
+            otp,
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 mins
+        });
+
+        if (isEmail) {
+            const { createTransporter, getMailConfig, hasRealCredentials } = require("../utils/mailTransport");
+            if (hasRealCredentials()) {
+                const transporter = createTransporter();
+                const { from } = getMailConfig();
+                await transporter.sendMail({
+                    from: `"NeoApp Security" <${from}>`,
+                    to: normalizedIdentifier,
+                    subject: "Your NeoApp Login Code",
+                    text: `Your OTP is: ${otp}. It expires in 5 minutes.`,
+                });
+            } else {
+                console.warn("[OTP] SMTP not configured. OTP:", otp);
+            }
+        } else {
+            const { sendMobileOTP } = require("../utils/otpService");
+            await sendMobileOTP(normalizedIdentifier, otp, { method: "whatsapp" });
+        }
+
+        res.json({ success: true, message: "OTP sent successfully" });
+    } catch (error) {
+        console.error("[OTP Send Error]:", error);
+        res.status(500).json({ success: false, message: "Failed to send OTP" });
+    }
+});
+
+router.post("/otp/verify", async (req, res) => {
+    try {
+        const { identifier, otp } = req.body;
+        if (!identifier || !otp) {
+            return res.status(400).json({ success: false, message: "Identifier and OTP required" });
+        }
+
+        const isEmail = identifier.includes("@");
+        const normalizedIdentifier = isEmail ? identifier.trim().toLowerCase() : identifier.trim().replace(/\D/g, "");
+
+        const OtpModel = require("../models/Otp");
+        const otpDoc = await OtpModel.findOne({ identifier: normalizedIdentifier }).sort({ createdAt: -1 });
+
+        if (!otpDoc || otpDoc.otp !== otp) {
+            return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+        }
+
+        // Delete OTP after use
+        await OtpModel.deleteOne({ _id: otpDoc._id });
+
+        // Find or create user
+        let user;
+        if (isEmail) {
+            user = await User.findOne({ email: normalizedIdentifier }).sort({ createdAt: 1 });
+        } else {
+            user = await User.findOne({ mobile: normalizedIdentifier }).sort({ createdAt: 1 });
+        }
+
+        if (!user) {
+            // Create Superadmin/Admin if new? The user says "login or signup show it website next login to pay it"
+            // For B2B CRM, if they are new, they become a Company Admin.
+            const Company = require("../models/Company");
+            const newCompany = await Company.create({
+                name: `Company-${normalizedIdentifier}`,
+                code: Math.random().toString(36).substr(2, 6).toUpperCase(),
+                status: "Active"
+            });
+
+            user = await User.create({
+                name: isEmail ? normalizedIdentifier.split("@")[0] : "User",
+                email: isEmail ? normalizedIdentifier : `${normalizedIdentifier}@placeholder.com`,
+                mobile: isEmail ? "" : normalizedIdentifier,
+                password: await bcrypt.hash(otp + process.env.JWT_SECRET, 10), // Random password
+                role: "Admin", // First user is Admin
+                company_id: newCompany._id,
+                status: "Active"
+            });
+        }
+
+        // Generate tokens (Copied from existing login flow)
+        const { randomUUID } = require("crypto");
+        const activeSessionId = randomUUID();
+        const fcmSessionId = randomUUID();
+
+        user.activeSessionId = activeSessionId;
+        user.fcmSessionId = fcmSessionId;
+        user.lastLogin = new Date();
+        await user.save();
+
+        const tokenPayload = {
+            userId: user._id,
+            company_id: user.company_id || null,
+            role: user.role,
+            sessionId: activeSessionId,
+            fcmSessionId: fcmSessionId,
+        };
+
+        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: "30d" });
+
+        // Web session cookie
+        const maxAgeMs = 30 * 24 * 60 * 60 * 1000;
+        setWebAuthCookie(req, res, token, maxAgeMs);
+
+        res.json({
+            success: true,
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                company_id: user.company_id,
+            },
+        });
+    } catch (error) {
+        console.error("[OTP Verify Error]:", error);
+        res.status(500).json({ success: false, message: "Verification failed" });
+    }
+});
+
 module.exports = router;
 
 const setWebAuthCookie = (req, res, token, maxAgeMs) => {
     const isSecure =
         String(process.env.WEB_AUTH_COOKIE_SECURE || "").toLowerCase() ===
-            "true" ||
+        "true" ||
         req.secure ||
         req.headers["x-forwarded-proto"] === "https";
     const sameSite = isSecure ? "None" : "Lax";
@@ -2085,7 +2389,7 @@ const setWebAuthCookie = (req, res, token, maxAgeMs) => {
 const clearWebAuthCookie = (req, res) => {
     const isSecure =
         String(process.env.WEB_AUTH_COOKIE_SECURE || "").toLowerCase() ===
-            "true" ||
+        "true" ||
         req.secure ||
         req.headers["x-forwarded-proto"] === "https";
     const sameSite = isSecure ? "None" : "Lax";

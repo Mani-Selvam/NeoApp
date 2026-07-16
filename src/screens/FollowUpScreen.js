@@ -195,6 +195,7 @@ const normalizePhone = (value) =>
         .slice(-10);
 
 const getImmediateCall = () => {
+    if (Platform.OS !== "android") return null;
     try {
         return (
             require("react-native-immediate-phone-call").default ||
@@ -206,6 +207,7 @@ const getImmediateCall = () => {
 };
 
 const getIntentLauncher = () => {
+    if (Platform.OS !== "android") return null;
     try {
         return require("expo-intent-launcher");
     } catch (e) {
@@ -385,11 +387,11 @@ function VoiceNotePlayer({ uri }) {
             <TouchableOpacity onPress={togglePlayback} style={{ padding: 4, backgroundColor: "#2563EB", borderRadius: 20 }}>
                 <Ionicons name={isPlaying ? "pause" : "play"} size={16} color="#FFFFFF" style={{ marginLeft: isPlaying ? 0 : 2 }} />
             </TouchableOpacity>
-            
+
             <View style={{ flex: 1, marginHorizontal: 12, height: 4, backgroundColor: "#CBD5E1", borderRadius: 2 }}>
                 <View style={{ width: `${progress}%`, height: "100%", backgroundColor: "#2563EB", borderRadius: 2 }} />
             </View>
-            
+
             <Text style={{ fontSize: 11, color: "#64748B", fontWeight: "600", minWidth: 32, textAlign: "right" }}>
                 {formatTime(position)}
             </Text>
@@ -411,8 +413,8 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
     useEffect(() => {
         return sound
             ? () => {
-                  sound.unloadAsync();
-              }
+                sound.unloadAsync();
+            }
             : undefined;
     }, [sound]);
 
@@ -501,8 +503,8 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
     const handleDeleteNote = (n) => {
         Alert.alert("Confirm Delete", "Are you sure you want to delete this note?", [
             { text: "Cancel", style: "cancel" },
-            { 
-                text: "Delete", 
+            {
+                text: "Delete",
                 style: "destructive",
                 onPress: async () => {
                     try {
@@ -589,7 +591,7 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
                     <TextInput
                         value={note}
                         onChangeText={setNote}
-                        placeholder={`e.g. Customer is interested in ${enquiry?.product || 'the product'}, prefers morning calls. Budget around ₹${enquiry?.cost || '50,000'}. Follow up next week.`}
+                        placeholder={`Follow up next week.`}
                         multiline
                         autoFocus
                         style={{ backgroundColor: "#F8FAFF", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 8, padding: 12, minHeight: 110, textAlignVertical: "top", color: "#0F172A", fontSize: 14 }}
@@ -649,20 +651,20 @@ function FollowUpNotesPanel({ enquiry, noteRows = [], onSaved }) {
                 <View style={{ marginTop: 8 }}>
                     <Text style={{ fontSize: 16, fontWeight: "600", color: "#0F172A", marginBottom: 12 }}>📋 Previous Notes</Text>
                     {noteRows.map((n, i) => (
-                        <View 
-                            key={n._id || i} 
-                            style={{ 
-                                backgroundColor: "#FFFFFF", 
-                                padding: 14, 
-                                borderRadius: 12, 
-                                marginBottom: 12, 
-                                elevation: 1, 
-                                shadowColor: "#000", 
-                                shadowOffset: { width: 0, height: 1 }, 
-                                shadowOpacity: 0.05, 
-                                shadowRadius: 2, 
-                                borderWidth: 1, 
-                                borderColor: "#E2E8F0" 
+                        <View
+                            key={n._id || i}
+                            style={{
+                                backgroundColor: "#FFFFFF",
+                                padding: 14,
+                                borderRadius: 12,
+                                marginBottom: 12,
+                                elevation: 1,
+                                shadowColor: "#000",
+                                shadowOffset: { width: 0, height: 1 },
+                                shadowOpacity: 0.05,
+                                shadowRadius: 2,
+                                borderWidth: 1,
+                                borderColor: "#E2E8F0"
                             }}
                         >
                             <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
@@ -2346,7 +2348,8 @@ const DetailView = ({
 
     const goClose = () => {
         // Prompt to add a note if closing the form without saving
-        if (showFollowUpForm) {
+        // ONLY if it was auto-opened (new enquiry)
+        if (showFollowUpForm && autoOpenFollowUpFormToken) {
             Alert.alert(
                 "Add a Note?",
                 "Do you want to add a quick note for this enquiry before leaving?",
@@ -3358,23 +3361,35 @@ const DetailView = ({
                                                                                         "Auto-selected"}
                                                                                 </Text>
                                                                             </TouchableOpacity>
-                                                                            {isTimePickerVisible &&
-                                                                                Platform.OS !==
-                                                                                "web" && (
-                                                                                    <DateTimePicker
-                                                                                        value={
-                                                                                            timePickerValue
-                                                                                        }
-                                                                                        mode="time"
-                                                                                        is24Hour={
-                                                                                            false
-                                                                                        }
-                                                                                        display="default"
-                                                                                        onChange={
-                                                                                            handleConfirmTime
-                                                                                        }
-                                                                                    />
-                                                                                )}
+                                                                            {isTimePickerVisible && Platform.OS === "android" && (
+                                                                                <DateTimePicker
+                                                                                    value={timePickerValue}
+                                                                                    mode="time"
+                                                                                    is24Hour={false}
+                                                                                    display="default"
+                                                                                    onChange={handleConfirmTime}
+                                                                                />
+                                                                            )}
+                                                                            {isTimePickerVisible && Platform.OS === "ios" && (
+                                                                                <Modal transparent animationType="slide">
+                                                                                    <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
+                                                                                        <View style={{ backgroundColor: "white", padding: 16 }}>
+                                                                                            <View style={{ flexDirection: "row", justifyContent: "flex-end", marginBottom: 8 }}>
+                                                                                                <TouchableOpacity onPress={() => setTimePickerVisible(false)}>
+                                                                                                    <Text style={{ color: C.primary, fontWeight: "600", fontSize: 16 }}>Done</Text>
+                                                                                                </TouchableOpacity>
+                                                                                            </View>
+                                                                                            <DateTimePicker
+                                                                                                value={timePickerValue}
+                                                                                                mode="time"
+                                                                                                is24Hour={false}
+                                                                                                display="spinner"
+                                                                                                onChange={handleConfirmTime}
+                                                                                            />
+                                                                                        </View>
+                                                                                    </View>
+                                                                                </Modal>
+                                                                            )}
                                                                         </>
                                                                     )}
                                                                 </>
@@ -5251,12 +5266,32 @@ export default function FollowUpScreen({ navigation, route }) {
         const unsubEnquiryCreated = onAppEvent(APP_EVENTS.ENQUIRY_CREATED, () =>
             refresh({ clear: true, refreshCounts: true, refreshModals: true }),
         );
+        const unsubSWR = onAppEvent(APP_EVENTS.SWR_CACHE_UPDATE, (payload) => {
+            if (payload?.key && payload.key.includes("followups:list")) {
+                fetchFollowUps(activeTab, true, {
+                    force: false,
+                    showIndicator: false,
+                });
+            }
+        });
+
+        // Trigger silent refresh when app returns from background
+        const appStateSub = AppState.addEventListener("change", (nextState) => {
+            if (nextState === "active") {
+                fetchFollowUps(activeTab, true, {
+                    showIndicator: false,
+                    force: false, // Let SWR handle it
+                });
+            }
+        });
 
         return () => {
             cancelDebounceKey("followup-refresh");
             unsubFollowup();
             unsubEnquiry();
             unsubEnquiryCreated();
+            unsubSWR();
+            appStateSub?.remove();
         };
     }, [activeTab, selectedDate, showMissedModal, showDroppedModal]);
 
@@ -5678,20 +5713,7 @@ export default function FollowUpScreen({ navigation, route }) {
 
         let cached = null;
         let cachedItemCount = null;
-        if (refresh && allowCache) {
-            cached = await getCacheEntry(cacheKey).catch(() => null);
-            if (cached?.value?.items) {
-                const cachedItems = Array.isArray(cached.value.items)
-                    ? cached.value.items
-                    : [];
-                cachedItemCount = cachedItems.length;
-                setFollowUps(cachedItems);
-                setHasMore(Boolean(cached.value.hasMore));
-                setPage(Number(cached.value.page || 1));
-                if (typeof cached.t === "number") lastFetch.current = cached.t;
-                if (!showIndicator) setIsLoading(false);
-            }
-        }
+        // Manual getCacheEntry removed - relying on SWR in followupService
 
         if (refresh) {
             const shouldFetch =
@@ -5823,15 +5845,7 @@ export default function FollowUpScreen({ navigation, route }) {
                 if (refresh) fetchTabCounts(effectiveSelectedDate);
                 lastFetch.current = Date.now();
                 setPage(nextPage);
-                await setCacheEntry(
-                    cacheKey,
-                    {
-                        items: nextItems,
-                        hasMore: nextHasMore,
-                        page: nextPage,
-                    },
-                    { tags: ["followups"] },
-                ).catch(() => { });
+                // setCacheEntry removed - relying on SWR in followupService
                 return;
             }
             const requestParams = tab === "All" ? monthRange : {};
@@ -7006,8 +7020,11 @@ export default function FollowUpScreen({ navigation, route }) {
                 onEndReached={handleEndReached}
                 onEndReachedThreshold={0.5}
                 numColumns={1}
-                // Android + complex cards (shadows/animations) can flicker with clipping enabled.
-                removeClippedSubviews={Platform.OS !== "android"}
+                // Android + complex cards (shadows/animations) can flicker with clipping enabled, but we need it for performance.
+                removeClippedSubviews={true}
+                initialNumToRender={8}
+                maxToRenderPerBatch={5}
+                windowSize={5}
                 ListFooterComponent={
                     isLoadingMore ? (
                         <ActivityIndicator
@@ -7780,6 +7797,7 @@ const MS = StyleSheet.create({
         borderColor: C.border,
         flexDirection: "row",
         alignItems: "center",
+        justifyContent: "center",
         gap: 5,
         backgroundColor: C.bg,
     },
@@ -7790,7 +7808,7 @@ const MS = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
     },
-    tabText: { fontSize: 11, fontWeight: "700", color: C.textMuted, flex: 1 },
+    tabText: { fontSize: 11, fontWeight: "700", color: C.textMuted },
     tabCount: {
         minWidth: 22,
         height: 20,

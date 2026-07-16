@@ -225,6 +225,11 @@ const sendNeoEnquiryTemplateMessage = async ({
                 // The company uses its own custom configuration merged with Global WA API config
                 cfg = await getCompanyTemplateConfig(companyId, company);
             }
+
+            if (!cfg && company && company.whatsappTemplate && company.whatsappTemplate.disableEnvFallback) {
+                console.log("[WhatsApp][EnquiryTemplate] Global env fallback disabled for company", companyId);
+                return false;
+            }
         }
         
         // Fallback to global config if company config is missing, incomplete, or disabled

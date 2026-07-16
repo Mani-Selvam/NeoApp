@@ -7,18 +7,18 @@ const playStoreSafeMode =
         .toLowerCase() !== "false";
 
 module.exports = {
-    dependencies: playStoreSafeMode
-        ? {
-              "react-native-call-log": {
-                  platforms: {
-                      android: null,
-                  },
-              },
-              "react-native-immediate-phone-call": {
-                  platforms: {
-                      android: null,
-                  },
-              },
-          }
-        : {},
+    dependencies: {
+        "react-native-call-log": {
+            platforms: {
+                ios: null,
+                ...(playStoreSafeMode ? { android: null } : {}),
+            },
+        },
+        "react-native-immediate-phone-call": {
+            platforms: {
+                ios: null,
+                ...(playStoreSafeMode ? { android: null } : {}),
+            },
+        },
+    },
 };

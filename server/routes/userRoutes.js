@@ -647,7 +647,7 @@ router.put(
             const logo = clearLogo
                 ? ""
                 : uploadedLogo || bodyLogo || existingUser?.logo || "";
-            
+
             const updateFields = { name, logo, updatedAt: new Date() };
             if (mobile !== undefined) {
                 updateFields.mobile = mobile;
@@ -737,11 +737,19 @@ router.post("/profile/update-password/initiate", verifyToken, async (req, res) =
             console.log(`[Profile] Password change OTP for ${user.email}: ${otp}`);
         }
 
-        await sendEmailOTP(user.email, otp);
+        if (!user.email) {
+            return res.status(400).json({ success: false, message: "No email associated with this account" });
+        }
 
-        res.json({ success: true, message: "Verification OTP sent to your Gmail" });
+        const emailSent = await sendEmailOTP(user.email, otp);
+        if (!emailSent) {
+            return res.status(500).json({ success: false, message: "Failed to send OTP email. Please try again later." });
+        }
+
+        res.json({ success: true, message: "Verification OTP sent to your email" });
     } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
+        console.error("Initiate password update error:", err);
+        res.status(500).json({ success: false, message: err.message || "Internal server error" });
     }
 });
 
@@ -1167,6 +1175,7 @@ router.delete("/company/account", verifyToken, async (req, res) => {
             SupportTicket.deleteMany({ companyId }),
             Target.deleteMany({ company_id: companyId }),
             WhatsAppConfig.deleteMany({ companyId }),
+            User.deleteMany({ _id: { $in: companyUserIds } }),
         ]);
         await Company.deleteOne({ _id: companyId });
 
@@ -1329,7 +1338,7 @@ router.post("/mobile-change/initiate", verifyToken, async (req, res) => {
             .toLowerCase()
             .trim();
         const user = await User.findById(req.userId);
-        
+
         if (!user.mobile) {
             otpStore[`mobile_old_verified_${req.userId}`] = true;
             return res.json({ success: true, bypass: true, message: "No current mobile to verify. Proceed to new mobile." });

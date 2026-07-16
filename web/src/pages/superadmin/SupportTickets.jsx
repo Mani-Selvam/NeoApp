@@ -132,7 +132,7 @@ export default function SupportTickets() {
         <div className="support-user">
           <strong>{row.name}</strong>
           <span>{row.email}</span>
-          <span>{row.mobile}</span>
+          {row.mobile && row.mobile !== "-" && <span>📞 {row.mobile}</span>}
         </div>
       ),
     },
@@ -257,20 +257,50 @@ export default function SupportTickets() {
           {activeTicket ? (
             <section className="settings-card support-reply">
               <div className="support-reply-head">
-                <h3>Ticket</h3>
+                <h3>Ticket Details</h3>
                 <button type="button" className="icon-btn" onClick={() => setActiveTicket(null)}>
                   Close
                 </button>
               </div>
-              <p className="support-reply-meta">
-                To <strong>{activeTicket.email || "-"}</strong> (Ticket:{" "}
-                <strong>{activeTicket.status}</strong>)
-              </p>
+
+              {/* Submitter Info */}
+              <div className="support-thread" style={{ marginBottom: "1rem" }}>
+                <div className="support-thread-item" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                  <div>
+                    <div className="support-thread-label">Name</div>
+                    <div className="support-thread-body">{activeTicket.name || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="support-thread-label">Email</div>
+                    <div className="support-thread-body">{activeTicket.email || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="support-thread-label">Mobile</div>
+                    <div className="support-thread-body">{activeTicket.mobile || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="support-thread-label">Source</div>
+                    <div className="support-thread-body">{activeTicket.source || "-"}</div>
+                  </div>
+                  <div>
+                    <div className="support-thread-label">Status</div>
+                    <div className="support-thread-body">
+                      <span className={`status-badge ${statusTone(activeTicket.status)}`}>{activeTicket.status}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="support-thread-label">Submitted</div>
+                    <div className="support-thread-body">
+                      {activeTicket.createdAt ? new Date(activeTicket.createdAt).toLocaleString() : "-"}
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <div className="support-thread">
                 <div className="support-thread-item">
                   <div className="support-thread-label">Message</div>
-                  <div className="support-thread-body">{activeTicket.message || "-"}</div>
+                  <div className="support-thread-body" style={{ whiteSpace: "pre-wrap" }}>{activeTicket.message || "-"}</div>
                 </div>
                 {activeTicket.responseMessage ? (
                   <div className="support-thread-item">
@@ -279,11 +309,12 @@ export default function SupportTickets() {
                   </div>
                 ) : null}
               </div>
+
               <textarea
                 rows={5}
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
-                placeholder="Write your reply (this will be saved and shown in the app)..."
+                placeholder="Write your reply (this will be saved and emailed to the user)..."
               />
               <label className="support-check">
                 <input

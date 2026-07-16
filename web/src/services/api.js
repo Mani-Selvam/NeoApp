@@ -33,6 +33,11 @@ async function request(path, options = {}) {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+        if (response.status === 403 && data.code === "PASSWORD_EXPIRED") {
+            if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("neoapp:password-expired"));
+            }
+        }
         const err = new Error(data.message || data.error || "Request failed");
         err.status = response.status;
         err.data = data;
@@ -87,6 +92,11 @@ export const api = {
         request(`/superadmin/companies/${companyId}/status`, {
             method: "PATCH",
             body: JSON.stringify({ status }),
+        }),
+    updateCompanyEnvConfirmation: (companyId, disableEnvFallback) =>
+        request(`/superadmin/companies/${companyId}/env-confirmation`, {
+            method: "PATCH",
+            body: JSON.stringify({ disableEnvFallback }),
         }),
     deleteCompany: (companyId) =>
         request(`/superadmin/companies/${companyId}`, { method: "DELETE" }),
@@ -172,6 +182,7 @@ export const api = {
     getSuperadminWebsiteLeads: () => request("/superadmin/website-leads"),
     getAIVoicePayments: () => request("/ai-payments"),
     deleteAIVoicePayment: (id) => request(`/ai-payments/${id}`, { method: "DELETE" }),
+    getAdminStaffPayments: () => request("/superadmin/admin-staff-payments"),
 
     getSupportTickets: ({ status = "", q = "" } = {}) => {
         const params = new URLSearchParams();
@@ -211,6 +222,12 @@ export const api = {
     updateRazorpaySettings: (payload) =>
         request("/superadmin/settings/razorpay", {
             method: "PATCH",
+            body: JSON.stringify(payload),
+        }),
+
+    changeSuperadminPassword: (payload) =>
+        request("/superadmin/settings/change-password", {
+            method: "PUT",
             body: JSON.stringify(payload),
         }),
 };

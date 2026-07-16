@@ -18,10 +18,10 @@ export const handleVoiceCommand = async (transcript, callback) => {
 
     try {
         callback({ status: "processing" });
-        
+
         // 1. Get our authenticated API client
         const client = await getApiClient();
-        
+
         // 2. Query the voice assistant endpoint
         const response = await client.post("/assistant/voice-command", {
             text: transcript,
@@ -31,14 +31,14 @@ export const handleVoiceCommand = async (transcript, callback) => {
         const data = response.data;
         if (data && data.success) {
             console.log("[Voice Assistant Client] Success response:", data);
-            
+
             // 3. Play the vocalized speech out loud!
             speakResponse(data.spokenText, data.language);
-            
+
             // 4. Trigger UI callback state
-            callback({ 
-                status: "done", 
-                text: data.spokenText, 
+            callback({
+                status: "done",
+                text: data.spokenText,
                 intent: data.intent,
                 language: data.language
             });
@@ -48,14 +48,14 @@ export const handleVoiceCommand = async (transcript, callback) => {
 
     } catch (error) {
         console.error("[Voice Assistant Client Error]:", error);
-        
+
         const errorMsg = error?.response?.data?.error || error.message || "Failed to contact voice engine";
         const isTamil = transcript.toLowerCase().includes("இன்று") || transcript.toLowerCase().includes("தவறவிட்ட");
-        
-        const fallbackSpeech = isTamil 
+
+        const fallbackSpeech = isTamil
             ? "மன்னிக்கவும், தகவல் சேகரிப்பதில் பிழை ஏற்பட்டது."
             : "Sorry, I encountered an error checking your database.";
-            
+
         speakResponse(fallbackSpeech, isTamil ? "ta" : "en");
         callback({ status: "error", message: errorMsg });
     }
@@ -68,16 +68,23 @@ export const handleVoiceCommand = async (transcript, callback) => {
 export const speakResponse = async (text, lang = "en", onDoneCallback = null) => {
     // Prevent overlapping speech overlay
     Speech.stop();
-    
+
+    if (!text || typeof text !== "string" || text.trim() === "") {
+        if (onDoneCallback) {
+            onDoneCallback();
+        }
+        return;
+    }
+
     const speakLang = String(lang).toLowerCase() === "ta" ? "ta-IN" : "en-US";
     let selectedVoice = undefined;
 
     try {
         const voices = await Speech.getAvailableVoicesAsync();
-        
+
         // Normalize search language
         const langLower = speakLang.toLowerCase().replace("_", "-");
-        
+
         // Filter for matching language voices
         const matchingVoices = voices.filter(v => {
             const vLang = v.language.toLowerCase().replace("_", "-");
@@ -86,7 +93,7 @@ export const speakResponse = async (text, lang = "en", onDoneCallback = null) =>
 
         // List of female voice name patterns (known high-quality voices on iOS/Android/Windows)
         const FEMALE_PATTERNS = [
-            "samantha", "karen", "moira", "tessa", "susan", "nicky", "catherine", 
+            "samantha", "karen", "moira", "tessa", "susan", "nicky", "catherine",
             "zoe", "lekha", "heera", "vaishali", "pallavi", "sinji", "zira", "female"
         ];
 
@@ -99,16 +106,16 @@ export const speakResponse = async (text, lang = "en", onDoneCallback = null) =>
 
         // 2. Fallback to any voice indicating it is female in identifier/name
         if (!selectedVoice) {
-            selectedVoice = matchingVoices.find(v => 
-                v.name.toLowerCase().includes("female") || 
+            selectedVoice = matchingVoices.find(v =>
+                v.name.toLowerCase().includes("female") ||
                 v.identifier.toLowerCase().includes("female")
             );
         }
 
         // 3. Android specific Google premium/natural voices (contain "-f-" or "network" for high quality)
         if (!selectedVoice && Platform.OS === "android") {
-            selectedVoice = matchingVoices.find(v => 
-                v.name.toLowerCase().includes("-f-") || 
+            selectedVoice = matchingVoices.find(v =>
+                v.name.toLowerCase().includes("-f-") ||
                 v.identifier.toLowerCase().includes("-f-") ||
                 v.name.toLowerCase().includes("network") ||
                 v.identifier.toLowerCase().includes("network")
@@ -121,7 +128,7 @@ export const speakResponse = async (text, lang = "en", onDoneCallback = null) =>
     } catch (err) {
         console.warn("[TTS] Error querying available voices:", err);
     }
-    
+
     const options = {
         language: speakLang,
         pitch: 1.05, // Slightly higher pitch (1.05) creates a more pleasant female speaking tone
@@ -143,6 +150,9 @@ export const speakResponse = async (text, lang = "en", onDoneCallback = null) =>
     if (selectedVoice?.identifier) {
         options.voice = selectedVoice.identifier;
     }
-    
-    Speech.speak(text, options);
+
+    // Clean up text for TTS: remove markdown asterisks and excess whitespace
+    const cleanText = text.replace(/\*\*/g, "").replace(/\n/g, ". ").replace(/\s+/g, " ").trim();
+
+    Speech.speak(cleanText, options);
 };

@@ -8,7 +8,7 @@ async function run() {
   await connectDB();
 
   const email = "superadmin@gmail.com";
-  const password = "superadmin@123";
+  const password = "superadmin@26";
 
   let user = await User.findOne({ email });
 

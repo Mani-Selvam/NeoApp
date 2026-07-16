@@ -9,6 +9,7 @@ export const APP_EVENTS = Object.freeze({
     COUPON_SYNC: "COUPON_SYNC",
     COUPON_ANNOUNCEMENT: "COUPON_ANNOUNCEMENT",
     INTRO_FINISHED: "INTRO_FINISHED",
+    SWR_CACHE_UPDATE: "SWR_CACHE_UPDATE",
 });
 
 export const emitAppEvent = (eventName, payload) => {

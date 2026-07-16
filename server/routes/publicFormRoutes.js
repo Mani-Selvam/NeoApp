@@ -513,6 +513,17 @@ const renderFormPage = ({ company, url }) => {
 </html>`;
 };
 
+router.get("/plans", async (req, res) => {
+    try {
+        const Plan = require("../models/Plan");
+        const plans = await Plan.find({ isActive: true }).select("_id name code basePrice extraAdminPrice extraStaffPrice trialDays maxAdmins maxStaff features").lean();
+        res.json({ success: true, plans });
+    } catch (error) {
+        console.error("Error fetching public plans:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch plans" });
+    }
+});
+
 router.get("/:slug/config", async (req, res) => {
     try {
         const company = await getCompanyPublicForm(req.params.slug);
@@ -702,5 +713,7 @@ router.post("/:slug/submit", async (req, res) => {
             .json({ message: error.message || "Failed to submit form" });
     }
 });
+
+
 
 module.exports = router;

@@ -50,6 +50,7 @@ const CompanySchema = new mongoose.Schema(
       name: { type: String, trim: true },
       language: { type: String, trim: true, default: "en" },
       buttonIndex: { type: Number, default: 0},
+      disableEnvFallback: { type: Boolean, default: false },
     },
     assistantUsage: {
       yearlyUsed: { type: Number, default: 0 },
