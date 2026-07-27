@@ -33,13 +33,15 @@ export function PricingSection({ onCheckout }: PricingSectionProps) {
 
     // Fetch user's current plan if logged in
     if (isAuthenticated && token) {
-      fetch(`${API_BASE}/users/company/current-plan`, {
+      fetch(`${API_BASE}/users/billing/effective-plan`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       .then(res => res.json())
       .then(data => {
-        if (data.success && data.plan) {
-          setActivePlanId(data.plan._id);
+        const planObj = data?.plan || data?.subscription?.plan || data?.effectivePlan?.plan || data;
+        const targetId = planObj?._id || planObj?.id || planObj?.code || planObj?.name || "";
+        if (targetId) {
+          setActivePlanId(String(targetId));
         }
       })
       .catch(console.error);
@@ -68,7 +70,15 @@ export function PricingSection({ onCheckout }: PricingSectionProps) {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
             {plans.map((dbPlan, index) => {
-              const isActive = activePlanId && activePlanId === dbPlan._id;
+              const activeId = String(activePlanId || "").toLowerCase();
+              const dbId = String(dbPlan._id || "").toLowerCase();
+              const dbCode = String(dbPlan.code || "").toLowerCase();
+              const dbName = String(dbPlan.name || "").toLowerCase();
+              
+              const isActive = Boolean(
+                activeId &&
+                (dbId === activeId || dbCode === activeId || dbName === activeId)
+              );
               const isOther = activePlanId && !isActive;
               
               // Dynamically highlight the PRO plan, or the most expensive plan if PRO doesn't exist
@@ -90,11 +100,10 @@ export function PricingSection({ onCheckout }: PricingSectionProps) {
                 viewport={{ once: true }}
                 transition={{ duration: 0.5, delay: index * 0.1 }}
                 className={`rounded-3xl p-8 flex flex-col transition-all duration-300 ${
-                  isOther ? "opacity-40 grayscale pointer-events-none" : ""
-                } ${isHighlight
+                  isHighlight
                     ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 scale-105 z-10 relative"
                     : "glass-card"
-                  }`}
+                }`}
               >
                 <div className="mb-8">
                   <h4 className={`text-xl font-semibold mb-2 ${isHighlight ? "text-primary-foreground" : ""}`}>{dbPlan.name}</h4>
@@ -125,11 +134,13 @@ export function PricingSection({ onCheckout }: PricingSectionProps) {
                 <Button
                   variant={isHighlight ? "secondary" : "default"}
                   disabled={isActive}
-                  className={`w-full rounded-full h-12 text-base font-semibold ${isActive ? "opacity-100 bg-green-500 text-white hover:bg-green-600" : ""} ${!isActive && isHighlight ? "text-primary hover:bg-white" : ""
+                  className={`w-full rounded-full h-12 text-base font-semibold ${isActive ? "opacity-100 bg-emerald-600 !text-white hover:bg-emerald-700 cursor-default" : ""} ${!isActive && isHighlight ? "text-primary hover:bg-white" : ""
                     }`}
                   onClick={() => onCheckout && onCheckout(dbPlan)}
                 >
-                  {isActive ? "Current Plan" : "Select Plan"}
+                  <span className={isActive ? "text-white font-bold" : ""}>
+                    {isActive ? "Current Plan" : "Select Plan"}
+                  </span>
                 </Button>
               </motion.div>
               );

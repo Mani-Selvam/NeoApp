@@ -739,7 +739,15 @@ export default function PricingScreen({ navigation }) {
             } finally {
                 setActivatingFree(false);
             }
-        } else
+        } else {
+            if (Platform.OS === 'ios') {
+                Alert.alert(
+                    "Subscription Management",
+                    "Paid subscription upgrades and billing management are available through the web portal at https://6z7.714.mytemp.website/ or by contacting your administrator.",
+                    [{ text: "OK" }]
+                );
+                return;
+            }
             navigation.navigate("CheckoutScreen", {
                 plan: selected,
                 displayCurrency: currency,
@@ -747,6 +755,7 @@ export default function PricingScreen({ navigation }) {
                 initialAdminCount: selected.maxAdmins || 0,
                 initialStaffCount: selected.maxStaff || 0,
             });
+        }
     };
 
     return (

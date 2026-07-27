@@ -1,4 +1,4 @@
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 
 const NETWORK_ERROR_CODES = new Set([
     "ECONNABORTED",
@@ -38,6 +38,9 @@ export const confirmPermissionRequest = ({
     cancelText = "Not now",
 }) =>
     new Promise((resolve) => {
+        if (Platform.OS === "ios") {
+            return resolve(true);
+        }
         let settled = false;
         const finish = (value) => {
             if (!settled) {

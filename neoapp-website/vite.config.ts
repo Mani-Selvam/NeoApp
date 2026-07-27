@@ -23,7 +23,11 @@ export default defineConfig({
         host: "0.0.0.0",
         port: 5000,
         allowedHosts: true,
-        hmr: true,
+        hmr: {
+            protocol: "ws",
+            host: "localhost",
+            port: 5000,
+        },
         proxy: {
             "/api": {
                 target: "http://localhost:7000",

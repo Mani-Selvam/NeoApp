@@ -69,7 +69,7 @@ const AUTH_RATE_LIMITS = {
     },
     login: {
         windowMs: 10 * 60 * 1000,
-        max: 10,
+        max: 100,
         message: "Too many login attempts. Please try again later.",
     },
 };
@@ -108,10 +108,14 @@ const authRateLimit = (config, keyResolver) => (req, res, next) => {
             1,
             Math.ceil((current.resetAt - now) / 1000),
         );
+        const retryMinutes = Math.ceil(retryAfterSeconds / 60);
         res.set("Retry-After", String(retryAfterSeconds));
         return res
             .status(429)
-            .json({ success: false, message: config.message });
+            .json({
+                success: false,
+                message: `Too many login attempts. Please try again in ${retryMinutes} minute${retryMinutes > 1 ? "s" : ""}.`,
+            });
     }
 
     current.count += 1;
@@ -857,31 +861,17 @@ router.post(
                     .trim() === "signup";
 
             if (!requested) {
-                // Default: prefer email first and only fall back to mobile if email could not be sent.
-                if (isSignupFlow && mobileToSend) {
-                    sent = (await trySendMobile("sms")) || sent;
-                } else {
-                    sent = (await trySendEmail()) || sent;
-                    if (!sent) sent = (await trySendMobile("")) || sent;
-                }
+                if (emailToSend) sent = (await trySendEmail()) || sent;
+                if (mobileToSend) sent = (await trySendMobile("whatsapp")) || sent;
             } else if (requested === "email") {
-                // Prefer email; fallback to SMS if email fails
                 sent = (await trySendEmail()) || sent;
-                if (!sent) sent = (await trySendMobile("sms")) || sent;
-            } else if (requested === "sms") {
-                // Signup/mobile OTP must remain mobile-only; do not silently fall back to email.
-                sent = (await trySendMobile("sms")) || sent;
-                if (!sent && !isSignupFlow)
-                    sent = (await trySendEmail()) || sent;
-            } else if (requested === "whatsapp") {
-                // Prefer WhatsApp; fallback to SMS, then email
+            } else if (requested === "whatsapp" || requested === "sms") {
                 sent = (await trySendMobile("whatsapp")) || sent;
-                if (!sent) sent = (await trySendMobile("sms")) || sent;
-                if (!sent) sent = (await trySendEmail()) || sent;
+                if (!sent && emailToSend) sent = (await trySendEmail()) || sent;
             } else {
                 return res.status(400).json({
                     success: false,
-                    message: "Invalid method. Use email, sms, or whatsapp.",
+                    message: "Invalid method. Use email or whatsapp.",
                 });
             }
 

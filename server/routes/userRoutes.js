@@ -737,16 +737,44 @@ router.post("/profile/update-password/initiate", verifyToken, async (req, res) =
             console.log(`[Profile] Password change OTP for ${user.email}: ${otp}`);
         }
 
-        if (!user.email) {
-            return res.status(400).json({ success: false, message: "No email associated with this account" });
+        const sentVia = [];
+        const tasks = [];
+
+        if (user.email) {
+            tasks.push(
+                sendEmailOTP(user.email, otp).then((ok) => {
+                    if (ok) sentVia.push("email");
+                }),
+            );
         }
 
-        const emailSent = await sendEmailOTP(user.email, otp);
-        if (!emailSent) {
-            return res.status(500).json({ success: false, message: "Failed to send OTP email. Please try again later." });
+        if (user.mobile) {
+            tasks.push(
+                sendMobileOTP(user.mobile, otp, { method: "whatsapp" }).then((ok) => {
+                    if (ok) sentVia.push("whatsapp");
+                }),
+            );
         }
 
-        res.json({ success: true, message: "Verification OTP sent to your email" });
+        await Promise.allSettled(tasks);
+
+        if (sentVia.length === 0) {
+            return res.status(500).json({
+                success: false,
+                message: "Failed to send OTP via email or WhatsApp. Please try again later.",
+            });
+        }
+
+        const channelLabel = sentVia.includes("email") && sentVia.includes("whatsapp")
+            ? "your Gmail and WhatsApp"
+            : sentVia.includes("whatsapp")
+            ? "your WhatsApp"
+            : "your Gmail";
+
+        res.json({
+            success: true,
+            message: `Verification OTP sent to ${channelLabel}`,
+        });
     } catch (err) {
         console.error("Initiate password update error:", err);
         res.status(500).json({ success: false, message: err.message || "Internal server error" });

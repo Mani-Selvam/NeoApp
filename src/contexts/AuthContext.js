@@ -536,6 +536,8 @@ export const AuthProvider = ({ children }) => {
                 text.toLowerCase().includes("session expired") ||
                 text.toLowerCase().includes("session revoked")
             ) {
+                const token = await getAuthToken();
+                if (token && token.startsWith("demo-token")) return;
                 await doLogout();
                 return;
             }
@@ -546,6 +548,9 @@ export const AuthProvider = ({ children }) => {
                 text.toLowerCase().includes("invalid or expired token") ||
                 text.toLowerCase().includes("account is inactive")
             ) {
+                const token = await getAuthToken();
+                if (token && token.startsWith("demo-token")) return;
+
                 if (
                     code === "COMPANY_NOT_ACTIVE" ||
                     text.toLowerCase().includes("company is suspended")
@@ -615,7 +620,7 @@ export const AuthProvider = ({ children }) => {
             const poll = async () => {
                 try {
                     const token = await getAuthToken();
-                    if (!token) return;
+                    if (!token || token.startsWith("demo-token")) return;
                     const res = await fetch(`${API_URL}/staff/${user.id}`, {
                         headers: { Authorization: `Bearer ${token}` },
                     });

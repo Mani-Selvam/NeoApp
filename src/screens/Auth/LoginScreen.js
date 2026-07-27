@@ -383,6 +383,15 @@ const LoginScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
   const [alertType, setAlertType] = useState("error");
+  const [isAppleAuthAvailable, setIsAppleAuthAvailable] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === "ios") {
+      AppleAuthentication.isAvailableAsync()
+        .then((avail) => setIsAppleAuthAvailable(avail))
+        .catch(() => setIsAppleAuthAvailable(false));
+    }
+  }, []);
 
   // Google first-time login mobile number collection states
   const [showMobileCollectModal, setShowMobileCollectModal] = useState(false);
@@ -417,10 +426,11 @@ const LoginScreen = ({ navigation }) => {
 
   useEffect(() => {
     if (response?.type === "success") {
+      setLoading(true);
       const { id_token } = response.params;
       if (id_token) handleGoogleLogin(id_token);
-    } else if (response?.type === "error" || response?.type === "cancel") {
-      // Silently handle cancel or show alert if needed
+    } else if (response?.type === "error" || response?.type === "cancel" || response?.type === "dismiss") {
+      setLoading(false);
     }
   }, [response]);
 
@@ -670,22 +680,6 @@ const LoginScreen = ({ navigation }) => {
       showAlert("Please fill in all fields", "error");
       return;
     }
-    if (email === "user" && password === "user@123") {
-      setLoading(true);
-      setTimeout(async () => {
-        try {
-          await login("demo-token-123", {
-            id: "demo-user-123",
-            email: "user",
-            name: "Demo User",
-            role: "demo",
-          });
-          showAlert("Demo login successful!", "info");
-        } catch (_) { }
-        setLoading(false);
-      }, 1000);
-      return;
-    }
     setLoading(true);
     try {
       const deviceModel = `${Platform.OS} ${String(Platform.Version)}`;
@@ -928,21 +922,42 @@ const LoginScreen = ({ navigation }) => {
               <TouchableOpacity
                 activeOpacity={0.8}
                 disabled={!request || loading}
-                onPress={() => promptAsync()}
-                style={[S.googleButton, { height: ui.buttonHeight }]}
+                onPress={() => {
+                  setLoading(true);
+                  promptAsync();
+                }}
+                style={[S.googleButton, { height: ui.buttonHeight }, loading && { opacity: 0.7 }]}
               >
-                <Ionicons name="logo-google" size={20} color="#DB4437" />
-                <Text style={S.googleButtonText}>Continue with Google</Text>
+                {loading ? (
+                  <ActivityIndicator color="#4F46E5" size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="logo-google" size={20} color="#DB4437" />
+                    <Text style={S.googleButtonText}>Continue with Google</Text>
+                  </>
+                )}
               </TouchableOpacity>
 
               {Platform.OS === 'ios' && (
-                <AppleAuthentication.AppleAuthenticationButton
-                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-                  cornerRadius={12}
-                  style={[S.googleButton, { height: ui.buttonHeight, marginTop: 12, paddingHorizontal: 0, paddingVertical: 0 }]}
-                  onPress={handleAppleLogin}
-                />
+                isAppleAuthAvailable ? (
+                  <AppleAuthentication.AppleAuthenticationButton
+                    buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                    buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                    cornerRadius={12}
+                    style={[S.googleButton, { height: ui.buttonHeight, marginTop: 12, paddingHorizontal: 0, paddingVertical: 0 }]}
+                    onPress={handleAppleLogin}
+                  />
+                ) : (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    disabled={loading}
+                    onPress={handleAppleLogin}
+                    style={[S.googleButton, { height: ui.buttonHeight, marginTop: 12, backgroundColor: "#000", borderColor: "#000" }]}
+                  >
+                    <Ionicons name="logo-apple" size={20} color="#FFF" />
+                    <Text style={[S.googleButtonText, { color: "#FFF" }]}>Continue with Apple</Text>
+                  </TouchableOpacity>
+                )
               )}
             </View>
           </Animated.View>
@@ -953,9 +968,31 @@ const LoginScreen = ({ navigation }) => {
             style={[S.footer, { marginTop: ui.isTablet ? 28 : ui.isVeryShort ? 14 : 20 }]}
           >
             {Platform.OS === 'ios' ? (
-               <Text style={[S.footerText, { fontSize: 12, textAlign: 'center', lineHeight: 18, marginTop: 4, paddingHorizontal: 10 }]}>
-                 Don't have an account? Please visit neophrondev.in/Neogroww_Website to register.
-               </Text>
+              <View style={{ alignItems: "center" }}>
+                <Text style={[S.footerText, { fontSize: 12, textAlign: 'center', lineHeight: 18, marginTop: 4, paddingHorizontal: 10 }]}>
+                  Don't have an account? Please contact your administrator.
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setEmail("reviewer@neophrondev.in");
+                    setPassword("Neo@Review2026");
+                  }}
+                  style={{
+                    marginTop: 12,
+                    paddingVertical: 8,
+                    paddingHorizontal: 16,
+                    backgroundColor: "rgba(99,102,241,0.08)",
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: "rgba(99,102,241,0.2)",
+                  }}
+                >
+                  <Text style={{ fontSize: 11, color: "#6366f1", fontWeight: "600", textAlign: "center" }}>
+                    Demo Login: reviewer@neophrondev.in (Tap to autofill)
+                  </Text>
+                </TouchableOpacity>
+              </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Text style={S.footerText}>New here? </Text>

@@ -252,13 +252,15 @@ const ProfileScreen = ({ navigation }) => {
     );
 
     const handlePickImage = async () => {
-        const confirmed = await confirmPermissionRequest({
-            title: "Allow photo access?",
-            message:
-                "Photo access is only used when you choose a logo or profile image from your gallery.",
-            confirmText: "Continue",
-        });
-        if (!confirmed) return;
+        if (Platform.OS !== "ios") {
+            const confirmed = await confirmPermissionRequest({
+                title: "Allow photo access?",
+                message:
+                    "Photo access is only used when you choose a logo or profile image from your gallery.",
+                confirmText: "Continue",
+            });
+            if (!confirmed) return;
+        }
 
         const { status } =
             await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -818,8 +820,8 @@ const ProfileScreen = ({ navigation }) => {
                                         <Ionicons name="key" size={24} color={COLORS.primary} />
                                     </View>
                                     <View>
-                                        <Text style={styles.voiceModalTitle}>Change Password</Text>
-                                        <Text style={styles.voiceModalSub}>Set a new secure password</Text>
+                                        <Text style={styles.voiceModalTitle}>{user?.googleId ? "Set Password" : "Change Password"}</Text>
+                                        <Text style={styles.voiceModalSub}>{user?.googleId ? "Create a password for your account" : "Set a new secure password"}</Text>
                                     </View>
                                 </View>
                                 <TouchableOpacity onPress={() => setShowPasswordModal(false)} style={styles.voiceModalClose}>
@@ -835,6 +837,7 @@ const ProfileScreen = ({ navigation }) => {
                                             <TextInput
                                                 style={[styles.input, { flex: 1 }]}
                                                 placeholder="Current Password"
+                                                placeholderTextColor={COLORS.textMuted}
                                                 secureTextEntry={!showOldPassword}
                                                 value={oldPassword}
                                                 onChangeText={setOldPassword}
@@ -849,6 +852,7 @@ const ProfileScreen = ({ navigation }) => {
                                         <TextInput
                                             style={[styles.input, { flex: 1 }]}
                                             placeholder="New Password (min 8 chars)"
+                                            placeholderTextColor={COLORS.textMuted}
                                             secureTextEntry={!showNewPassword}
                                             value={newPassword}
                                             onChangeText={setNewPassword}
@@ -862,6 +866,7 @@ const ProfileScreen = ({ navigation }) => {
                                         <TextInput
                                             style={[styles.input, { flex: 1 }]}
                                             placeholder="Confirm New Password"
+                                            placeholderTextColor={COLORS.textMuted}
                                             secureTextEntry={!showConfirmPassword}
                                             value={confirmNewPassword}
                                             onChangeText={setConfirmNewPassword}
@@ -1239,11 +1244,11 @@ const ProfileScreen = ({ navigation }) => {
                             size={20}
                             color={COLORS.textMuted}
                         />
-                        <Text style={styles.infoValue}>••••••••</Text>
+                        <Text style={styles.infoValue}>{user?.googleId ? "Not set (Google Sign-In)" : "••••••••"}</Text>
                         <TouchableOpacity
                             style={styles.changeBtn}
                             onPress={() => setShowPasswordModal(true)}>
-                            <Text style={styles.changeBtnText}>Change</Text>
+                            <Text style={styles.changeBtnText}>{user?.googleId ? "Set Password" : "Change"}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -1477,95 +1482,89 @@ const ProfileScreen = ({ navigation }) => {
                             />
                         </TouchableOpacity>
 
+                        <TouchableOpacity
+                            style={styles.settingsRow}
+                            onPress={handleDeleteAccountPress}
+                            disabled={isDeletingAccount}>
+                            <View
+                                style={[
+                                    styles.settingsIconWrap,
+                                    styles.dangerIconWrap,
+                                ]}>
+                                <Ionicons
+                                    name="trash-outline"
+                                    size={18}
+                                    color={COLORS.danger}
+                                />
+                            </View>
+                            <View style={styles.settingsContent}>
+                                <Text
+                                    style={[
+                                        styles.settingsTitle,
+                                        styles.dangerTitle,
+                                    ]}>
+                                    Delete Account
+                                </Text>
+                                <Text style={styles.settingsSub}>
+                                    Permanently remove your account and all associated personal data
+                                </Text>
+                            </View>
+                            {isDeletingAccount ? (
+                                <ActivityIndicator
+                                    size="small"
+                                    color={COLORS.danger}
+                                />
+                            ) : (
+                                <Ionicons
+                                    name="chevron-forward"
+                                    size={18}
+                                    color={COLORS.textMuted}
+                                />
+                            )}
+                        </TouchableOpacity>
                         {isAdminUser ? (
-                            <>
-                                <TouchableOpacity
-                                    style={styles.settingsRow}
-                                    onPress={handleDisableAccountPress}
-                                    disabled={isDisablingAccount}>
-                                    <View
+                            <TouchableOpacity
+                                style={styles.settingsRow}
+                                onPress={handleDisableAccountPress}
+                                disabled={isDisablingAccount}>
+                                <View
+                                    style={[
+                                        styles.settingsIconWrap,
+                                        styles.warningIconWrap,
+                                    ]}>
+                                    <Ionicons
+                                        name="pause-circle-outline"
+                                        size={18}
+                                        color="#D97706"
+                                    />
+                                </View>
+                                <View style={styles.settingsContent}>
+                                    <Text
                                         style={[
-                                            styles.settingsIconWrap,
-                                            styles.warningIconWrap,
+                                            styles.settingsTitle,
+                                            styles.warningTitle,
                                         ]}>
-                                        <Ionicons
-                                            name="pause-circle-outline"
-                                            size={18}
-                                            color="#D97706"
-                                        />
-                                    </View>
-                                    <View style={styles.settingsContent}>
-                                        <Text
-                                            style={[
-                                                styles.settingsTitle,
-                                                styles.warningTitle,
-                                            ]}>
-                                            Disable Company Account
-                                        </Text>
-                                        <Text style={styles.settingsSub}>
-                                            Primary admin only. Block login
-                                            access and use the existing
-                                            restricted-account flow
-                                        </Text>
-                                    </View>
-                                    {isDisablingAccount ? (
-                                        <ActivityIndicator
-                                            size="small"
-                                            color="#D97706"
-                                        />
-                                    ) : (
-                                        <Ionicons
-                                            name="chevron-forward"
-                                            size={18}
-                                            color={COLORS.textMuted}
-                                        />
-                                    )}
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    style={styles.settingsRow}
-                                    onPress={handleDeleteAccountPress}
-                                    disabled={isDeletingAccount}>
-                                    <View
-                                        style={[
-                                            styles.settingsIconWrap,
-                                            styles.dangerIconWrap,
-                                        ]}>
-                                        <Ionicons
-                                            name="trash-outline"
-                                            size={18}
-                                            color={COLORS.danger}
-                                        />
-                                    </View>
-                                    <View style={styles.settingsContent}>
-                                        <Text
-                                            style={[
-                                                styles.settingsTitle,
-                                                styles.dangerTitle,
-                                            ]}>
-                                            Delete Company Account
-                                        </Text>
-                                        <Text style={styles.settingsSub}>
-                                            Primary admin only. Permanently
-                                            remove the company, staff, admins,
-                                            enquiries, follow-ups, plans, and
-                                            related data
-                                        </Text>
-                                    </View>
-                                    {isDeletingAccount ? (
-                                        <ActivityIndicator
-                                            size="small"
-                                            color={COLORS.danger}
-                                        />
-                                    ) : (
-                                        <Ionicons
-                                            name="chevron-forward"
-                                            size={18}
-                                            color={COLORS.textMuted}
-                                        />
-                                    )}
-                                </TouchableOpacity>
-                            </>
+                                        Disable Company Account
+                                    </Text>
+                                    <Text style={styles.settingsSub}>
+                                        Primary admin only. Block login
+                                        access and use the existing
+                                        restricted-account flow
+                                    </Text>
+                                </View>
+                                {isDisablingAccount ? (
+                                    <ActivityIndicator
+                                        size="small"
+                                        color="#D97706"
+                                    />
+                                ) : (
+                                    <Ionicons
+                                        name="chevron-forward"
+                                        size={18}
+                                        color={COLORS.textMuted}
+                                    />
+                                )}
+                            </TouchableOpacity>
                         ) : null}
                     </View>
                 </View>

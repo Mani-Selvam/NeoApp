@@ -70,3 +70,23 @@ Set up and use Email/password Authentication.
 Use my existing Firebase project: 953843416185
 
 Make sure to register a Apple app in that project and set up my app's codebase to use Firebase.
+
+
+Dear App Review Team,
+
+Thank you for your review. We have updated the app build and provided working demo account access:
+
+1. Demo Credentials (Active on live database):
+   - Username: reviewer@neophrondev.in
+   - Password: Neo@Review2026
+
+2. On-screen Demo Shortcut:
+   - On the iOS login screen, we have also added a "Demo Login" button that autofills these credentials for quick review testing.
+
+3. Guidelines Compliance Summary:
+   - Guideline 4.8: "Sign in with Apple" is fully integrated on the login screen, offering email privacy via Apple Private Relay.
+   - Guideline 1.5: The Support URL in App Store Connect has been updated to point to our live support portal: https://neophrondev.in/Neogroww_Website/
+   - Guideline 3.1.1: NeoApp is a B2B multi-tenant enterprise CRM tool where subscriptions are managed by company administrators. The iOS app serves as a mobile client interface for existing corporate account holders.
+   - Guideline 5.1.1(iv): Permission requests are triggered natively upon direct user interaction.
+
+Thank you for your assistance.

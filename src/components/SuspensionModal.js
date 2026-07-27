@@ -12,9 +12,12 @@ export default function SuspensionModal() {
 
   const visible = Boolean(suspensionInfo?.visible);
   const title = useMemo(() => {
-    if (suspensionInfo?.companyStatus === "Suspended") return "Account Suspended";
+    const status = String(suspensionInfo?.companyStatus || "").toLowerCase();
+    const reason = String(suspensionInfo?.reason || "").toLowerCase();
+    if (status === "deleted" || reason.includes("deleted")) return "Company Account Deleted";
+    if (status === "suspended") return "Account Suspended";
     return "Account Restricted";
-  }, [suspensionInfo?.companyStatus]);
+  }, [suspensionInfo?.companyStatus, suspensionInfo?.reason]);
 
   const onClose = () => {
     setShowHelp(false);

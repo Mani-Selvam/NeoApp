@@ -1,4 +1,4 @@
-﻿const path = require("path");
+const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "../../.env") });
 
 const connectDB = require("../config/db");
@@ -8,7 +8,7 @@ async function run() {
   await connectDB();
 
   const email = "superadmin@gmail.com";
-  const password = "superadmin@26";
+  const password = "superadmin@123";
 
   let user = await User.findOne({ email });
 

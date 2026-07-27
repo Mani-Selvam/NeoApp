@@ -95,16 +95,11 @@ const verifyToken = async (req, res, next) => {
     }
     const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] });
 
-    // Try cache first — saves ~200-400ms per request on cloud MongoDB
-    let user = getCachedUser(decoded.userId);
+    let user = await User.findById(decoded.userId).select("-password").lean();
     if (!user) {
-      user = await User.findById(decoded.userId).select("-password").lean();
-      if (!user) {
-        return res
-          .status(401)
-          .json({ success: false, message: "User not found" });
-      }
-      setCachedUser(decoded.userId, user);
+      return res
+        .status(401)
+        .json({ success: false, message: "User not found" });
     }
 
     if (user.status === "Inactive") {

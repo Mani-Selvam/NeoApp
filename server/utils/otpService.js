@@ -217,16 +217,24 @@ const toE164 = (mobile, defaultCountry) => {
     const raw = String(mobile || "").trim();
     if (!raw) return "";
 
-    if (raw.startsWith("+")) {
-        const digits = raw.replace(/[^\d]/g, "");
-        return digits ? `+${digits}` : "";
-    }
-
     const digits = raw.replace(/[^\d]/g, "");
     if (!digits) return "";
 
     const cc = String(defaultCountry || "91").replace(/[^\d]/g, "") || "91";
-    return `+${cc}${digits}`;
+
+    if (raw.startsWith("+")) {
+        return `+${digits}`;
+    }
+
+    if (digits.length === 10) {
+        return `+${cc}${digits}`;
+    }
+
+    if (digits.length === 12 && digits.startsWith(cc)) {
+        return `+${digits}`;
+    }
+
+    return `+${digits}`;
 };
 
 const sendSmsViaQueue = async ({ phoneNumber, message }) => {
@@ -519,63 +527,27 @@ const sendMobileOTP = async (mobile, otp, options = {}) => {
             return true;
         };
 
-        // Explicit method routing with fallback logic
-        if (method === "whatsapp") {
-            const templateOk = await sendWhatsappTemplateOtp({
-                phoneNumber: e164,
-                otp,
-            });
-            if (templateOk) return true;
-
-            let whatsappOk = false;
-            try {
-                whatsappOk = await tryWhatsapp();
-            } catch (wErr) {
-                console.warn("[OTP] WhatsApp provider error:", wErr.message);
-            }
-
-            if (whatsappOk) return true;
-
-            // Fallback to SMS if WhatsApp failed (very common in production)
-            console.log(
-                `[OTP] WhatsApp failed, falling back to SMS for ${e164}`,
-            );
-            const smsOk =
-                (await sendSmsViaTwilio({ phoneNumber: e164, message })) ||
-                (await sendSmsViaQueue({ phoneNumber: e164, message }));
-            if (smsOk) {
-                console.log(`[OTP] SMS OTP sent as fallback to ${e164}`);
-                return true;
-            }
-            return false;
-        }
-
-        if (method === "sms") {
-            const ok =
-                (await sendSmsViaTwilio({ phoneNumber: e164, message })) ||
-                (await sendSmsViaQueue({ phoneNumber: e164, message }));
-            if (ok) {
-                console.log(`[OTP] SMS OTP sent to ${e164}`);
-                return true;
-            }
-            return false;
-        }
-
-        // Default behavior (no method specified): try SMS first, then WhatsApp.
-        const smsOk =
-            (await sendSmsViaTwilio({ phoneNumber: e164, message })) ||
-            (await sendSmsViaQueue({ phoneNumber: e164, message }));
-        if (smsOk) {
-            console.log(`[OTP] SMS OTP sent to ${e164}`);
+        // Primary WhatsApp template send via Neo API
+        const templateOk = await sendWhatsappTemplateOtp({
+            phoneNumber: e164,
+            otp,
+        });
+        if (templateOk) {
+            console.log(`[OTP] WhatsApp template OTP sent via Neo API to ${e164}`);
             return true;
         }
 
         try {
-            return await tryWhatsapp();
+            const whatsappOk = await tryWhatsapp();
+            if (whatsappOk) {
+                console.log(`[OTP] WhatsApp OTP sent via custom config to ${e164}`);
+                return true;
+            }
         } catch (wErr) {
             console.warn("[OTP] WhatsApp provider error:", wErr.message);
-            return false;
         }
+
+        return false;
     } catch (error) {
         const errMsg = error.response?.data?.message || error.message || "";
         if (
