@@ -85,7 +85,7 @@ Thank you for your review. We have updated the app build and provided working de
 
 3. Guidelines Compliance Summary:
    - Guideline 4.8: "Sign in with Apple" is fully integrated on the login screen, offering email privacy via Apple Private Relay.
-   - Guideline 1.5: The Support URL in App Store Connect has been updated to point to our live support portal: https://neophrondev.in/Neogroww_Website/
+   - Guideline 1.5: The Support URL in App Store Connect has been updated to point to our live support portal: https://neophrondev.in/neogroww/
    - Guideline 3.1.1: NeoApp is a B2B multi-tenant enterprise CRM tool where subscriptions are managed by company administrators. The iOS app serves as a mobile client interface for existing corporate account holders.
    - Guideline 5.1.1(iv): Permission requests are triggered natively upon direct user interaction.
 

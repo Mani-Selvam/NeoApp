@@ -409,7 +409,9 @@ export const AuthProvider = ({ children }) => {
                 if (
                     code === "SESSION_REVOKED" ||
                     reasonText.includes("another device") ||
-                    reasonText.includes("logged out")
+                    reasonText.includes("logged out") ||
+                    reasonText.includes("deleted") ||
+                    payload?.companyStatus === "Deleted"
                 ) {
                     await doLogout();
                     return;
@@ -550,6 +552,14 @@ export const AuthProvider = ({ children }) => {
             ) {
                 const token = await getAuthToken();
                 if (token && token.startsWith("demo-token")) return;
+
+                if (
+                    code === "COMPANY_DELETED" ||
+                    text.toLowerCase().includes("deleted")
+                ) {
+                    await doLogout();
+                    return;
+                }
 
                 if (
                     code === "COMPANY_NOT_ACTIVE" ||

@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { Link } from "wouter";
 import {
   ArrowRight, BadgeCheck, Bell, Building2, CheckCircle2, ChevronRight,
   Database, FileText, Fingerprint, Image as ImageIcon, KeyRound, LockKeyhole,
@@ -484,18 +485,16 @@ export default function Privacy() {
                     </div>
                     <h3 className="mt-5 text-xl font-black">You remain in control.</h3>
                     <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300">
-                      Users can request deletion of their Neo Groww CRM account and associated data
-                      by contacting support or visiting the dedicated deletion page. Include your
-                      registered mobile number or email address for verification.
+                      Users and administrators have full control over their account status. <strong>Permanent Deletion</strong> completely and irreversibly wipes all company data, users, and records (data cannot be recovered). <strong>Disabling an Account</strong> temporarily restricts login access while safely preserving company data for future reactivation upon support request.
                     </p>
                   </div>
                   <div className="flex flex-col gap-3">
-                    <a
+                    <Link
                       href="/deleteaccount"
                       className="inline-flex items-center justify-center gap-2 rounded-full bg-rose-500 px-5 py-3 text-sm font-black text-white transition hover:-translate-y-0.5"
                     >
                       Deletion page <ArrowRight className="h-4 w-4" />
-                    </a>
+                    </Link>
                     <a
                       href="mailto:info@neophrontech.com?subject=Account%20Deletion%20Request"
                       className="inline-flex items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-800 dark:border-white/10 dark:bg-white/5 dark:text-white"

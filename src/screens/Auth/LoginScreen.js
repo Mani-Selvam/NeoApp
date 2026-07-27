@@ -979,7 +979,7 @@ const LoginScreen = ({ navigation }) => {
                     setPassword("Neo@Review2026");
                   }}
                   style={{
-                    marginTop: 12,
+                    marginTop: 10,
                     paddingVertical: 8,
                     paddingHorizontal: 16,
                     backgroundColor: "rgba(99,102,241,0.08)",
@@ -997,7 +997,7 @@ const LoginScreen = ({ navigation }) => {
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Text style={S.footerText}>New here? </Text>
                 <TouchableOpacity onPress={() => navigation.navigate("Signup")}>
-                  <Text style={S.footerLink}>Create Account  </Text>
+                  <Text style={S.footerLink}>Create Account</Text>
                 </TouchableOpacity>
               </View>
             )}

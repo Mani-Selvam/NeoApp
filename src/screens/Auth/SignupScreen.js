@@ -463,7 +463,7 @@ const SignupScreen = ({ navigation }) => {
     const [pwMatchType, setPwMatchType] = useState("info");
     const privacyPolicyUrl = String(
         Constants.expoConfig?.extra?.privacyPolicyUrl ||
-        "https://6z7.714.mytemp.website/app_privacy/",
+        "http://neophrondev.in/neogroww/privacy",
     ).trim();
 
     const formatSignupMobile = useCallback((value) => {

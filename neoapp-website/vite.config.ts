@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 export default defineConfig({
-    base: "/Neogroww_Website/",
+    base: "/neogroww/",
     plugins: [react(), tailwindcss()],
 
     resolve: {

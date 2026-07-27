@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { Link } from "wouter";
 import {
   ArrowRight,
   BadgeCheck,
@@ -525,12 +526,12 @@ export default function Terms() {
                 </div>
               </div>
 
-              <a
+              <Link
                 href="/deleteaccount"
                 className="mt-5 inline-flex items-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:-translate-y-0.5 dark:bg-white dark:text-slate-950"
               >
                 View deletion process <ArrowRight className="h-4 w-4" />
-              </a>
+              </Link>
             </section>
 
             <hr className="border-slate-200/50 dark:border-white/5" />

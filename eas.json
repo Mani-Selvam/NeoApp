@@ -12,7 +12,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api",
-        "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com"
+        "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com",
+        "EXPO_PUBLIC_WEB_DASHBOARD_URL": "https://neophrondev.in/neogroww"
       }
     },
     "preview": {
@@ -23,7 +24,8 @@
       "env": {
         "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api",
         "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com",
-        "EXPO_PUBLIC_PLAY_STORE_SAFE_MODE": "false"
+        "EXPO_PUBLIC_PLAY_STORE_SAFE_MODE": "false",
+        "EXPO_PUBLIC_WEB_DASHBOARD_URL": "https://neophrondev.in/neogroww"
       }
     },
     "enterprise": {
@@ -33,7 +35,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api",
-        "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com"
+        "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com",
+        "EXPO_PUBLIC_WEB_DASHBOARD_URL": "https://neophrondev.in/neogroww"
       }
     },
     "production": {
@@ -43,7 +46,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://neorenderserver-q41b.onrender.com/api",
-        "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com"
+        "PUBLIC_BASE_URL": "https://neorenderserver-q41b.onrender.com",
+        "EXPO_PUBLIC_WEB_DASHBOARD_URL": "https://neophrondev.in/neogroww"
       }
     }
   },

@@ -618,7 +618,12 @@ const isPrimaryCompanyAdmin = async (user) => {
 // 1. GET PROFILE
 router.get("/profile", verifyToken, async (req, res) => {
     try {
-        const user = await User.findById(req.userId).select("-password").lean();
+        const userDoc = await User.findById(req.userId).lean();
+        if (!userDoc) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+        const { password, ...user } = userDoc;
+        user.hasPassword = Boolean(password);
         res.json({ success: true, user });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });

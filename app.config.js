@@ -192,10 +192,10 @@ module.exports = ({ config }) => {
                 "",
             privacyPolicyUrl:
                 process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL ||
-                "https://6z7.714.mytemp.website/app_privacy/",
+                "http://neophrondev.in/neogroww/privacy",
             accountDeletionUrl:
                 process.env.EXPO_PUBLIC_ACCOUNT_DELETION_URL ||
-                "https://6z7.714.mytemp.website/app_privacy/delete-account.html",
+                "http://neophrondev.in/neogroww/deleteaccount",
             firebase: firebaseExtra,
         },
         android: {

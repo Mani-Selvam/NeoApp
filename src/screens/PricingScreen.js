@@ -743,7 +743,7 @@ export default function PricingScreen({ navigation }) {
             if (Platform.OS === 'ios') {
                 Alert.alert(
                     "Subscription Management",
-                    "Paid subscription upgrades and billing management are available through the web portal at https://6z7.714.mytemp.website/ or by contacting your administrator.",
+                    "Paid subscription upgrades and billing management are available through the web portal at http://neophrondev.in/neogroww/ or by contacting your administrator.",
                     [{ text: "OK" }]
                 );
                 return;

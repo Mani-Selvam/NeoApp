@@ -82,7 +82,8 @@ const normalizePhone = (value) =>
         .slice(-10);
 
 const APP_EXTRA = Constants.expoConfig?.extra || {};
-const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "").trim();
+const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "http://neophrondev.in/neogroww/privacy").trim();
+const ACCOUNT_DELETION_URL = String(APP_EXTRA.accountDeletionUrl || "http://neophrondev.in/neogroww/deleteaccount").trim();
 
 const ProfileScreen = ({ navigation }) => {
     const insets = useSafeAreaInsets();
@@ -493,8 +494,10 @@ const ProfileScreen = ({ navigation }) => {
         </Modal>
     );
 
+    const isGoogleAccountWithoutPassword = Boolean(user?.googleId && !user?.hasPassword);
+
     const handleInitiatePasswordUpdate = async () => {
-        if (!user?.googleId && !oldPassword) {
+        if (!isGoogleAccountWithoutPassword && !oldPassword) {
             return Alert.alert("Error", "Please enter your current password");
         }
         if (!newPassword) return Alert.alert("Error", "Please enter a new password");
@@ -523,18 +526,17 @@ const ProfileScreen = ({ navigation }) => {
         try {
             const client = await getApiClient();
             const payload = { newPassword, otp: passwordOtp };
-            if (!user?.googleId && oldPassword) payload.oldPassword = oldPassword;
+            const requiresOldPassword = user?.hasPassword || !user?.googleId;
+            if (requiresOldPassword && oldPassword) payload.oldPassword = oldPassword;
 
             const res = await client.put("/users/profile/update-password", payload);
             
             if (res.data.success) {
                 Alert.alert("Success", "Password updated successfully");
-                setShowPasswordModal(false);
-                setOldPassword("");
-                setNewPassword("");
-                setConfirmNewPassword("");
-                setPasswordOtp("");
-                setPasswordOtpStep(1);
+                if (typeof refreshUserProfile === "function") {
+                    await refreshUserProfile();
+                }
+                closePasswordModal();
             }
         } catch (err) {
             Alert.alert("Error", err.response?.data?.message || "Failed to update password");
@@ -562,6 +564,10 @@ const ProfileScreen = ({ navigation }) => {
             "This will permanently remove your company, staff, admins, enquiries, follow-ups, plans, payments, and related workspace data. This action cannot be undone.",
             [
                 { text: "Cancel", style: "cancel" },
+                {
+                    text: "View Deletion Policy",
+                    onPress: () => openManagedUrl(ACCOUNT_DELETION_URL, "Account Deletion Policy"),
+                },
                 {
                     text: "Continue",
                     style: "destructive",
@@ -801,10 +807,19 @@ const ProfileScreen = ({ navigation }) => {
         </Modal>
     );
 
+    const closePasswordModal = () => {
+        setShowPasswordModal(false);
+        setOldPassword("");
+        setNewPassword("");
+        setConfirmNewPassword("");
+        setPasswordOtp("");
+        setPasswordOtpStep(1);
+    };
+
     const renderPasswordModal = () => (
-        <Modal statusBarTranslucent visible={showPasswordModal} transparent animationType="fade" onRequestClose={() => setShowPasswordModal(false)}>
+        <Modal statusBarTranslucent visible={showPasswordModal} transparent animationType="fade" onRequestClose={closePasswordModal}>
             <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.voiceModalOverlay}>
-                <TouchableOpacity activeOpacity={1} style={{ flex: 1, width: "100%", justifyContent: "center", alignItems: "center" }} onPress={() => setShowPasswordModal(false)}>
+                <TouchableOpacity activeOpacity={1} style={{ flex: 1, width: "100%", justifyContent: "center", alignItems: "center" }} onPress={closePasswordModal}>
                     <MotiView 
                         from={{ scale: 0.85, opacity: 0 }} 
                         animate={{ scale: 1, opacity: 1 }} 
@@ -820,18 +835,18 @@ const ProfileScreen = ({ navigation }) => {
                                         <Ionicons name="key" size={24} color={COLORS.primary} />
                                     </View>
                                     <View>
-                                        <Text style={styles.voiceModalTitle}>{user?.googleId ? "Set Password" : "Change Password"}</Text>
-                                        <Text style={styles.voiceModalSub}>{user?.googleId ? "Create a password for your account" : "Set a new secure password"}</Text>
+                                        <Text style={styles.voiceModalTitle}>{isGoogleAccountWithoutPassword ? "Set Password" : "Change Password"}</Text>
+                                        <Text style={styles.voiceModalSub}>{isGoogleAccountWithoutPassword ? "Create a password for your account" : "Set a new secure password"}</Text>
                                     </View>
                                 </View>
-                                <TouchableOpacity onPress={() => setShowPasswordModal(false)} style={styles.voiceModalClose}>
+                                <TouchableOpacity onPress={closePasswordModal} style={styles.voiceModalClose}>
                                     <Ionicons name="close" size={22} color={COLORS.textMuted} />
                                 </TouchableOpacity>
                             </View>
 
                             {passwordOtpStep === 1 ? (
                                 <View style={{ marginTop: 20 }}>
-                                    {!user?.googleId && (
+                                    {!isGoogleAccountWithoutPassword && (
                                         <View style={[styles.inputWrapper, { marginBottom: 15 }]}>
                                             <Ionicons name="lock-closed-outline" size={20} color={COLORS.textMuted} style={styles.inputIcon} />
                                             <TextInput
@@ -1244,11 +1259,11 @@ const ProfileScreen = ({ navigation }) => {
                             size={20}
                             color={COLORS.textMuted}
                         />
-                        <Text style={styles.infoValue}>{user?.googleId ? "Not set (Google Sign-In)" : "••••••••"}</Text>
+                        <Text style={styles.infoValue}>{isGoogleAccountWithoutPassword ? "Not set (Google Sign-In)" : "••••••••"}</Text>
                         <TouchableOpacity
                             style={styles.changeBtn}
                             onPress={() => setShowPasswordModal(true)}>
-                            <Text style={styles.changeBtnText}>{user?.googleId ? "Set Password" : "Change"}</Text>
+                            <Text style={styles.changeBtnText}>{isGoogleAccountWithoutPassword ? "Set Password" : "Change"}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../contexts/AuthContext";
 import * as userService from "../services/userService";
@@ -59,9 +60,11 @@ export default function PublicLeadFormScreen({ navigation }) {
     }
   }, []);
 
-  useEffect(() => {
-    loadForm();
-  }, [loadForm]);
+  useFocusEffect(
+    useCallback(() => {
+      loadForm();
+    }, [loadForm])
+  );
 
   const handleCopy = useCallback(async () => {
     if (!form.url) return;

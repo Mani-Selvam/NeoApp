@@ -275,10 +275,10 @@ export default function DeleteAccount() {
                   </div>
                   <h3 className="mt-5 text-lg font-bold">Delete Company Account</h3>
                   <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    Permanently removes the eligible workspace and associated workspace records targeted by the deletion flow. This action is irreversible.
+                    <strong>Permanently & Irreversibly deletes</strong> all company data, users, staff, enquiries, follow-ups, and subscription records. <strong>Once deleted, data CANNOT be recovered under any circumstances.</strong>
                   </p>
                   <div className="mt-4 inline-flex rounded-full bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-600 dark:text-rose-400">
-                    Permanent action
+                    Permanent & Non-Recoverable
                   </div>
                 </div>
 
@@ -288,10 +288,10 @@ export default function DeleteAccount() {
                   </div>
                   <h3 className="mt-5 text-lg font-bold">Disable Company Account</h3>
                   <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    Restricts company login access and places the workspace into a suspended state without immediately deleting workspace data.
+                    Temporarily blocks login access for the company while <strong>safely preserving all company data</strong>. You can contact support anytime to request reactivation and recover full access.
                   </p>
                   <div className="mt-4 inline-flex rounded-full bg-blue-500/10 px-3 py-1.5 text-xs font-bold text-blue-600 dark:text-blue-400">
-                    Access restricted
+                    Data Preserved & Recoverable
                   </div>
                 </div>
               </div>

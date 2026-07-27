@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { LinearGradient } from "expo-linear-gradient";
 import {
+  Image,
   Linking,
   Platform,
   ScrollView,
@@ -16,296 +17,298 @@ import { API_URL } from "../services/apiConfig";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const APP_EXTRA = Constants.expoConfig?.extra || {};
-const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "").trim();
+const PRIVACY_POLICY_URL = String(APP_EXTRA.privacyPolicyUrl || "http://neophrondev.in/neogroww/privacy").trim();
+const DELETION_POLICY_URL = String(APP_EXTRA.accountDeletionUrl || "http://neophrondev.in/neogroww/deleteaccount").trim();
 const APP_VERSION = String(
   Constants.expoConfig?.version ||
   Constants.manifest2?.extra?.expoClient?.version ||
-  "1.0.0"
+  "1.0.4"
 );
 
-// ─── iOS SYSTEM PALETTE ──────────────────────────────────────────────────────
+// ─── FONT FAMILY ─────────────────────────────────────────────────────────────
+const FONT_FAMILY = Platform.select({
+  ios: "Poppins, -apple-system, BlinkMacSystemFont, System",
+  android: "Poppins, Roboto, sans-serif",
+  default: "Poppins, sans-serif",
+});
+
+// ─── COLOR PALETTE ───────────────────────────────────────────────────────────
 const C = {
-  // Backgrounds — exact iOS layered system
-  bg: "#F2F2F7",           // iOS systemGroupedBackground
-  surface: "#FFFFFF",      // iOS secondarySystemGroupedBackground
-  surfaceElevated: "#FFFFFF",
-
-  // Labels
-  label: "#000000",
-  labelSecondary: "#3C3C43",   // with ~60% opacity in iOS, simulated
-  labelTertiary: "#3C3C43",    // ~30% opacity
-  labelQuaternary: "#3C3C43",  // ~18% opacity
-
-  // Fills (readable equivalents)
-  textPrimary: "#000000",
-  textSecondary: "#6D6D72",    // iOS secondaryLabel
-  textTertiary: "#AEAEB2",     // iOS tertiaryLabel
-  textPlaceholder: "#C7C7CC",
-
-  // iOS system separator
-  separator: "#C6C6C8",
-  separatorOpaque: "#E5E5EA",  // non-translucent
-
-  // iOS system colors
-  blue: "#007AFF",
-  indigo: "#5856D6",
-  teal: "#30B0C7",
-  green: "#34C759",
-  orange: "#FF9500",
-  red: "#FF3B30",
-  purple: "#AF52DE",
-  pink: "#FF2D55",
-
-  // App brand — restrained single accent
-  brand: "#007AFF",
+  bg: "#F8FAFC",
+  surface: "#FFFFFF",
+  cardBorder: "#E2E8F0",
+  textPrimary: "#0F172A",
+  textSecondary: "#475569",
+  textMuted: "#94A3B8",
+  primary: "#4F46E5",
+  primaryLight: "#EEF2FF",
+  indigo: "#6366F1",
+  teal: "#14B8A6",
+  green: "#10B981",
+  amber: "#F59E0B",
+  rose: "#F43F5E",
 };
 
-// ─── FEATURE ICONS — iOS-style rounded rect with system tint ─────────────────
-const FEATURES = [
+// ─── FEATURE HIGHLIGHTS ──────────────────────────────────────────────────────
+const HIGHLIGHTS = [
   {
-    icon: "person.2.fill",     // mapped below to Ionicons
-    ionicon: "people",
-    color: C.blue,
-    bg: "#007AFF",
-    label: "Lead & Staff",
-    sub: "Manage enquiries and assign team members",
+    icon: "people",
+    color: "#3B82F6",
+    bg: "#EFF6FF",
+    title: "Leads & Enquiries",
+    desc: "Track client leads & source channels",
   },
   {
-    ionicon: "chatbubble-ellipses",
-    color: C.green,
-    bg: "#34C759",
-    label: "Communication",
-    sub: "Calls, messages, reminders and tasks",
+    icon: "chatbubble-ellipses",
+    color: "#10B981",
+    bg: "#ECFDF5",
+    title: "Omni Communication",
+    desc: "WhatsApp, Calls, Email & Reminders",
   },
   {
-    ionicon: "bar-chart",
-    color: C.orange,
-    bg: "#FF9500",
-    label: "Reports & Billing",
-    sub: "Insights, plan access and payment flows",
+    icon: "bar-chart",
+    color: "#8B5CF6",
+    bg: "#F5F3FF",
+    title: "Reports & Billing",
+    desc: "Staff performance & CRM insights",
+  },
+  {
+    icon: "shield-checkmark",
+    color: "#F59E0B",
+    bg: "#FFFBEB",
+    title: "Secure & Compliant",
+    desc: "Role-based access & data privacy",
   },
 ];
 
-// ─── SUB-COMPONENTS ──────────────────────────────────────────────────────────
-
-/** iOS grouped section with hairline separators between rows */
-const ListSection = ({ title, children, footer }) => (
-  <View style={S.listSection}>
-    {title ? <Text style={S.listSectionTitle}>{title}</Text> : null}
-    <View style={S.listCard}>
-      {children}
-    </View>
-    {footer ? <Text style={S.listSectionFooter}>{footer}</Text> : null}
-  </View>
-);
-
-/** A single row inside a ListSection */
-const ListRow = ({
-  iconName,
-  iconBg,
-  label,
-  value,
-  sub,
-  onPress,
-  chevron = false,
-  external = false,
-  isLast = false,
-  destructive = false,
-  tintColor,
-}) => {
-  const Wrapper = onPress ? TouchableHighlight : View;
-  const wrapperProps = onPress
-    ? { onPress, underlayColor: "#E5E5EA", style: [S.listRow, isLast && S.listRowLast] }
-    : { style: [S.listRow, isLast && S.listRowLast] };
-
-  return (
-    <Wrapper {...wrapperProps}>
-      <View style={S.listRowInner}>
-        {/* Icon badge */}
-        {iconName ? (
-          <View style={[S.rowIconWrap, { backgroundColor: iconBg || C.blue }]}>
-            <Ionicons name={iconName} size={16} color="#FFFFFF" />
-          </View>
-        ) : null}
-
-        {/* Label + optional subtitle */}
-        <View style={S.rowContent}>
-          <Text style={[S.rowLabel, destructive && { color: C.red }, tintColor && { color: tintColor }]}>
-            {label}
-          </Text>
-          {sub ? <Text style={S.rowSub}>{sub}</Text> : null}
-        </View>
-
-        {/* Right side */}
-        {value ? <Text style={S.rowValue} numberOfLines={1}>{value}</Text> : null}
-        {chevron ? <Ionicons name="chevron-forward" size={16} color={C.textTertiary} style={S.rowChevron} /> : null}
-        {external ? <Ionicons name="arrow-up-right" size={14} color={C.textTertiary} style={S.rowChevron} /> : null}
-      </View>
-    </Wrapper>
-  );
-};
-
-/** Separator that insets from the left to align with label text */
-const RowSep = ({ insetLeft = 56 }) => (
-  <View style={[S.rowSeparator, { marginLeft: insetLeft }]} />
-);
-
-// ─── MAIN SCREEN ─────────────────────────────────────────────────────────────
 export default function AboutScreen({ navigation }) {
   const insets = useSafeAreaInsets();
 
   const openUrl = async (url) => {
     if (!url) return;
-    try { await Linking.openURL(url); } catch { /* ignore */ }
+    try {
+      await Linking.openURL(url);
+    } catch {
+      /* ignore */
+    }
   };
 
   return (
     <View style={[S.root, { paddingTop: insets.top }]}>
-      <StatusBarSpacer />
-
-      {/* ── Navigation Header — iOS large title style ── */}
-      <View style={S.navBar}>
+      {/* Top Header */}
+      <View style={S.header}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
-          style={S.navBack}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={S.backBtn}
+          activeOpacity={0.7}
         >
-          <Ionicons name="chevron-back" size={28} color={C.brand} />
+          <Ionicons name="arrow-back" size={22} color={C.textPrimary} />
         </TouchableOpacity>
-        <Text style={S.navTitle}>About</Text>
-        <View style={{ width: 44 }} />
+        <Text style={S.headerTitle}>About NeoGroww</Text>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView
         style={S.scroll}
-        contentContainerStyle={[S.scrollContent, { paddingBottom: insets.bottom + 32 }]}
+        contentContainerStyle={[S.scrollContent, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── App Store-style hero card ── */}
-        <View style={S.heroCard}>
-          {/* Icon */}
+        {/* ── Premium Hero Card ── */}
+        <View style={S.heroContainer}>
           <LinearGradient
-            colors={["#1C3D87", "#2F54EB", "#0EA5E9"]}
-            start={{ x: 0.1, y: 0 }}
-            end={{ x: 0.9, y: 1 }}
-            style={S.appIcon}
+            colors={["#4F46E5", "#6366F1", "#3B82F6"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={S.heroGradient}
           >
-            <Ionicons name="layers" size={34} color="#FFFFFF" />
-          </LinearGradient>
+            {/* Background Decorative Rings */}
+            <View style={S.decoCircle1} />
+            <View style={S.decoCircle2} />
 
-          {/* App identity */}
-          <View style={S.heroMeta}>
-            <Text style={S.heroAppName}>NeoApp</Text>
-            <Text style={S.heroTagline}>Smart CRM Workspace</Text>
+            <View style={S.heroIconWrap}>
+              <Image
+                source={require("../assets/logo.png")}
+                style={S.heroLogoImg}
+                resizeMode="contain"
+              />
+            </View>
 
-            {/* App Store–style rating row repurposed as version pill */}
-            <View style={S.heroPillRow}>
-              <View style={S.heroPill}>
-                <Ionicons name="star" size={10} color={C.brand} />
-                <Text style={S.heroPillText}>v{APP_VERSION}</Text>
+            <Text style={S.heroAppName}>NeoGroww CRM</Text>
+            <Text style={S.heroTagline}>Enterprise Business Management</Text>
+
+            <View style={S.heroBadgesRow}>
+              <View style={S.heroBadge}>
+                <Ionicons name="code-working" size={12} color="#FFFFFF" />
+                <Text style={S.heroBadgeText}>v{APP_VERSION}</Text>
               </View>
-              <View style={S.heroPillDivider} />
-              <View style={S.heroPill}>
-                <Ionicons name="phone-portrait-outline" size={10} color={C.textSecondary} />
-                <Text style={[S.heroPillText, { color: C.textSecondary }]}>Mobile CRM</Text>
+              <View style={S.heroBadgeDot} />
+              <View style={S.heroBadge}>
+                <Ionicons name="checkmark-circle" size={12} color="#10B981" />
+                <Text style={S.heroBadgeText}>Production Ready</Text>
               </View>
             </View>
-          </View>
+          </LinearGradient>
         </View>
 
-        {/* ── Feature highlights — horizontal pill strip ── */}
-        <View style={S.featureStrip}>
-          {FEATURES.map((f, idx) => (
-            <View key={idx} style={S.featureItem}>
-              <View style={[S.featureIconWrap, { backgroundColor: f.bg }]}>
-                <Ionicons name={f.ionicon} size={20} color="#FFFFFF" />
+        {/* ── Platform Highlights Grid ── */}
+        <Text style={S.sectionLabel}>PLATFORM HIGHLIGHTS</Text>
+        <View style={S.gridContainer}>
+          {HIGHLIGHTS.map((item, idx) => (
+            <View key={idx} style={S.gridCard}>
+              <View style={[S.gridIconWrap, { backgroundColor: item.bg }]}>
+                <Ionicons name={item.icon} size={20} color={item.color} />
               </View>
-              <Text style={S.featureLabel}>{f.label}</Text>
-              <Text style={S.featureSub}>{f.sub}</Text>
+              <Text style={S.gridTitle}>{item.title}</Text>
+              <Text style={S.gridDesc}>{item.desc}</Text>
             </View>
           ))}
         </View>
 
-        {/* ── About description — grouped section ── */}
-        <ListSection
-          footer="NeoApp brings enquiry records, follow-up scheduling, staff management, communication tools, billing and reporting together in one mobile workspace."
-        >
-          <ListRow
-            iconName="information-circle"
-            iconBg={C.blue}
-            label="What NeoApp Does"
-            sub="From first enquiry to sale — all in one place"
-            isLast
-          />
-        </ListSection>
+        {/* ── App Info Card ── */}
+        <Text style={S.sectionLabel}>SYSTEM INFORMATION</Text>
+        <View style={S.infoCard}>
+          <View style={S.infoRow}>
+            <View style={[S.rowIconWrap, { backgroundColor: "#EEF2FF" }]}>
+              <Ionicons name="cube" size={16} color="#4F46E5" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Application Name</Text>
+              <Text style={S.rowSub}>NeoGroww CRM</Text>
+            </View>
+          </View>
 
-        {/* ── Project info — iOS Settings style detail rows ── */}
-        <ListSection title="App Information">
-          <ListRow
-            iconName="tag"
-            iconBg={C.indigo}
-            label="App Name"
-            value="NeoApp"
-          />
-          <RowSep />
-          <ListRow
-            iconName="arrow-up-circle"
-            iconBg={C.teal}
-            label="Version"
-            value={APP_VERSION}
-          />
-          <RowSep />
-          <ListRow
-            iconName="server"
-            iconBg={C.orange}
-            label="API Endpoint"
-            value={API_URL}
-          />
-          <RowSep />
-          <ListRow
-            iconName="phone-portrait-outline"
-            iconBg={C.purple}
-            label="Platform"
-            value="Mobile CRM"
-            isLast
-          />
-        </ListSection>
+          <View style={S.divider} />
 
-        {/* ── Privacy & Support ── */}
-        <ListSection title="Legal & Support">
-          <ListRow
-            iconName="shield-checkmark"
-            iconBg={C.green}
-            label="Privacy Policy"
-            sub="How your data is collected and used"
+          <View style={S.infoRow}>
+            <View style={[S.rowIconWrap, { backgroundColor: "#F0FDF4" }]}>
+              <Ionicons name="git-branch" size={16} color="#10B981" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Version</Text>
+              <Text style={S.rowSub}>v{APP_VERSION}</Text>
+            </View>
+          </View>
+
+          <View style={S.divider} />
+
+          <View style={S.infoRow}>
+            <View style={[S.rowIconWrap, { backgroundColor: "#FEF3C7" }]}>
+              <Ionicons name="server" size={16} color="#F59E0B" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Backend Server</Text>
+              <Text style={S.rowSub} numberOfLines={1}>
+                {API_URL}
+              </Text>
+            </View>
+          </View>
+
+          <View style={S.divider} />
+
+          <View style={S.infoRow}>
+            <View style={[S.rowIconWrap, { backgroundColor: "#F5F3FF" }]}>
+              <Ionicons name="business" size={16} color="#8B5CF6" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Company & Organization</Text>
+              <Text style={S.rowSub}>Neophron Technologies</Text>
+            </View>
+          </View>
+
+          <View style={S.divider} />
+
+          <View style={S.infoRow}>
+            <View style={[S.rowIconWrap, { backgroundColor: "#EFF6FF" }]}>
+              <Ionicons name="code-slash" size={16} color="#3B82F6" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Lead Architect & Developer</Text>
+              <Text style={S.rowSub}>Mani Selvam M (MCA)</Text>
+            </View>
+          </View>
+
+          <View style={S.divider} />
+
+          <View style={S.infoRow}>
+            <View style={[S.rowIconWrap, { backgroundColor: "#ECFDF5" }]}>
+              <Ionicons name="sparkles" size={16} color="#10B981" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>AI Pair Programmer</Text>
+              <Text style={S.rowSub}>Antigravity (Google DeepMind)</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── Policy & Legal Links ── */}
+        <Text style={S.sectionLabel}>POLICIES & LEGAL</Text>
+        <View style={S.infoCard}>
+          <TouchableOpacity
+            style={S.infoRow}
             onPress={() => openUrl(PRIVACY_POLICY_URL)}
-            external
-          />
-          <RowSep />
-          <ListRow
-            iconName="help-circle"
-            iconBg={C.blue}
-            label="Support & Help"
-            sub="Send questions or issues to the support team"
+            activeOpacity={0.7}
+          >
+            <View style={[S.rowIconWrap, { backgroundColor: "#EFF6FF" }]}>
+              <Ionicons name="shield-checkmark" size={16} color="#3B82F6" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Privacy Policy</Text>
+              <Text style={S.rowSub}>View data handling and security rules</Text>
+            </View>
+            <Ionicons name="open-outline" size={16} color={C.textMuted} />
+          </TouchableOpacity>
+
+          <View style={S.divider} />
+
+          <TouchableOpacity
+            style={S.infoRow}
+            onPress={() => openUrl(DELETION_POLICY_URL)}
+            activeOpacity={0.7}
+          >
+            <View style={[S.rowIconWrap, { backgroundColor: "#FFF1F2" }]}>
+              <Ionicons name="trash-bin" size={16} color="#F43F5E" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Account Deletion Policy</Text>
+              <Text style={S.rowSub}>View permanent vs disable policies</Text>
+            </View>
+            <Ionicons name="open-outline" size={16} color={C.textMuted} />
+          </TouchableOpacity>
+
+          <View style={S.divider} />
+
+          <TouchableOpacity
+            style={S.infoRow}
             onPress={() => navigation.navigate("SupportHelp")}
-            chevron
-            isLast
-          />
-        </ListSection>
+            activeOpacity={0.7}
+          >
+            <View style={[S.rowIconWrap, { backgroundColor: "#ECFDF5" }]}>
+              <Ionicons name="help-buoy" size={16} color="#10B981" />
+            </View>
+            <View style={S.rowTextWrap}>
+              <Text style={S.rowTitle}>Support & Help Desk</Text>
+              <Text style={S.rowSub}>Contact us for issues & requests</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+          </TouchableOpacity>
+        </View>
 
         {/* ── Footer ── */}
         <View style={S.footer}>
-          <Text style={S.footerText}>NeoApp © {new Date().getFullYear()}</Text>
-          <Text style={S.footerSub}>All rights reserved</Text>
+          <Image
+            source={require("../assets/logo.png")}
+            style={S.footerLogo}
+            resizeMode="contain"
+          />
+          <Text style={S.footerBrand}>Neophron Technologies</Text>
+          <Text style={S.footerCopyright}>
+            © {new Date().getFullYear()} NeoGroww CRM. All rights reserved.
+          </Text>
         </View>
       </ScrollView>
-
     </View>
   );
 }
-
-// No-op spacer to avoid importing StatusBar
-const StatusBarSpacer = () => null;
 
 // ─── STYLES ──────────────────────────────────────────────────────────────────
 const S = StyleSheet.create({
@@ -313,250 +316,247 @@ const S = StyleSheet.create({
     flex: 1,
     backgroundColor: C.bg,
   },
-
-  // ── Navigation bar
-  navBar: {
+  header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 8,
-    paddingVertical: 10,
-    backgroundColor: C.bg,
-    // subtle iOS nav separator
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.separator,
-  },
-  navBack: {
-    width: 44,
-    height: 36,
-    alignItems: "flex-start",
-    justifyContent: "center",
-    paddingLeft: 4,
-  },
-  navTitle: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: C.textPrimary,
-    letterSpacing: -0.2,
-  },
-
-  scroll: { flex: 1 },
-  scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 20,
-  },
-
-  // ── Hero card — App Store listing style
-  heroCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
+    paddingVertical: 12,
     backgroundColor: C.surface,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-    // iOS card shadow
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 6,
-    elevation: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: C.cardBorder,
   },
-  appIcon: {
-    width: 76,
-    height: 76,
-    borderRadius: 18,        // iOS icon corner radius
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
-    // iOS app icon inner border illusion
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 4,
-    elevation: 4,
+    backgroundColor: C.bg,
   },
-  heroMeta: { flex: 1 },
-  heroAppName: {
-    fontSize: 22,
+  headerTitle: {
+    fontSize: 18,
     fontWeight: "700",
     color: C.textPrimary,
-    letterSpacing: -0.4,
+    fontFamily: FONT_FAMILY,
+    letterSpacing: -0.3,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+
+  // Hero Card
+  heroContainer: {
+    borderRadius: 24,
+    overflow: "hidden",
+    marginBottom: 24,
+    shadowColor: "#4F46E5",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  heroGradient: {
+    padding: 24,
+    alignItems: "center",
+    position: "relative",
+  },
+  decoCircle1: {
+    position: "absolute",
+    top: -40,
+    right: -40,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+  },
+  decoCircle2: {
+    position: "absolute",
+    bottom: -30,
+    left: -30,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
+  heroIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  heroLogoImg: {
+    width: 42,
+    height: 42,
+  },
+  heroAppName: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#FFFFFF",
+    fontFamily: FONT_FAMILY,
+    letterSpacing: -0.5,
   },
   heroTagline: {
-    fontSize: 14,
-    color: C.textSecondary,
-    fontWeight: "400",
-    marginTop: 2,
-    letterSpacing: -0.1,
+    fontSize: 13,
+    fontWeight: "500",
+    color: "rgba(255, 255, 255, 0.85)",
+    fontFamily: FONT_FAMILY,
+    marginTop: 4,
   },
-  heroPillRow: {
+  heroBadgesRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 10,
     gap: 8,
+    marginTop: 16,
+    backgroundColor: "rgba(255, 255, 255, 0.18)",
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.25)",
   },
-  heroPill: {
+  heroBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
   },
-  heroPillText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: C.brand,
-    letterSpacing: 0.1,
+  heroBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    fontFamily: FONT_FAMILY,
   },
-  heroPillDivider: {
-    width: 1,
-    height: 10,
-    backgroundColor: C.separator,
+  heroBadgeDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255, 255, 255, 0.6)",
   },
 
-  // ── Feature strip
-  featureStrip: {
+  // Section Labels
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: C.textMuted,
+    fontFamily: FONT_FAMILY,
+    letterSpacing: 1.2,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+
+  // Grid Section
+  gridContainer: {
     flexDirection: "row",
-    gap: 10,
-    marginBottom: 28,
+    flexWrap: "wrap",
+    gap: 12,
+    marginBottom: 24,
   },
-  featureItem: {
-    flex: 1,
-    alignItems: "center",
-    gap: 6,
+  gridCard: {
+    width: "48%",
+    backgroundColor: C.surface,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
   },
-  featureIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 13,
+  gridIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 3,
-    elevation: 2,
+    marginBottom: 10,
   },
-  featureLabel: {
-    fontSize: 11,
+  gridTitle: {
+    fontSize: 14,
     fontWeight: "700",
     color: C.textPrimary,
-    textAlign: "center",
-    letterSpacing: -0.1,
+    fontFamily: FONT_FAMILY,
   },
-  featureSub: {
-    fontSize: 10,
+  gridDesc: {
+    fontSize: 11,
     color: C.textSecondary,
-    textAlign: "center",
-    lineHeight: 13,
-    letterSpacing: -0.1,
+    fontFamily: FONT_FAMILY,
+    marginTop: 3,
+    lineHeight: 15,
   },
 
-  // ── Grouped list sections — exactly like iOS Settings
-  listSection: {
-    marginBottom: 28,
-  },
-  listSectionTitle: {
-    fontSize: 13,
-    fontWeight: "400",
-    color: C.textSecondary,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    paddingHorizontal: 16,
-    marginBottom: 8,
-  },
-  listSectionFooter: {
-    fontSize: 13,
-    color: C.textSecondary,
-    lineHeight: 18,
-    paddingHorizontal: 16,
-    marginTop: 8,
-    letterSpacing: -0.1,
-  },
-  listCard: {
+  // Info Card & List Rows
+  infoCard: {
     backgroundColor: C.surface,
-    borderRadius: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    marginBottom: 24,
     overflow: "hidden",
-    // iOS card shadow
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
   },
-
-  // ── List rows
-  listRow: {
-    backgroundColor: C.surface,
-    minHeight: 48,
-  },
-  listRowLast: {
-    // no special style needed since overflow:hidden on card handles corners
-  },
-  listRowInner: {
+  infoRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    gap: 12,
-    minHeight: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 14,
   },
   rowIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 7,      // iOS system icon corner radius
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
   },
-  rowContent: { flex: 1 },
-  rowLabel: {
-    fontSize: 17,
-    fontWeight: "400",
+  rowTextWrap: {
+    flex: 1,
+  },
+  rowTitle: {
+    fontSize: 14,
+    fontWeight: "700",
     color: C.textPrimary,
-    letterSpacing: -0.2,
+    fontFamily: FONT_FAMILY,
   },
   rowSub: {
     fontSize: 12,
     color: C.textSecondary,
-    marginTop: 1,
-    letterSpacing: -0.1,
+    fontFamily: FONT_FAMILY,
+    marginTop: 2,
   },
-  rowValue: {
-    fontSize: 17,
-    color: C.textSecondary,
-    fontWeight: "400",
-    letterSpacing: -0.2,
-    maxWidth: 150,
-    textAlign: "right",
-    flexShrink: 1,
-  },
-  rowChevron: {
-    marginLeft: 4,
-    flexShrink: 0,
+  divider: {
+    height: 1,
+    backgroundColor: C.cardBorder,
+    marginLeft: 66,
   },
 
-  // Inset separator — same as iOS Settings between rows
-  rowSeparator: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: C.separatorOpaque,
-    marginRight: 0,
-  },
-
-  // ── Footer
+  // Footer
   footer: {
     alignItems: "center",
-    paddingTop: 4,
-    gap: 4,
+    paddingTop: 8,
+    gap: 6,
   },
-  footerText: {
-    fontSize: 13,
-    color: C.textTertiary,
-    fontWeight: "400",
-    letterSpacing: -0.1,
+  footerLogo: {
+    width: 44,
+    height: 44,
+    marginBottom: 4,
   },
-  footerSub: {
+  footerBrand: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: C.textPrimary,
+    fontFamily: FONT_FAMILY,
+  },
+  footerCopyright: {
     fontSize: 12,
-    color: C.textPlaceholder,
-    letterSpacing: -0.1,
+    color: C.textMuted,
+    fontFamily: FONT_FAMILY,
   },
 });

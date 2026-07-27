@@ -693,7 +693,7 @@ export default function CheckoutScreen({ navigation, route }) {
                                     { text: "Cancel", style: "cancel" },
                                     { 
                                         text: "Open", 
-                                        onPress: () => Linking.openURL('http://neophrondev.in/Neogroww_Website')
+                                        onPress: () => Linking.openURL('http://neophrondev.in/neogroww')
                                     }
                                 ]
                             );

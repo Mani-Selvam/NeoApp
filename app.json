@@ -102,8 +102,8 @@
     ],
     "extra": {
       "playStoreSafeMode": false,
-      "privacyPolicyUrl": "https://6z7.714.mytemp.website/app_privacy/",
-      "accountDeletionUrl": "https://6z7.714.mytemp.website/app_privacy/delete-account.html",
+      "privacyPolicyUrl": "http://neophrondev.in/neogroww/privacy",
+      "accountDeletionUrl": "http://neophrondev.in/neogroww/deleteaccount",
       "firebase": {
         "apiKey": "AIzaSyBk3idO5U8HmU4q7SvyM2SsVuqZ3xmkzRE",
         "authDomain": "neogroww-ef576.firebaseapp.com",

@@ -104,4 +104,4 @@ export const getImageUrl = (path) => {
     return `${baseUrl}/${normalizedPath}`;
 };
 
-export const WEB_DASHBOARD_URL = process.env.EXPO_PUBLIC_WEB_DASHBOARD_URL || "https://neophrondev.in/Neogroww_Website";
+export const WEB_DASHBOARD_URL = process.env.EXPO_PUBLIC_WEB_DASHBOARD_URL || "https://neophrondev.in/neogroww";
